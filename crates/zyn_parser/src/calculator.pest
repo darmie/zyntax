@@ -1,0 +1,44 @@
+// Calculator Grammar - Phase 1 POC for ZynPEG
+//
+// This grammar demonstrates the feasibility of using pest to generate
+// TypedAST for Zyntax. Future .zyn format will extend this with action blocks.
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
+
+// Entry point
+program = { SOI ~ expr ~ EOI }
+
+// Expressions
+expr = { term ~ (add_op ~ term)* }
+
+term = { factor ~ (mul_op ~ factor)* }
+
+factor = {
+    number
+  | "(" ~ expr ~ ")"
+  | unary_op ~ factor
+}
+
+// Operators
+add_op = { "+" | "-" }
+mul_op = { "*" | "/" | "%" }
+unary_op = { "-" | "!" }
+
+// Literals
+number = @{
+    ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)?
+}
+
+// Future extension point: This will become a .zyn file with action blocks like:
+//
+// number = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+//   -> TypedExpression {
+//       expr: if $1.contains('.') {
+//           Expression::FloatLiteral($1.parse()?)
+//       } else {
+//           Expression::IntLiteral($1.parse()?)
+//       },
+//       ty: if $1.contains('.') { Type::F64 } else { Type::I32 },
+//       span: $1.span
+//   }
