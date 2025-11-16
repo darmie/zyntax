@@ -5,8 +5,7 @@
 
 use pest::iterators::{Pair, Pairs};
 use zyntax_typed_ast::{
-    TypedASTBuilder, TypedNode, TypedExpression, BinaryOp, UnaryOp,
-    Type, PrimitiveType, Span,
+    BinaryOp, PrimitiveType, Span, Type, TypedASTBuilder, TypedDeclaration, TypedExpression, TypedNode, UnaryOp, typed_builder::FluentFunctionBuilder
 };
 use crate::Rule;
 use thiserror::Error;
@@ -38,6 +37,16 @@ impl TypedAstBuilder {
         Self {
             builder: TypedASTBuilder::new(),
         }
+    }
+
+    pub fn build_fn(&mut self, expr:TypedNode<TypedExpression>, name: &str, span: Span) -> BuildResult<TypedNode<TypedDeclaration>> {
+        let expr_stmt = self.builder.expression_statement(expr, span);
+        let params = vec![];
+        let return_type = Type::Primitive(PrimitiveType::Unit);
+        let body = self.builder.block(vec![expr_stmt], span);
+        let visibility = zyntax_typed_ast::Visibility::Public;
+        let is_async = false;
+       Ok(self.builder.function(name, params, return_type, body, visibility, is_async, span))
     }
 
     /// Convert pest pairs to TypedAST program
@@ -227,6 +236,16 @@ impl TypedAstBuilder {
     /// Get the underlying TypedASTBuilder
     pub fn into_builder(self) -> TypedASTBuilder {
         self.builder
+    }
+
+    /// Get a reference to the type registry
+    pub fn registry(&self) -> &zyntax_typed_ast::TypeRegistry {
+        &self.builder.registry
+    }
+
+    /// Intern a string
+    pub fn intern(&mut self, s: &str) -> zyntax_typed_ast::InternedString {
+        self.builder.intern(s)
     }
 }
 

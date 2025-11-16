@@ -1,4 +1,4 @@
-# Zyntax: Production-Ready Compiler Infrastructure
+# Zyntax: Multi-Paradigm Compiler Infrastructure
 
 > A high-performance, multi-paradigm compiler infrastructure with advanced type system features, tiered JIT compilation, and async/await runtime support.
 
@@ -323,38 +323,6 @@ cargo test --package zyntax_compiler
 cargo test --test end_to_end_comprehensive
 ```
 
-### Code Organization
-
-```
-zyntax/
-├── crates/
-│   ├── typed_ast/          # Type system, AST, type checking
-│   │   ├── src/
-│   │   │   ├── type_registry.rs     # Type definitions
-│   │   │   ├── type_checker.rs      # Type inference
-│   │   │   ├── constraint_solver.rs # Unification
-│   │   │   └── diagnostics.rs       # Error messages
-│   │   └── tests/
-│   ├── compiler/           # HIR, lowering, backends, async runtime
-│   │   ├── src/
-│   │   │   ├── hir.rs              # HIR definitions
-│   │   │   ├── hir_builder.rs      # HIR construction API
-│   │   │   ├── cranelift_backend.rs # Cranelift JIT
-│   │   │   ├── llvm_backend.rs     # LLVM AOT
-│   │   │   ├── tiered_backend.rs   # Tiered compilation
-│   │   │   └── stdlib.rs           # Standard library
-│   │   └── tests/
-│   └── whirlwind_adapter/  # Whirlwind language integration
-│       ├── src/
-│       └── tests/
-├── docs/                   # Architecture documentation
-│   ├── ARCHITECTURE.md
-│   ├── HIR_BUILDER_EXAMPLE.md
-│   └── ASYNC_RUNTIME_DESIGN.md
-├── BACKLOG.md             # Development roadmap
-├── PRODUCTION_READY_STATUS.md  # Feature matrix
-└── README.md              # This file
-```
 
 ---
 

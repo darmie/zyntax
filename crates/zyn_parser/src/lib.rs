@@ -1,17 +1,22 @@
-// ZynParser - Phase 1 POC: Calculator Parser
+// ZynParser - PEG-based Parser Generator for Zyntax
 //
-// Demonstrates feasibility of using pest to generate Zyntax TypedAST.
-// Future phases will extend this with .zyn grammar format and action blocks.
+// Phase 1: Calculator POC (✅ Complete)
+// Phase 2: Zig Subset (🚧 In Progress - Week 1)
 
 use pest_derive::Parser;
 
+// Phase 1: Calculator (Reference implementation)
 pub mod typed_ast_builder;
+
+// Phase 2: Zig Subset
+pub mod zig_builder;
 
 #[derive(Parser)]
 #[grammar = "calculator.pest"]
 pub struct CalculatorParser;
 
 pub use typed_ast_builder::TypedAstBuilder;
+pub use zig_builder::{ZigParser, ZigBuilder, zig_parser};
 
 #[cfg(test)]
 mod tests {

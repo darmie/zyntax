@@ -1,11 +1,50 @@
 # Zyntax Compiler - Development Backlog
 
-**Last Updated**: November 14, 2025
+**Last Updated**: January 15, 2025
 **Current Status**: Production-Ready Core (98.6% tests passing, 280/284)
 
 ---
 
-## Active Development
+## 🎯 Active Development
+
+### 0. ZynPEG Parser Generator (HIGHEST PRIORITY) ✅ PHASE 1 COMPLETE
+
+**Goal**: Build multi-language frontend infrastructure using PEG parser generator
+
+**Status**: Phase 1 Complete (100%), Phase 2 Planned
+
+**Phase 1: Calculator POC** ✅ **COMPLETE**
+- [x] Create `crates/zyn_parser` workspace crate
+- [x] Integrate pest PEG parser (v2.7)
+- [x] Implement calculator.pest grammar
+- [x] Build TypedAST generator (pest parse trees → TypedAST)
+- [x] Integrate with lowering API (`LoweringContext::lower_program()`)
+- [x] End-to-end JIT execution tests (16/16 passing - 100%)
+- [x] **Bug Fix**: Fixed I32 literal translation in `ssa.rs` (was incorrectly using I64)
+- [x] Documentation: [Phase 1 Completion Report](docs/ZYN_PARSER_PHASE1_COMPLETION.md)
+
+**Key Achievement**: Demonstrated full **pest → TypedAST → HIR → JIT** pipeline ✅
+
+**Test Results**:
+```
+✅ 8 unit tests (grammar parsing + TypedAST building)
+✅ 3 E2E JIT execution tests ("2 + 3" = 5, "(2 + 3) * 4" = 20, etc.)
+✅ 5 TypedAST validation tests
+```
+
+**Phase 2: Zig Subset** 📋 **PLANNED** (Est. 4-6 weeks)
+- [ ] Implement Zig.zyn grammar (250-300 lines)
+- [ ] Support: structs, functions, control flow, generics
+- [ ] 50+ integration tests
+- [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
+
+**Documents**:
+- [Implementation Plan](docs/ZYN_PARSER_IMPLEMENTATION.md)
+- [Phase 1 Completion](docs/ZYN_PARSER_PHASE1_COMPLETION.md)
+- [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
+- [Parser Library Comparison](docs/PARSER_LIBRARY_COMPARISON.md)
+
+---
 
 ### 1. Reflaxe/Haxe Integration (HIGH PRIORITY) 🚧 IN PROGRESS
 **Goal**: Create `reflaxe.Zyntax` backend to tap into Haxe's mature ecosystem

@@ -21,6 +21,7 @@ anyhow = "1.0"
 [dev-dependencies]
 # Testing
 criterion = "0.5"
+zyntax_compiler = { path = "../compiler" }
 
 # Benchmarks will be added in Phase 2
 # [[bench]]

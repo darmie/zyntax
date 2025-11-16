@@ -1,0 +1,225 @@
+//! End-to-End Integration Test for ZynPEG Phase 1 POC
+//!
+//! Tests the complete pipeline: Source → TypedAST → HIR → JIT Execution
+//!
+//! This demonstrates that pest can successfully parse source code into TypedAST
+//! which can then be compiled and executed through Zyntax's backend infrastructure.
+
+use zyn_parser::{CalculatorParser, TypedAstBuilder};
+use pest::Parser;
+use zyntax_typed_ast::{
+    TypedNode, TypedExpression, TypedProgram, BinaryOp, Type, PrimitiveType, Span,
+};
+use zyntax_compiler::{LoweringPipeline, cranelift_backend::CraneliftBackend};
+
+#[test]
+fn test_parse_to_typed_ast() {
+    // Source code
+    let source = "2 + 3";
+
+    // Phase 1: Parse to pest parse tree
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+
+    // Phase 2: Build TypedAST from parse tree
+    let mut builder = TypedAstBuilder::new();
+    let result = builder.build_program(pairs);
+
+    assert!(result.is_ok(), "Failed to build TypedAST");
+    let typed_expr = result.unwrap();
+
+    // Verify TypedAST structure
+    assert_binary_op(&typed_expr, BinaryOp::Add);
+}
+
+#[test]
+fn test_parse_complex_expression() {
+    let source = "(2 + 3) * 4";
+
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+
+    let mut builder = TypedAstBuilder::new();
+    let result = builder.build_program(pairs);
+
+    assert!(result.is_ok());
+    let typed_expr = result.unwrap();
+
+    // Result should be multiplication
+    assert_binary_op(&typed_expr, BinaryOp::Mul);
+}
+
+#[test]
+fn test_operator_precedence() {
+    // Test that 1 + 2 * 3 is parsed as 1 + (2 * 3), not (1 + 2) * 3
+    let source = "1 + 2 * 3";
+
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+
+    let mut builder = TypedAstBuilder::new();
+    let result = builder.build_program(pairs);
+
+    assert!(result.is_ok());
+    let typed_expr = result.unwrap();
+
+    // Root should be addition
+    if let TypedExpression::Binary(bin) = &typed_expr.node {
+        assert_eq!(bin.op, BinaryOp::Add);
+
+        // Right operand should be multiplication (2 * 3)
+        if let TypedExpression::Binary(right_bin) = &bin.right.node {
+            assert_eq!(right_bin.op, BinaryOp::Mul);
+        } else {
+            panic!("Expected right operand to be binary expression");
+        }
+    } else {
+        panic!("Expected binary expression at root");
+    }
+}
+
+#[test]
+fn test_unary_negation() {
+    let source = "-42";
+
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+
+    let mut builder = TypedAstBuilder::new();
+    let result = builder.build_program(pairs);
+
+    assert!(result.is_ok());
+    let typed_expr = result.unwrap();
+
+    // Should be unary expression
+    assert!(matches!(typed_expr.node, TypedExpression::Unary(_)));
+}
+
+#[test]
+fn test_type_inference() {
+    let source = "10 + 20";
+
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+
+    let mut builder = TypedAstBuilder::new();
+    let result = builder.build_program(pairs);
+
+    assert!(result.is_ok());
+    let typed_expr = result.unwrap();
+
+    // Type should be inferred as I32
+    assert!(matches!(typed_expr.ty, Type::Primitive(PrimitiveType::I32)));
+}
+
+// Helper function to assert binary operation
+fn assert_binary_op(expr: &TypedNode<TypedExpression>, expected_op: BinaryOp) {
+    if let TypedExpression::Binary(bin) = &expr.node {
+        assert_eq!(bin.op, expected_op, "Expected {:?} but got {:?}", expected_op, bin.op);
+    } else {
+        panic!("Expected binary expression, got {:?}", expr.node);
+    }
+}
+
+// ===== FULL END-TO-END JIT EXECUTION TESTS =====
+
+#[test]
+fn test_full_pipeline_addition() {
+    // Complete pipeline: Source → TypedAST → HIR → JIT → Execution
+    let source = "2 + 3";
+    let span = Span::new(0, source.len());
+
+    // Phase 1: Parse to TypedAST
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+    let mut ast_builder = TypedAstBuilder::new();
+    let expr = ast_builder.build_program(pairs).expect("Failed to build TypedAST");
+
+    // Phase 2: Wrap in a TypedFunction using build_fn helper
+    let func_decl = ast_builder.build_fn(expr, "calc_add", span).expect("Failed to build function");
+    let program = TypedProgram {
+        declarations: vec![func_decl],
+        span,
+    };
+
+    // Phase 3: Lower to HIR
+    let pipeline = LoweringPipeline::new();
+    let hir_module = pipeline.lower_program(&program).expect("Failed to lower to HIR");
+
+    // Phase 4: Compile to JIT and execute
+    let mut backend = CraneliftBackend::new();
+    backend.compile_module(&hir_module).expect("Failed to compile");
+
+    let result: i32 = unsafe {
+        let func_ptr = backend.get_function("calc_add").expect("Function not found");
+        let func: extern "C" fn() -> i32 = std::mem::transmute(func_ptr);
+        func()
+    };
+
+    assert_eq!(result, 5, "Expected 2 + 3 = 5, got {}", result);
+    println!("[ZynPEG E2E] ✓ PASS - Full pipeline: \"{}\" = {}", source, result);
+}
+
+#[test]
+fn test_full_pipeline_multiplication() {
+    let source = "6 * 7";
+    let span = Span::new(0, source.len());
+
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+    let mut ast_builder = TypedAstBuilder::new();
+    let expr = ast_builder.build_program(pairs).expect("Failed to build TypedAST");
+
+    let func_decl = ast_builder.build_fn(expr, "calc_mul", span).expect("Failed to build function");
+    let program = TypedProgram {
+        declarations: vec![func_decl],
+        span,
+    };
+
+    let pipeline = LoweringPipeline::new();
+    let hir_module = pipeline.lower_program(&program).expect("Failed to lower to HIR");
+
+    let mut backend = CraneliftBackend::new();
+    backend.compile_module(&hir_module).expect("Failed to compile");
+
+    let result: i32 = unsafe {
+        let func_ptr = backend.get_function("calc_mul").expect("Function not found");
+        let func: extern "C" fn() -> i32 = std::mem::transmute(func_ptr);
+        func()
+    };
+
+    assert_eq!(result, 42, "Expected 6 * 7 = 42, got {}", result);
+    println!("[ZynPEG E2E] ✓ PASS - Full pipeline: \"{}\" = {}", source, result);
+}
+
+#[test]
+fn test_full_pipeline_complex() {
+    let source = "(2 + 3) * 4";
+    let span = Span::new(0, source.len());
+
+    let pairs = CalculatorParser::parse(zyn_parser::Rule::program, source)
+        .expect("Failed to parse");
+    let mut ast_builder = TypedAstBuilder::new();
+    let expr = ast_builder.build_program(pairs).expect("Failed to build TypedAST");
+
+    let func_decl = ast_builder.build_fn(expr, "calc_complex", span).expect("Failed to build function");
+    let program = TypedProgram {
+        declarations: vec![func_decl],
+        span,
+    };
+
+    let pipeline = LoweringPipeline::new();
+    let hir_module = pipeline.lower_program(&program).expect("Failed to lower to HIR");
+
+    let mut backend = CraneliftBackend::new();
+    backend.compile_module(&hir_module).expect("Failed to compile");
+
+    let result: i32 = unsafe {
+        let func_ptr = backend.get_function("calc_complex").expect("Function not found");
+        let func: extern "C" fn() -> i32 = std::mem::transmute(func_ptr);
+        func()
+    };
+
+    assert_eq!(result, 20, "Expected (2 + 3) * 4 = 20, got {}", result);
+    println!("[ZynPEG E2E] ✓ PASS - Full pipeline: \"{}\" = {}", source, result);
+}

@@ -39,6 +39,10 @@ pub struct SsaBuilder {
     function_symbols: HashMap<InternedString, HirId>,
     /// Generated string globals (collected during translation)
     string_globals: Vec<crate::hir::HirGlobal>,
+    /// Track which variables are written in each block (for loop phi placement)
+    variable_writes: HashMap<HirId, HashSet<InternedString>>,
+    /// Flag: after IDF placement, don't create new phis
+    idf_placement_done: bool,
 }
 
 /// SSA form representation
@@ -64,6 +68,173 @@ pub struct PhiNode {
     pub operands: Vec<(HirId, HirId)>, // (value, predecessor_block)
 }
 
+/// Dominance information for SSA construction
+/// Computed using Cooper-Harvey-Kennedy algorithm
+#[derive(Debug, Clone)]
+struct DominanceInfo {
+    /// Immediate dominator for each block
+    idom: HashMap<HirId, HirId>,
+    /// Dominance frontiers for each block
+    dom_frontier: HashMap<HirId, HashSet<HirId>>,
+    /// Reverse postorder traversal
+    rpo: Vec<HirId>,
+}
+
+impl DominanceInfo {
+    /// Compute dominance information from TypedCFG
+    fn compute(cfg: &crate::typed_cfg::TypedControlFlowGraph) -> Self {
+        use petgraph::visit::Dfs;
+        use petgraph::Direction;
+
+        // Step 1: Compute reverse postorder (RPO)
+        let mut rpo = Vec::new();
+        let mut visited = HashSet::new();
+        Self::postorder_dfs(cfg, cfg.entry, &mut visited, &mut rpo);
+        rpo.reverse();
+
+        // Step 2: Compute immediate dominators using Cooper-Harvey-Kennedy
+        let mut idom: HashMap<HirId, HirId> = HashMap::new();
+        let entry_id = cfg.node_map[&cfg.entry];
+        idom.insert(entry_id, entry_id); // Entry dominates itself
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block_idx in rpo.iter().skip(1) {
+                let block = &cfg.graph[block_idx];
+                let block_id = block.id;
+
+                // Find new idom from processed predecessors
+                let mut new_idom = None;
+                for edge in cfg.graph.edges_directed(block_idx, Direction::Incoming) {
+                    let pred_idx = edge.source();
+                    let pred_id = cfg.graph[pred_idx].id;
+
+                    if idom.contains_key(&pred_id) {
+                        new_idom = match new_idom {
+                            None => Some(pred_id),
+                            Some(current) => Some(Self::intersect(&idom, current, pred_id, &rpo, cfg)),
+                        };
+                    }
+                }
+
+                if let Some(new_idom_val) = new_idom {
+                    if idom.get(&block_id) != Some(&new_idom_val) {
+                        idom.insert(block_id, new_idom_val);
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        // Step 3: Compute dominance frontiers
+        let dom_frontier = Self::compute_frontiers(cfg, &idom);
+
+        DominanceInfo {
+            idom,
+            dom_frontier,
+            rpo: rpo.iter().map(|&idx| cfg.graph[idx].id).collect(),
+        }
+    }
+
+    /// Postorder DFS traversal
+    fn postorder_dfs(
+        cfg: &crate::typed_cfg::TypedControlFlowGraph,
+        node: petgraph::graph::NodeIndex,
+        visited: &mut HashSet<petgraph::graph::NodeIndex>,
+        postorder: &mut Vec<petgraph::graph::NodeIndex>,
+    ) {
+        if visited.contains(&node) {
+            return;
+        }
+        visited.insert(node);
+
+        for edge in cfg.graph.edges_directed(node, petgraph::Direction::Outgoing) {
+            Self::postorder_dfs(cfg, edge.target(), visited, postorder);
+        }
+
+        postorder.push(node);
+    }
+
+    /// Find intersection of two dominators
+    fn intersect(
+        idom: &HashMap<HirId, HirId>,
+        mut b1: HirId,
+        mut b2: HirId,
+        rpo: &[petgraph::graph::NodeIndex],
+        cfg: &crate::typed_cfg::TypedControlFlowGraph,
+    ) -> HirId {
+        // Get RPO indices for blocks
+        let rpo_map: HashMap<HirId, usize> = rpo.iter()
+            .enumerate()
+            .map(|(i, &idx)| (cfg.graph[idx].id, i))
+            .collect();
+
+        while b1 != b2 {
+            while rpo_map.get(&b1).unwrap_or(&usize::MAX) > rpo_map.get(&b2).unwrap_or(&usize::MAX) {
+                b1 = idom[&b1];
+            }
+            while rpo_map.get(&b2).unwrap_or(&usize::MAX) > rpo_map.get(&b1).unwrap_or(&usize::MAX) {
+                b2 = idom[&b2];
+            }
+        }
+        b1
+    }
+
+    /// Compute dominance frontiers
+    fn compute_frontiers(
+        cfg: &crate::typed_cfg::TypedControlFlowGraph,
+        idom: &HashMap<HirId, HirId>,
+    ) -> HashMap<HirId, HashSet<HirId>> {
+        use petgraph::Direction;
+
+        let mut frontiers: HashMap<HirId, HashSet<HirId>> = HashMap::new();
+
+        for node_idx in cfg.graph.node_indices() {
+            let block = &cfg.graph[node_idx];
+            let block_id = block.id;
+
+            // Get predecessors
+            let preds: Vec<_> = cfg.graph.edges_directed(node_idx, Direction::Incoming)
+                .map(|e| cfg.graph[e.source()].id)
+                .collect();
+
+            if preds.len() >= 2 {
+                // Block with multiple predecessors - compute its dominance frontier
+                for &pred in &preds {
+                    let mut runner = pred;
+                    // Walk up dominator tree from pred until we reach block's idom
+                    while runner != idom.get(&block_id).copied().unwrap_or(block_id) {
+                        frontiers.entry(runner).or_insert_with(HashSet::new).insert(block_id);
+                        let next_runner = idom.get(&runner).copied();
+                        if next_runner.is_none() || next_runner == Some(runner) {
+                            break; // Reached entry or self-dom
+                        }
+                        runner = next_runner.unwrap();
+                    }
+                }
+            }
+        }
+
+        frontiers
+    }
+
+    /// Check if block `a` dominates block `b`
+    fn dominates(&self, a: HirId, b: HirId) -> bool {
+        let mut current = b;
+        while let Some(&dom) = self.idom.get(&current) {
+            if dom == a {
+                return true;
+            }
+            if dom == current {
+                break; // Reached entry
+            }
+            current = dom;
+        }
+        false
+    }
+}
+
 impl SsaBuilder {
     pub fn new(
         function: HirFunction,
@@ -82,6 +253,8 @@ impl SsaBuilder {
             closure_functions: Vec::new(),
             function_symbols,
             string_globals: Vec::new(),
+            variable_writes: HashMap::new(),
+            idf_placement_done: false,
         }
     }
     
@@ -153,25 +326,159 @@ impl SsaBuilder {
             self.definitions.insert(*block_id, HashMap::new());
         }
 
-        // Process blocks in graph order (for simple cases, we'll improve with dominance later)
-        for node_idx in cfg.graph.node_indices() {
-            let typed_block = &cfg.graph[node_idx];
-            let block_id = typed_block.id;
+        // CRITICAL FIX: Initialize function parameters as HIR values in entry block
+        // Without this, parameters are treated as undefined variables and phi nodes are created!
+        // Clone params first to avoid borrow checker issues
+        let params = self.function.signature.params.clone();
+        let entry_block = self.function.entry_block;
 
-            // Process each TypedStatement in this block
-            for stmt in &typed_block.statements {
-                self.process_statement(block_id, stmt)?;
-            }
+        for (param_index, param) in params.iter().enumerate() {
+            let param_value_id = self.create_value(param.ty.clone(), HirValueKind::Parameter(param_index as u32));
 
-            // Process the terminator
-            self.process_typed_terminator(block_id, &typed_block.terminator)?;
+            // Store parameter type for SSA variable tracking
+            self.var_types.insert(param.name, param.ty.clone());
 
-            self.seal_block(block_id);
-            self.filled_blocks.insert(block_id);
+            // Define parameter in entry block so it's available to all code
+            self.write_variable(param.name, entry_block, param_value_id);
         }
 
-        // Fill remaining incomplete phis
+        // CRITICAL: Seal entry block immediately after defining parameters
+        // Entry block has no predecessors, so it can be sealed right away
+        // This allows other blocks to read parameters from the entry block
+        self.seal_block(entry_block);
+        self.filled_blocks.insert(entry_block);
+
+        // IDF-BASED SSA: Place phis using Iterated Dominance Frontier
+        // CRITICAL: This must run BEFORE blocks are processed
+        // It scans the CFG to find variable writes without translating to HIR
+        self.place_phis_using_idf(cfg);
+
+        // Mark IDF placement as done - no new phis should be created after this
+        self.idf_placement_done = true;
+
+        // CRITICAL: Propagate parameters to all blocks
+        // Parameters don't need phis (they're never reassigned), but they need to be
+        // available in all blocks. Copy them from entry block to all other blocks.
+        let param_defs: Vec<_> = self.definitions.get(&entry_block)
+            .map(|defs| defs.iter().map(|(&var, &val)| (var, val)).collect())
+            .unwrap_or_default();
+
+        for (block_id, _) in &self.function.blocks {
+            if *block_id != entry_block {
+                for (var, val) in &param_defs {
+                    // Only copy if the block doesn't already have this variable
+                    // (it might have a phi for variables that ARE reassigned)
+                    if let Some(defs) = self.definitions.get_mut(block_id) {
+                        defs.entry(*var).or_insert(*val);
+                    }
+                }
+            }
+        }
+
+        // Process blocks in dominance-friendly order
+        // For now, we use a simple worklist algorithm that processes blocks when their
+        // non-back-edge predecessors are ready
+        let mut worklist: Vec<_> = cfg.graph.node_indices().collect();
+        let mut processed_blocks = std::collections::HashSet::new();
+        processed_blocks.insert(entry_block);
+
+        // Process entry block statements and terminator
+        for node_idx in cfg.graph.node_indices() {
+            let typed_block = &cfg.graph[node_idx];
+            if typed_block.id == entry_block {
+                for stmt in &typed_block.statements {
+                    self.process_statement(entry_block, stmt)?;
+                }
+                self.process_typed_terminator(entry_block, &typed_block.terminator)?;
+                break;
+            }
+        }
+
+        // Keep processing until worklist is empty
+        while !worklist.is_empty() {
+            let mut made_progress = false;
+
+            worklist.retain(|&node_idx| {
+                let typed_block = &cfg.graph[node_idx];
+                let block_id = typed_block.id;
+
+                // Skip entry block - already processed
+                if block_id == entry_block {
+                    return false; // Remove from worklist
+                }
+
+                // Skip if already processed
+                if processed_blocks.contains(&block_id) {
+                    return false; // Remove from worklist
+                }
+
+                // Check if we can process this block
+                // Process when at least one predecessor is filled for forward progress
+                let block_info = self.function.blocks.get(&block_id).unwrap();
+                let has_filled_pred = block_info.predecessors.iter().any(|pred| self.filled_blocks.contains(pred));
+
+                if !has_filled_pred {
+                    return true; // Keep in worklist
+                }
+
+                // Seal block only if all predecessors are filled
+                let all_preds_filled = block_info.predecessors.iter().all(|pred| self.filled_blocks.contains(pred));
+                if all_preds_filled && !self.sealed_blocks.contains(&block_id) {
+                    self.seal_block(block_id);
+                }
+
+                // Process each TypedStatement in this block
+                for stmt in &typed_block.statements {
+                    self.process_statement(block_id, stmt).unwrap();
+                }
+
+                // Process the terminator
+                self.process_typed_terminator(block_id, &typed_block.terminator).unwrap();
+
+                // Mark block as filled
+                self.filled_blocks.insert(block_id);
+
+                // Seal if not sealed yet
+                if !self.sealed_blocks.contains(&block_id) {
+                    self.seal_block(block_id);
+                }
+
+                processed_blocks.insert(block_id);
+                made_progress = true;
+                false // Remove from worklist
+            });
+
+            if !made_progress && !worklist.is_empty() {
+                // No progress made but worklist not empty - force process remaining blocks
+                for &node_idx in &worklist {
+                    let typed_block = &cfg.graph[node_idx];
+                    let block_id = typed_block.id;
+
+                    if processed_blocks.contains(&block_id) {
+                        continue;
+                    }
+
+                    for stmt in &typed_block.statements {
+                        self.process_statement(block_id, stmt)?;
+                    }
+                    self.process_typed_terminator(block_id, &typed_block.terminator)?;
+                    self.filled_blocks.insert(block_id);
+                    if !self.sealed_blocks.contains(&block_id) {
+                        self.seal_block(block_id);
+                    }
+                    processed_blocks.insert(block_id);
+                }
+                break;
+            }
+        }
+
+        // Fill remaining incomplete phis (from IDF placement)
         self.fill_incomplete_phis();
+
+        // NOTE: verify_and_fix_phi_incoming() is DISABLED because it can create new phis
+        // via read_variable(), which breaks Cranelift block parameter mapping.
+        // If IDF is correct, all phis should already have all incoming values.
+        // self.verify_and_fix_phi_incoming();
 
         // Build def-use chains
         let (def_use_chains, use_def_chains) = self.build_def_use_chains();
@@ -923,6 +1230,12 @@ impl SsaBuilder {
             .get_mut(&block)
             .unwrap()
             .insert(var, value);
+
+        // Track variable writes for loop phi placement
+        self.variable_writes
+            .entry(block)
+            .or_insert_with(HashSet::new)
+            .insert(var);
     }
     
     /// Read a variable in SSA form
@@ -930,64 +1243,100 @@ impl SsaBuilder {
         if let Some(&value) = self.definitions.get(&block).and_then(|defs| defs.get(&var)) {
             return value;
         }
-        
+
         // Not defined in this block - need phi or recursive lookup
         self.read_variable_recursive(var, block)
     }
     
-    /// Recursively read variable, inserting phis as needed
+    /// Recursively read variable, inserting phis as needed (before IDF)
+    /// After IDF placement, this won't create new phis - it will only traverse existing ones
     fn read_variable_recursive(&mut self, var: InternedString, block: HirId) -> HirId {
         let (predecessors, is_sealed) = {
             let block_info = self.function.blocks.get(&block).unwrap();
             (block_info.predecessors.clone(), self.sealed_blocks.contains(&block))
         };
-        
+
         if !is_sealed {
-            // Block not sealed - create incomplete phi
+            // Block not sealed - create incomplete phi (ONLY if IDF not done yet)
             let phi_key = (block, var);
-            
+
             if let Some(&phi_val) = self.incomplete_phis.get(&phi_key) {
                 return phi_val;
             }
-            
+
+            // After IDF placement, don't create new phis - use undef instead
+            if self.idf_placement_done {
+                let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
+                return self.create_undef(ty);
+            }
+
             let ty = self.var_types.get(&var).cloned()
                 .unwrap_or(HirType::I64); // Default type
             let phi_val = self.create_value(ty.clone(), HirValueKind::Instruction);
-            
+
             self.incomplete_phis.insert(phi_key, phi_val);
             self.function.blocks.get_mut(&block).unwrap().phis.push(HirPhi {
                 result: phi_val,
                 ty,
                 incoming: vec![],
             });
-            
+
             phi_val
         } else if predecessors.len() == 1 {
             // Single predecessor - no phi needed
             self.read_variable(var, predecessors[0])
         } else {
             // Multiple predecessors - may need phi
+            // After IDF, phis should already exist, so don't create new ones
+            if self.idf_placement_done {
+                // Check if a phi already exists for this variable in this block
+                let phi_key = (block, var);
+                if let Some(&phi_val) = self.incomplete_phis.get(&phi_key) {
+                    return phi_val;
+                }
+                // Check if phi is in definitions (already filled)
+                if let Some(defs) = self.definitions.get(&block) {
+                    if let Some(&val) = defs.get(&var) {
+                        return val;
+                    }
+                }
+                // No phi found - variable doesn't need a phi (like read-only parameters)
+                // Try reading from each predecessor until we find the value
+                for pred in &predecessors {
+                    let val = self.read_variable(var, *pred);
+                    // Check if it's not undef
+                    if let Some(v) = self.function.values.get(&val) {
+                        if !matches!(v.kind, HirValueKind::Undef) {
+                            return val;
+                        }
+                    }
+                }
+                // All predecessors returned undef - variable is truly undefined
+                let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
+                return self.create_undef(ty);
+            }
+
             let ty = self.var_types.get(&var).cloned()
                 .unwrap_or(HirType::I64);
             let phi_val = self.create_value(ty.clone(), HirValueKind::Instruction);
-            
+
             // Temporarily write to avoid infinite recursion
             self.write_variable(var, block, phi_val);
-            
+
             // Collect values from predecessors
             let mut incoming = Vec::new();
-            
+
             for pred in predecessors {
                 let pred_val = self.read_variable(var, pred);
                 incoming.push((pred_val, pred));
             }
-            
+
             // Check if phi is trivial
             let non_phi_vals: HashSet<_> = incoming.iter()
                 .map(|(val, _)| val)
                 .filter(|&&v| v != phi_val)
                 .collect();
-            
+
             if non_phi_vals.len() == 1 {
                 // Trivial phi - replace with the single value
                 let single_val = **non_phi_vals.iter().next().unwrap();
@@ -1011,48 +1360,343 @@ impl SsaBuilder {
     /// Seal a block (all predecessors known)
     fn seal_block(&mut self, block: HirId) {
         self.sealed_blocks.insert(block);
-        
-        // Process incomplete phis for this block
+
+        // CRITICAL: When using IDF-based SSA, don't fill phis during sealing!
+        // IDF places all phis upfront, and we fill them AFTER all blocks are processed.
+        // Filling during sealing causes phis to be filled before their predecessor
+        // blocks are processed, leading to undef values.
+        if self.idf_placement_done {
+            // Skip phi filling - will be done in batch after all blocks processed
+            return;
+        }
+
+        // Process incomplete phis for this block (demand-driven SSA only)
         let incomplete: Vec<_> = self.incomplete_phis.iter()
             .filter(|((b, _), _)| *b == block)
             .map(|((b, v), _)| (*b, *v))
             .collect();
-        
+
         for (_, var) in incomplete {
             self.fill_incomplete_phi(block, var);
         }
     }
     
-    /// Fill an incomplete phi
+    /// Fill an incomplete phi using pure IDF approach
+    /// Uses read_variable() which may traverse phis, but won't create new ones after IDF
     fn fill_incomplete_phi(&mut self, block: HirId, var: InternedString) {
         let phi_key = (block, var);
         if let Some(phi_val) = self.incomplete_phis.remove(&phi_key) {
             // Get predecessors
             let preds = self.function.blocks[&block].predecessors.clone();
             let mut incoming = Vec::new();
-            
+
             for pred in preds {
+                // Use read_variable to get the value - this will traverse phis if needed
                 let pred_val = self.read_variable(var, pred);
                 incoming.push((pred_val, pred));
             }
-            
+
             // Update the phi
             if let Some(phi) = self.function.blocks.get_mut(&block)
-                .and_then(|b| b.phis.iter_mut().find(|p| p.result == phi_val)) 
+                .and_then(|b| b.phis.iter_mut().find(|p| p.result == phi_val))
             {
                 phi.incoming = incoming;
             }
         }
     }
     
-    /// Fill all remaining incomplete phis
+    /// Fill all IDF-placed phis
     fn fill_incomplete_phis(&mut self) {
         let incomplete: Vec<_> = self.incomplete_phis.keys().cloned().collect();
         for (block, var) in incomplete {
             self.fill_incomplete_phi(block, var);
         }
     }
-    
+
+    /// Verify and fix phi incoming values
+    /// Ensures all phis have incoming values from all predecessors
+    fn verify_and_fix_phi_incoming(&mut self) {
+        // Collect all blocks that have phis
+        let blocks_with_phis: Vec<HirId> = self.function.blocks.iter()
+            .filter(|(_, block)| !block.phis.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+
+        for block_id in blocks_with_phis {
+            // Get predecessors
+            let preds = self.function.blocks[&block_id].predecessors.clone();
+
+            // For each phi in this block
+            let mut phi_fixes = Vec::new();
+
+            {
+                let block = &self.function.blocks[&block_id];
+                for phi in &block.phis {
+                    // Check if phi has incoming from all predecessors
+                    let incoming_blocks: HashSet<_> = phi.incoming.iter()
+                        .map(|(_, block)| *block)
+                        .collect();
+
+                    // Find missing predecessors
+                    let missing: Vec<_> = preds.iter()
+                        .filter(|pred| !incoming_blocks.contains(pred))
+                        .copied()
+                        .collect();
+
+                    if !missing.is_empty() {
+                        // We need to fix this phi
+                        // Try to find which variable this phi is for by checking definitions
+                        if let Some(var) = self.find_variable_for_phi(block_id, phi.result) {
+                            phi_fixes.push((phi.result, var, missing));
+                        }
+                    }
+                }
+            }
+
+            // Apply fixes
+            for (phi_val, var, missing_preds) in phi_fixes {
+                for pred in missing_preds {
+                    // Read the variable value from the predecessor
+                    let pred_val = self.read_variable(var, pred);
+
+                    // Add to phi's incoming list
+                    if let Some(block) = self.function.blocks.get_mut(&block_id) {
+                        if let Some(phi) = block.phis.iter_mut().find(|p| p.result == phi_val) {
+                            phi.incoming.push((pred_val, pred));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Find which variable a phi corresponds to by checking definitions
+    fn find_variable_for_phi(&self, block_id: HirId, phi_val: HirId) -> Option<InternedString> {
+        if let Some(defs) = self.definitions.get(&block_id) {
+            for (var, &val) in defs {
+                if val == phi_val {
+                    return Some(*var);
+                }
+            }
+        }
+        None
+    }
+
+    /// Scan CFG to collect variable types from Let statements
+    /// This must be done before phi placement since phis need correct types
+    fn scan_cfg_for_variable_types(&mut self, cfg: &crate::typed_cfg::TypedControlFlowGraph) {
+        use zyntax_typed_ast::typed_ast::{TypedStatement};
+
+        for node_idx in cfg.graph.node_indices() {
+            let typed_block = &cfg.graph[node_idx];
+
+            // Scan all statements in the block
+            for stmt in &typed_block.statements {
+                match &stmt.node {
+                    // Let statements have type annotations
+                    TypedStatement::Let(let_stmt) => {
+                        let hir_type = self.convert_type(&let_stmt.ty);
+                        self.var_types.insert(let_stmt.name, hir_type);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Scan CFG to find which blocks write which variables
+    /// This is done by analyzing TypedCFG WITHOUT translating to HIR
+    fn scan_cfg_for_variable_writes(&self, cfg: &crate::typed_cfg::TypedControlFlowGraph) -> HashMap<HirId, HashSet<InternedString>> {
+        use zyntax_typed_ast::typed_ast::{TypedExpression, TypedStatement, BinaryOp};
+
+        let mut writes: HashMap<HirId, HashSet<InternedString>> = HashMap::new();
+
+        for node_idx in cfg.graph.node_indices() {
+            let typed_block = &cfg.graph[node_idx];
+            let block_id = typed_block.id;
+            let mut block_writes = HashSet::new();
+
+            // Scan all statements in the block
+            for stmt in &typed_block.statements {
+                match &stmt.node {
+                    // Let statements define variables
+                    TypedStatement::Let(let_stmt) => {
+                        if let_stmt.initializer.is_some() {
+                            block_writes.insert(let_stmt.name);
+                        }
+                    }
+                    // Expression statements might contain assignments
+                    TypedStatement::Expression(expr) => {
+                        self.collect_assigned_vars(expr, &mut block_writes);
+                    }
+                    _ => {}
+                }
+            }
+
+            if !block_writes.is_empty() {
+                writes.insert(block_id, block_writes);
+            }
+        }
+
+        writes
+    }
+
+    /// Place phis using Iterated Dominance Frontier (IDF) algorithm
+    /// This is the proper SSA construction approach that places phis only where needed
+    fn place_phis_using_idf(&mut self, cfg: &crate::typed_cfg::TypedControlFlowGraph) {
+        // CRITICAL: Scan CFG to collect variable types FIRST
+        // Phis need correct types when they're created
+        self.scan_cfg_for_variable_types(cfg);
+
+        // Compute dominance information
+        let dom_info = DominanceInfo::compute(cfg);
+
+        // Scan CFG to find variable writes BEFORE translating blocks
+        let scanned_writes = self.scan_cfg_for_variable_writes(cfg);
+
+        // Group variable writes by variable name
+        // This creates a map: variable -> set of blocks that define it
+        let mut defs_per_var: HashMap<InternedString, HashSet<HirId>> = HashMap::new();
+
+        // Use scanned writes instead of self.variable_writes
+        for (block_id, vars) in &scanned_writes {
+            for &var in vars {
+                defs_per_var.entry(var).or_insert_with(HashSet::new).insert(*block_id);
+            }
+        }
+
+        // IMPORTANT: Only parameters are defined in entry block
+        // Other variables (let statements) will be found by scan_cfg_for_variable_writes
+        // So we DON'T need to add entry block for all variables
+
+        // For each variable, compute IDF and place phis
+        for (var, def_blocks) in defs_per_var {
+            // Compute iterated dominance frontier
+            let idf = self.compute_idf(&def_blocks, &dom_info);
+
+            // Place phi at each block in IDF
+            for &block_id in &idf {
+                let phi_key = (block_id, var);
+
+                // Skip if phi already exists (from demand-driven creation)
+                if self.incomplete_phis.contains_key(&phi_key) {
+                    continue;
+                }
+
+                // Get variable type
+                let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
+
+                // Create incomplete phi
+                let phi_val = self.create_value(ty.clone(), HirValueKind::Instruction);
+
+                self.incomplete_phis.insert(phi_key, phi_val);
+                self.function.blocks.get_mut(&block_id).unwrap().phis.push(HirPhi {
+                    result: phi_val,
+                    ty,
+                    incoming: vec![],
+                });
+
+                // Define it in the block so reads find it
+                self.definitions.get_mut(&block_id).unwrap().insert(var, phi_val);
+            }
+        }
+    }
+
+    /// Compute Iterated Dominance Frontier for a set of blocks
+    fn compute_idf(
+        &self,
+        def_blocks: &HashSet<HirId>,
+        dom_info: &DominanceInfo
+    ) -> HashSet<HirId> {
+        let mut worklist: Vec<HirId> = def_blocks.iter().copied().collect();
+        let mut idf = HashSet::new();
+        let mut processed = HashSet::new();
+
+        while let Some(block) = worklist.pop() {
+            if !processed.insert(block) {
+                continue; // Already processed
+            }
+
+            // Get dominance frontier of this block
+            if let Some(frontier) = dom_info.dom_frontier.get(&block) {
+                for &df_block in frontier {
+                    if idf.insert(df_block) {
+                        // New block added to IDF - process its frontier too
+                        worklist.push(df_block);
+                    }
+                }
+            }
+        }
+
+        idf
+    }
+
+    /// Collect variables written in loop blocks by analyzing TypedCFG
+    fn collect_loop_vars_from_cfg(
+        &self,
+        cfg: &crate::typed_cfg::TypedControlFlowGraph,
+        block_id: HirId,
+        header_id: HirId,
+        vars: &mut HashSet<InternedString>
+    ) {
+        use zyntax_typed_ast::typed_ast::{TypedStatement, TypedExpression};
+
+        // Avoid infinite recursion
+        if block_id == header_id {
+            return;
+        }
+
+        // Find the TypedBasicBlock for this block_id
+        for node_idx in cfg.graph.node_indices() {
+            let typed_block = &cfg.graph[node_idx];
+            if typed_block.id == block_id {
+                // Scan statements for variable assignments
+                for stmt in &typed_block.statements {
+                    match &stmt.node {
+                        TypedStatement::Let(let_stmt) => {
+                            // Variable declaration
+                            vars.insert(let_stmt.name);
+                        }
+                        TypedStatement::Expression(expr) => {
+                            // Check for assignment expressions
+                            self.collect_assigned_vars(expr, vars);
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Recursively collect from predecessors
+                if let Some(hir_block) = self.function.blocks.get(&block_id) {
+                    for &pred in &hir_block.predecessors {
+                        if pred != header_id && pred != self.function.entry_block {
+                            self.collect_loop_vars_from_cfg(cfg, pred, header_id, vars);
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    /// Helper to collect variables from assignment expressions
+    fn collect_assigned_vars(
+        &self,
+        expr: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        vars: &mut HashSet<InternedString>
+    ) {
+        use zyntax_typed_ast::typed_ast::{TypedExpression, BinaryOp};
+
+        match &expr.node {
+            TypedExpression::Binary(bin) if matches!(bin.op, BinaryOp::Assign) => {
+                // Assignment: target = value
+                if let TypedExpression::Variable(name) = &bin.left.node {
+                    vars.insert(*name);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Create a new SSA value
     fn create_value(&mut self, ty: HirType, kind: HirValueKind) -> HirId {
         self.function.create_value(ty, kind)
@@ -1230,10 +1874,11 @@ impl SsaBuilder {
     fn translate_literal(&self, lit: &zyntax_typed_ast::typed_ast::TypedLiteral) -> crate::hir::HirConstant {
         use zyntax_typed_ast::typed_ast::TypedLiteral;
         use crate::hir::HirConstant;
-        
+
         match lit {
             TypedLiteral::Bool(b) => HirConstant::Bool(*b),
-            TypedLiteral::Integer(i) => HirConstant::I64(*i as i64),
+            // Use I32 for integers (TypedAST builder defaults to I32)
+            TypedLiteral::Integer(i) => HirConstant::I32(*i as i32),
             TypedLiteral::Float(f) => HirConstant::F64(*f),
             TypedLiteral::String(s) => HirConstant::String(*s),
             TypedLiteral::Char(c) => HirConstant::I32(*c as i32),

@@ -474,6 +474,26 @@ impl CraneliftBackend {
                 }
             }
 
+            // Map undef values to zero constants (for IDF-based SSA)
+            for value in function.values.values() {
+                if let HirValueKind::Undef = value.kind {
+                    let ty = type_cache.get(&value.ty).copied().unwrap_or(types::I64);
+                    let cranelift_val = if ty.is_int() {
+                        builder.ins().iconst(ty, 0)
+                    } else if ty.is_float() {
+                        if ty == types::F32 {
+                            builder.ins().f32const(0.0)
+                        } else {
+                            builder.ins().f64const(0.0)
+                        }
+                    } else {
+                        // For other types, use null constant
+                        builder.ins().iconst(ty, 0)
+                    };
+                    self.value_map.insert(value.id, cranelift_val);
+                }
+            }
+
             // Track which blocks can be sealed and which are already sealed
             let mut seal_tracker: HashMap<HirId, usize> = HashMap::new();
             let mut sealed_blocks: std::collections::HashSet<HirId> = std::collections::HashSet::new();
@@ -516,8 +536,10 @@ impl CraneliftBackend {
                     // Inline instruction translation to avoid borrow checker issues
                     match inst {
                         HirInstruction::Binary { op, result, ty, left, right } => {
-                            let lhs = self.value_map[left];
-                            let rhs = self.value_map[right];
+                            let lhs = self.value_map.get(left).copied()
+                                .unwrap_or_else(|| panic!("Binary op left operand {:?} not in value_map", left));
+                            let rhs = self.value_map.get(right).copied()
+                                .unwrap_or_else(|| panic!("Binary op right operand {:?} not in value_map", right));
 
                             let value = match op {
                                 BinaryOp::Add => builder.ins().iadd(lhs, rhs),
@@ -1331,12 +1353,20 @@ impl CraneliftBackend {
                         let target_block = self.block_map[target];
 
                         // Inline phi args extraction
+                        // FIXED: phi.incoming format is (value, block), not (block, value)
                         let args: Vec<Value> = if let Some(target_hir_block) = function.blocks.get(target) {
-                            target_hir_block.phis.iter().filter_map(|phi| {
-                                phi.incoming.iter()
-                                    .find(|(pred_block, _)| *pred_block == *hir_block_id)
-                                    .and_then(|(_, value)| self.value_map.get(value).copied())
-                            }).collect()
+                            let mut args_vec = Vec::new();
+                            for phi in &target_hir_block.phis {
+                                if let Some((value, _)) = phi.incoming.iter()
+                                    .find(|(_, pred_block)| *pred_block == *hir_block_id)
+                                {
+                                    if let Some(cranelift_val) = self.value_map.get(value) {
+                                        args_vec.push(*cranelift_val);
+                                    }
+                                    // Note: Values should now all be in value_map after pure IDF fix
+                                }
+                            }
+                            args_vec
                         } else {
                             vec![]
                         };
@@ -1358,22 +1388,24 @@ impl CraneliftBackend {
                         let false_block = self.block_map[false_target];
 
                         // Inline phi args extraction for true branch
+                        // FIXED: phi.incoming format is (value, block), not (block, value)
                         let true_args: Vec<Value> = if let Some(target_hir_block) = function.blocks.get(true_target) {
                             target_hir_block.phis.iter().filter_map(|phi| {
                                 phi.incoming.iter()
-                                    .find(|(pred_block, _)| *pred_block == *hir_block_id)
-                                    .and_then(|(_, value)| self.value_map.get(value).copied())
+                                    .find(|(_, pred_block)| *pred_block == *hir_block_id)
+                                    .and_then(|(value, _)| self.value_map.get(value).copied())
                             }).collect()
                         } else {
                             vec![]
                         };
 
                         // Inline phi args extraction for false branch
+                        // FIXED: phi.incoming format is (value, block), not (block, value)
                         let false_args: Vec<Value> = if let Some(target_hir_block) = function.blocks.get(false_target) {
                             target_hir_block.phis.iter().filter_map(|phi| {
                                 phi.incoming.iter()
-                                    .find(|(pred_block, _)| *pred_block == *hir_block_id)
-                                    .and_then(|(_, value)| self.value_map.get(value).copied())
+                                    .find(|(_, pred_block)| *pred_block == *hir_block_id)
+                                    .and_then(|(value, _)| self.value_map.get(value).copied())
                             }).collect()
                         } else {
                             vec![]
@@ -1572,6 +1604,16 @@ impl CraneliftBackend {
                         // Other terminators not implemented
                         eprintln!("WARNING: Unimplemented terminator in block {:?}", hir_block_id);
                     }
+                }
+            }
+
+            // CRITICAL: Seal all blocks before finalization
+            // Some blocks may have been created but not sealed (e.g., break targets)
+            for &hir_block_id in &block_order {
+                let cranelift_block = block_map[&hir_block_id];
+                if !sealed_blocks.contains(&hir_block_id) {
+                    builder.seal_block(cranelift_block);
+                    sealed_blocks.insert(hir_block_id);
                 }
             }
 
@@ -3421,9 +3463,10 @@ impl CraneliftBackend {
 
         target.phis.iter().map(|phi| {
             // Find the incoming value from from_block
+            // FIXED: phi.incoming format is (value, block), not (block, value)
             phi.incoming.iter()
-                .find(|(pred_block, _)| *pred_block == from_block)
-                .map(|(_, value)| self.value_map[value])
+                .find(|(_, pred_block)| *pred_block == from_block)
+                .map(|(value, _)| self.value_map[value])
                 .expect(&format!(
                     "Phi node in block {:?} must have incoming value from predecessor {:?}",
                     target_block, from_block

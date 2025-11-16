@@ -231,8 +231,13 @@ impl TypedCfgBuilder {
                         }
                     }
 
+                    // Check if then block has a definite terminator (return, break, continue)
+                    let then_returns = all_blocks.iter().rev().find(|b| b.id == then_exit)
+                        .map(|b| !matches!(b.terminator, TypedTerminator::Unreachable))
+                        .unwrap_or(false);
+
                     // Process else block or create empty else
-                    if let Some(ref else_block) = if_stmt.else_block {
+                    let else_returns = if let Some(ref else_block) = if_stmt.else_block {
                         let (else_blocks, _, else_exit) = self.split_at_control_flow(else_block, else_id)?;
                         all_blocks.extend(else_blocks);
 
@@ -240,7 +245,12 @@ impl TypedCfgBuilder {
                         if let Some(last_block) = all_blocks.iter_mut().rev().find(|b| b.id == else_exit) {
                             if matches!(last_block.terminator, TypedTerminator::Unreachable) {
                                 last_block.terminator = TypedTerminator::Jump(merge_id);
+                                false
+                            } else {
+                                true // else has definite terminator
                             }
+                        } else {
+                            false
                         }
                     } else {
                         // Empty else block jumps directly to merge
@@ -250,12 +260,24 @@ impl TypedCfgBuilder {
                             statements: vec![],
                             terminator: TypedTerminator::Jump(merge_id),
                         });
-                    }
+                        false
+                    };
 
-                    // Start new block after If (merge point)
-                    current_statements = Vec::new();
-                    current_block_id = merge_id;
-                    exit_id = merge_id;
+                    // Only create merge block if at least one branch can reach it
+                    // If both branches return/break/continue, there's no merge point
+                    if then_returns && else_returns {
+                        // Both branches have definite terminators - no merge block needed
+                        // The if statement itself terminates the function/loop
+                        exit_id = current_block_id; // Exit at the if block
+                        // Don't update current_block_id - we're done
+                        // Early return to avoid creating unreachable merge block
+                        return Ok((all_blocks, entry_id, exit_id));
+                    } else {
+                        // Start new block after If (merge point)
+                        current_statements = Vec::new();
+                        current_block_id = merge_id;
+                        exit_id = merge_id;
+                    }
                 }
 
                 TypedStatement::While(while_stmt) => {

@@ -1,0 +1,187 @@
+// ===================================================================
+// ZynPEG Zig Subset Grammar
+// ===================================================================
+//
+// Phase 2: Zig subset grammar for Zyntax compiler infrastructure
+// Target: Structs, functions, control flow, basic generics
+//
+// Reference: https://ziglang.org/documentation/master/
+// Status: Week 1 - Basic structure (primitives, literals, expressions)
+//
+// ===================================================================
+
+// ===== Program Structure =====
+
+program = { SOI ~ declaration* ~ EOI }
+
+declaration = {
+    const_decl
+  | var_decl
+  | fn_decl
+  | struct_decl
+}
+
+// ===== Declarations =====
+
+const_decl = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
+var_decl   = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
+
+fn_decl = {
+    "fn" ~ identifier ~
+    "(" ~ fn_params? ~ ")" ~ type_expr ~
+    block
+}
+
+fn_params = { fn_param ~ ("," ~ fn_param)* }
+fn_param  = { identifier ~ ":" ~ type_expr }
+
+struct_decl = {
+    "const" ~ identifier ~ "=" ~ "struct" ~ "{" ~
+    field_decl* ~
+    "}" ~ ";"
+}
+
+field_decl = { identifier ~ ":" ~ type_expr ~ "," }
+
+// ===== Type Expressions =====
+
+type_expr = {
+    primitive_type
+  | identifier              // Named type (struct name, type alias)
+  | array_type              // []T
+  | pointer_type            // *T
+}
+
+primitive_type = {
+    "i8" | "i16" | "i32" | "i64" | "i128"
+  | "u8" | "u16" | "u32" | "u64" | "u128"
+  | "f32" | "f64"
+  | "bool"
+  | "void"
+}
+
+array_type   = { "[" ~ "]" ~ type_expr }
+pointer_type = { "*" ~ type_expr }
+
+// ===== Statements =====
+
+statement = {
+    const_decl
+  | var_decl
+  | assignment
+  | if_stmt
+  | while_stmt
+  | for_stmt
+  | break_stmt
+  | continue_stmt
+  | return_stmt
+  | expr_stmt
+}
+
+assignment = { identifier ~ "=" ~ expr ~ ";" }
+return_stmt = { "return" ~ expr? ~ ";" }
+expr_stmt = { expr ~ ";" }
+
+if_stmt = {
+    "if" ~ "(" ~ expr ~ ")" ~ block ~
+    ("else" ~ (if_stmt | block))?
+}
+
+while_stmt = {
+    "while" ~ "(" ~ expr ~ ")" ~ block
+}
+
+for_stmt = {
+    "for" ~ "(" ~ identifier ~ "in" ~ expr ~ ")" ~ block
+}
+
+break_stmt = { "break" ~ ";" }
+
+continue_stmt = { "continue" ~ ";" }
+
+block = { "{" ~ statement* ~ "}" }
+
+// ===== Expressions =====
+// Precedence (lowest to highest):
+// 1. Logical OR
+// 2. Logical AND
+// 3. Equality (==, !=)
+// 4. Comparison (<, >, <=, >=)
+// 5. Addition/Subtraction
+// 6. Multiplication/Division/Modulo
+// 7. Unary (-, !)
+// 8. Postfix (., [], ())
+// 9. Primary (literals, identifiers, parentheses)
+
+expr = { logical_or }
+
+logical_or  = { logical_and ~ (log_or_op ~ logical_and)* }
+logical_and = { equality ~ (log_and_op ~ equality)* }
+equality    = { comparison ~ (eq_op ~ comparison)* }
+comparison  = { addition ~ (cmp_op ~ addition)* }
+addition    = { multiplication ~ (add_op ~ multiplication)* }
+multiplication = { unary ~ (mul_op ~ unary)* }
+
+unary = {
+    unary_op ~ unary
+  | postfix
+}
+
+postfix = {
+    primary ~ postfix_op*
+}
+
+postfix_op = {
+    "." ~ identifier          // Field access
+  | "[" ~ expr ~ "]"          // Array indexing
+  | "(" ~ args? ~ ")"         // Function call
+}
+
+args = { expr ~ ("," ~ expr)* }
+
+primary = {
+    literal
+  | struct_literal
+  | "(" ~ expr ~ ")"
+  | identifier
+}
+
+// ===== Literals =====
+
+literal = {
+    bool_literal
+  | integer_literal
+  | float_literal
+  | string_literal
+}
+
+bool_literal    = { "true" | "false" }
+integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
+float_literal   = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+string_literal  = { "\"" ~ string_inner ~ "\"" }
+string_inner    = @{ (!("\"" | "\\") ~ ANY)* }
+
+struct_literal = {
+    identifier ~ "{" ~ struct_field_init? ~ ("," ~ struct_field_init)* ~ ","? ~ "}"
+}
+
+struct_field_init = { "." ~ identifier ~ "=" ~ expr }
+
+// ===== Identifiers =====
+
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// ===== Operators =====
+
+log_or_op  = { "or" }
+log_and_op = { "and" }
+add_op     = { "+" | "-" }
+mul_op     = { "*" | "/" | "%" }
+cmp_op     = { "<=" | ">=" | "<" | ">" }
+eq_op      = { "==" | "!=" }
+unary_op   = { "-" | "!" }
+
+// ===== Whitespace and Comments =====
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT    = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n" }

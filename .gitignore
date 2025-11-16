@@ -22,3 +22,6 @@ Cargo.lock
 #.idea/.CLAUDE/
 # Examples with outdated API (needs updating)
 crates/compiler/examples/
+
+# Session-specific documentation archives
+docs/session-archive/
