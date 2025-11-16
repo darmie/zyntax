@@ -192,6 +192,7 @@ pub enum TypedExpression {
     Dereference(Box<TypedNode<TypedExpression>>),
     Range(TypedRange),
     MethodCall(TypedMethodCall),
+    Block(TypedBlock),
 }
 
 /// Literal values

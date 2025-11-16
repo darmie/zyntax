@@ -52,15 +52,58 @@ impl<'de> Deserialize<'de> for InternedString {
     where
         D: serde::Deserializer<'de>,
     {
-        // Deserialize from the symbol index
-        let index = usize::deserialize(deserializer)?;
-        Ok(InternedString(Symbol::try_from_usize(index).unwrap()))
+        use serde::de::Error;
+
+        // Try to deserialize as either a string or a usize
+        let value = serde_json::Value::deserialize(deserializer)?;
+
+        match value {
+            // If it's a number, treat it as an index (legacy format)
+            serde_json::Value::Number(n) => {
+                let index = n.as_u64()
+                    .ok_or_else(|| D::Error::custom("InternedString index must be a positive integer"))?
+                    as usize;
+                let symbol = Symbol::try_from_usize(index)
+                    .ok_or_else(|| D::Error::custom(format!("Invalid symbol index: {}", index)))?;
+                Ok(InternedString(symbol))
+            },
+            // If it's a string, intern it (new format for Reflaxe compatibility)
+            serde_json::Value::String(s) => {
+                // SAFETY: We use a global arena for deserialization
+                // This is a temporary solution - ideally we'd pass arena context through deserializer
+                Ok(InternedString::new_global(&s))
+            },
+            _ => Err(D::Error::custom("InternedString must be either a string or a number")),
+        }
     }
 }
 
 impl fmt::Display for InternedString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "InternedString({:?})", self.0)
+    }
+}
+
+// Global string interner for JSON deserialization
+// This is used when deserializing TypedAST from JSON without an explicit arena context
+use std::sync::Mutex;
+use once_cell::sync::Lazy;
+
+static GLOBAL_INTERNER: Lazy<Mutex<StringInterner<DefaultBackend>>> =
+    Lazy::new(|| Mutex::new(StringInterner::new()));
+
+impl InternedString {
+    /// Create an InternedString from a string using the global interner
+    /// This is primarily used during JSON deserialization
+    pub fn new_global(s: &str) -> Self {
+        let mut interner = GLOBAL_INTERNER.lock().unwrap();
+        InternedString(interner.get_or_intern(s))
+    }
+
+    /// Resolve this InternedString to a string using the global interner
+    pub fn resolve_global(&self) -> Option<String> {
+        let interner = GLOBAL_INTERNER.lock().unwrap();
+        interner.resolve(self.0).map(|s| s.to_string())
     }
 }
 
@@ -101,8 +144,14 @@ impl AstArena {
     
     /// Intern a string and return its symbol
     pub fn intern_string(&mut self, string: impl AsRef<str>) -> InternedString {
-        let symbol = self.string_interner.get_or_intern(string.as_ref());
-        
+        let string_ref = string.as_ref();
+
+        // Add to local interner for statistics
+        let _local_symbol = self.string_interner.get_or_intern(string_ref);
+
+        // Use global interner for the actual symbol to enable cross-arena resolution
+        let global_interned = InternedString::new_global(string_ref);
+
         // Update statistics
         if self.string_interner.len() > self.stats.max_interned_strings.load(std::sync::atomic::Ordering::Relaxed) {
             self.stats.max_interned_strings.store(
@@ -110,8 +159,8 @@ impl AstArena {
                 std::sync::atomic::Ordering::Relaxed
             );
         }
-        
-        InternedString::new(symbol)
+
+        global_interned
     }
     
     /// Resolve an interned string back to its value

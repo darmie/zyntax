@@ -21,6 +21,7 @@ pub mod string;  // UTF-8 string type backed by vec_u8
 pub mod iterator; // Iterator-style functions (vec_for_each)
 pub mod hashmap;  // HashMap<K,V> with hash functions
 pub mod async_runtime; // Async runtime types (Future trait, Poll enum, Context)
+pub mod io;      // I/O functions (printf, println, etc.)
 
 use crate::hir_builder::HirBuilder;
 use crate::hir::HirModule;
@@ -64,6 +65,10 @@ pub fn build_stdlib(arena: &mut AstArena) -> HirModule {
 
     // Build async runtime types (Future trait, Poll enum, Context)
     async_runtime::build_async_runtime(&mut builder);
+
+    // Build I/O functions (printf, println, etc.)
+    io::build_io_functions(&mut builder);
+    io::build_print_i32(&mut builder);
 
     builder.finish()
 }

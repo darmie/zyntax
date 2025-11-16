@@ -1,0 +1,3386 @@
+{
+  "declarations": [
+    {
+      "ty": {
+        "Primitive": "Unit"
+      },
+      "span": {
+        "start": 137,
+        "end": 2837
+      },
+      "node": {
+        "Function": {
+          "name": "main",
+          "calling_convention": "Rust",
+          "params": [],
+          "link_name": null,
+          "visibility": "Public",
+          "body": {
+            "statements": [
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 170,
+                  "end": 175
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 170,
+                      "end": 175
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 176,
+                              "end": 203
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "=== BATTLE TEST SUITE ==="
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 170,
+                            "end": 175
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 223,
+                  "end": 238
+                },
+                "node": {
+                  "Let": {
+                    "name": "passed",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "I32"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "I32"
+                      },
+                      "span": {
+                        "start": 236,
+                        "end": 237
+                      },
+                      "node": {
+                        "Literal": {
+                          "Integer": 0
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 223,
+                      "end": 238
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 247,
+                  "end": 262
+                },
+                "node": {
+                  "Let": {
+                    "name": "failed",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "I32"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "I32"
+                      },
+                      "span": {
+                        "start": 260,
+                        "end": 261
+                      },
+                      "node": {
+                        "Literal": {
+                          "Integer": 0
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 247,
+                      "end": 262
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 322,
+                  "end": 327
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 322,
+                      "end": 327
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 328,
+                              "end": 363
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "\n[Test 1] Control flow - if/else"
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 322,
+                            "end": 327
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 374,
+                  "end": 385
+                },
+                "node": {
+                  "Let": {
+                    "name": "x",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "I32"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "I32"
+                      },
+                      "span": {
+                        "start": 382,
+                        "end": 384
+                      },
+                      "node": {
+                        "Literal": {
+                          "Integer": 10
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 374,
+                      "end": 385
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 394,
+                  "end": 410
+                },
+                "node": {
+                  "Let": {
+                    "name": "result",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 407,
+                        "end": 409
+                      },
+                      "node": {
+                        "Literal": {
+                          "String": ""
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 394,
+                      "end": 410
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 419,
+                  "end": 528
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 419,
+                      "end": 528
+                    },
+                    "node": {
+                      "If": {
+                        "else_branch": {
+                          "ty": {
+                            "Primitive": "String"
+                          },
+                          "span": {
+                            "start": 493,
+                            "end": 517
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 493,
+                                  "end": 499
+                                },
+                                "node": {
+                                  "Variable": "result"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 502,
+                                  "end": 517
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "String": "less or equal"
+                                  }
+                                }
+                              },
+                              "op": "Add"
+                            }
+                          }
+                        },
+                        "condition": {
+                          "ty": {
+                            "Primitive": "Bool"
+                          },
+                          "span": {
+                            "start": 423,
+                            "end": 428
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 423,
+                                  "end": 424
+                                },
+                                "node": {
+                                  "Variable": "x"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 427,
+                                  "end": 428
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "Integer": 5
+                                  }
+                                }
+                              },
+                              "op": "Gt"
+                            }
+                          }
+                        },
+                        "then_branch": {
+                          "ty": {
+                            "Primitive": "String"
+                          },
+                          "span": {
+                            "start": 444,
+                            "end": 462
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 444,
+                                  "end": 450
+                                },
+                                "node": {
+                                  "Variable": "result"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 453,
+                                  "end": 462
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "String": "greater"
+                                  }
+                                }
+                              },
+                              "op": "Add"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 537,
+                  "end": 758
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 537,
+                      "end": 758
+                    },
+                    "node": {
+                      "If": {
+                        "else_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 666,
+                            "end": 758
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 680,
+                                    "end": 685
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 680,
+                                        "end": 685
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 686,
+                                                "end": 713
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✗ FAIL: if/else incorrect"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 680,
+                                              "end": 685
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 728,
+                                    "end": 747
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 728,
+                                        "end": 747
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 728,
+                                              "end": 734
+                                            },
+                                            "node": {
+                                              "Variable": "failed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 737,
+                                              "end": 747
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 737,
+                                                    "end": 743
+                                                  },
+                                                  "node": {
+                                                    "Variable": "failed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 746,
+                                                    "end": 747
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 666,
+                                "end": 758
+                              }
+                            }
+                          }
+                        },
+                        "condition": {
+                          "ty": {
+                            "Primitive": "Bool"
+                          },
+                          "span": {
+                            "start": 541,
+                            "end": 560
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 541,
+                                  "end": 547
+                                },
+                                "node": {
+                                  "Variable": "result"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 551,
+                                  "end": 560
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "String": "greater"
+                                  }
+                                }
+                              },
+                              "op": "Eq"
+                            }
+                          }
+                        },
+                        "then_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 562,
+                            "end": 660
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 576,
+                                    "end": 581
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 576,
+                                        "end": 581
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 582,
+                                                "end": 615
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✓ PASS: if/else works correctly"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 576,
+                                              "end": 581
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 630,
+                                    "end": 649
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 630,
+                                        "end": 649
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 630,
+                                              "end": 636
+                                            },
+                                            "node": {
+                                              "Variable": "passed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 639,
+                                              "end": 649
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 639,
+                                                    "end": 645
+                                                  },
+                                                  "node": {
+                                                    "Variable": "passed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 648,
+                                                    "end": 649
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 562,
+                                "end": 660
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 822,
+                  "end": 827
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 822,
+                      "end": 827
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 828,
+                              "end": 867
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "\n[Test 2] String concatenation chain"
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 822,
+                            "end": 827
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 878,
+                  "end": 894
+                },
+                "node": {
+                  "Let": {
+                    "name": "a",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 886,
+                        "end": 893
+                      },
+                      "node": {
+                        "Literal": {
+                          "String": "Hello"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 878,
+                      "end": 894
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 903,
+                  "end": 919
+                },
+                "node": {
+                  "Let": {
+                    "name": "b",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 911,
+                        "end": 918
+                      },
+                      "node": {
+                        "Literal": {
+                          "String": "World"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 903,
+                      "end": 919
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 928,
+                  "end": 954
+                },
+                "node": {
+                  "Let": {
+                    "name": "c",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 936,
+                        "end": 953
+                      },
+                      "node": {
+                        "Call": {
+                          "type_args": [],
+                          "positional_args": [
+                            {
+                              "ty": {
+                                "Primitive": "String"
+                              },
+                              "span": {
+                                "start": 936,
+                                "end": 947
+                              },
+                              "node": {
+                                "Call": {
+                                  "type_args": [],
+                                  "positional_args": [
+                                    {
+                                      "ty": {
+                                        "Primitive": "String"
+                                      },
+                                      "span": {
+                                        "start": 936,
+                                        "end": 943
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 936,
+                                                "end": 937
+                                              },
+                                              "node": {
+                                                "Variable": "a"
+                                              }
+                                            },
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 940,
+                                                "end": 943
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": " "
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 936,
+                                              "end": 943
+                                            },
+                                            "node": {
+                                              "Variable": "$String$concat"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    },
+                                    {
+                                      "ty": {
+                                        "Primitive": "String"
+                                      },
+                                      "span": {
+                                        "start": 946,
+                                        "end": 947
+                                      },
+                                      "node": {
+                                        "Variable": "b"
+                                      }
+                                    }
+                                  ],
+                                  "named_args": [],
+                                  "callee": {
+                                    "ty": {
+                                      "Primitive": "I32"
+                                    },
+                                    "span": {
+                                      "start": 936,
+                                      "end": 947
+                                    },
+                                    "node": {
+                                      "Variable": "$String$concat"
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "ty": {
+                                "Primitive": "String"
+                              },
+                              "span": {
+                                "start": 950,
+                                "end": 953
+                              },
+                              "node": {
+                                "Literal": {
+                                  "String": "!"
+                                }
+                              }
+                            }
+                          ],
+                          "named_args": [],
+                          "callee": {
+                            "ty": {
+                              "Primitive": "I32"
+                            },
+                            "span": {
+                              "start": 936,
+                              "end": 953
+                            },
+                            "node": {
+                              "Variable": "$String$concat"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 928,
+                      "end": 954
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 963,
+                  "end": 1206
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 963,
+                      "end": 1206
+                    },
+                    "node": {
+                      "If": {
+                        "else_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 1097,
+                            "end": 1206
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1111,
+                                    "end": 1116
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 1111,
+                                        "end": 1116
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 1117,
+                                                "end": 1161
+                                              },
+                                              "node": {
+                                                "Call": {
+                                                  "type_args": [],
+                                                  "positional_args": [
+                                                    {
+                                                      "ty": {
+                                                        "Primitive": "String"
+                                                      },
+                                                      "span": {
+                                                        "start": 1117,
+                                                        "end": 1157
+                                                      },
+                                                      "node": {
+                                                        "Literal": {
+                                                          "String": "✗ FAIL: Expected 'Hello World!', got: "
+                                                        }
+                                                      }
+                                                    },
+                                                    {
+                                                      "ty": {
+                                                        "Primitive": "String"
+                                                      },
+                                                      "span": {
+                                                        "start": 1160,
+                                                        "end": 1161
+                                                      },
+                                                      "node": {
+                                                        "Variable": "c"
+                                                      }
+                                                    }
+                                                  ],
+                                                  "named_args": [],
+                                                  "callee": {
+                                                    "ty": {
+                                                      "Primitive": "I32"
+                                                    },
+                                                    "span": {
+                                                      "start": 1117,
+                                                      "end": 1161
+                                                    },
+                                                    "node": {
+                                                      "Variable": "$String$concat"
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1111,
+                                              "end": 1116
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1176,
+                                    "end": 1195
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 1176,
+                                        "end": 1195
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1176,
+                                              "end": 1182
+                                            },
+                                            "node": {
+                                              "Variable": "failed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1185,
+                                              "end": 1195
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1185,
+                                                    "end": 1191
+                                                  },
+                                                  "node": {
+                                                    "Variable": "failed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1194,
+                                                    "end": 1195
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 1097,
+                                "end": 1206
+                              }
+                            }
+                          }
+                        },
+                        "condition": {
+                          "ty": {
+                            "Primitive": "Bool"
+                          },
+                          "span": {
+                            "start": 967,
+                            "end": 986
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 967,
+                                  "end": 968
+                                },
+                                "node": {
+                                  "Variable": "c"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 972,
+                                  "end": 986
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "String": "Hello World!"
+                                  }
+                                }
+                              },
+                              "op": "Eq"
+                            }
+                          }
+                        },
+                        "then_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 988,
+                            "end": 1091
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1002,
+                                    "end": 1007
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 1002,
+                                        "end": 1007
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 1008,
+                                                "end": 1046
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✓ PASS: String concatenation correct"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1002,
+                                              "end": 1007
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1061,
+                                    "end": 1080
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 1061,
+                                        "end": 1080
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1061,
+                                              "end": 1067
+                                            },
+                                            "node": {
+                                              "Variable": "passed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1070,
+                                              "end": 1080
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1070,
+                                                    "end": 1076
+                                                  },
+                                                  "node": {
+                                                    "Variable": "passed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1079,
+                                                    "end": 1080
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 988,
+                                "end": 1091
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1272,
+                  "end": 1277
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 1272,
+                      "end": 1277
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 1278,
+                              "end": 1319
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "\n[Test 3] Multiple variable assignment"
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 1272,
+                            "end": 1277
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1330,
+                  "end": 1347
+                },
+                "node": {
+                  "Let": {
+                    "name": "v1",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 1339,
+                        "end": 1346
+                      },
+                      "node": {
+                        "Literal": {
+                          "String": "first"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 1330,
+                      "end": 1347
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1356,
+                  "end": 1374
+                },
+                "node": {
+                  "Let": {
+                    "name": "v2",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 1365,
+                        "end": 1373
+                      },
+                      "node": {
+                        "Literal": {
+                          "String": "second"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 1356,
+                      "end": 1374
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1383,
+                  "end": 1400
+                },
+                "node": {
+                  "Let": {
+                    "name": "v3",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 1392,
+                        "end": 1399
+                      },
+                      "node": {
+                        "Call": {
+                          "type_args": [],
+                          "positional_args": [
+                            {
+                              "ty": {
+                                "Primitive": "String"
+                              },
+                              "span": {
+                                "start": 1392,
+                                "end": 1394
+                              },
+                              "node": {
+                                "Variable": "v1"
+                              }
+                            },
+                            {
+                              "ty": {
+                                "Primitive": "String"
+                              },
+                              "span": {
+                                "start": 1397,
+                                "end": 1399
+                              },
+                              "node": {
+                                "Variable": "v2"
+                              }
+                            }
+                          ],
+                          "named_args": [],
+                          "callee": {
+                            "ty": {
+                              "Primitive": "I32"
+                            },
+                            "span": {
+                              "start": 1392,
+                              "end": 1399
+                            },
+                            "node": {
+                              "Variable": "$String$concat"
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 1383,
+                      "end": 1400
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1409,
+                  "end": 1646
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 1409,
+                      "end": 1646
+                    },
+                    "node": {
+                      "If": {
+                        "else_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 1542,
+                            "end": 1646
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1556,
+                                    "end": 1561
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 1556,
+                                        "end": 1561
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 1562,
+                                                "end": 1601
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✗ FAIL: Variable assignment incorrect"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1556,
+                                              "end": 1561
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1616,
+                                    "end": 1635
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 1616,
+                                        "end": 1635
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1616,
+                                              "end": 1622
+                                            },
+                                            "node": {
+                                              "Variable": "failed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1625,
+                                              "end": 1635
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1625,
+                                                    "end": 1631
+                                                  },
+                                                  "node": {
+                                                    "Variable": "failed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1634,
+                                                    "end": 1635
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 1542,
+                                "end": 1646
+                              }
+                            }
+                          }
+                        },
+                        "condition": {
+                          "ty": {
+                            "Primitive": "Bool"
+                          },
+                          "span": {
+                            "start": 1413,
+                            "end": 1432
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 1413,
+                                  "end": 1415
+                                },
+                                "node": {
+                                  "Variable": "v3"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 1419,
+                                  "end": 1432
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "String": "firstsecond"
+                                  }
+                                }
+                              },
+                              "op": "Eq"
+                            }
+                          }
+                        },
+                        "then_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 1434,
+                            "end": 1536
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1448,
+                                    "end": 1453
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 1448,
+                                        "end": 1453
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 1454,
+                                                "end": 1491
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✓ PASS: Multiple assignment correct"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1448,
+                                              "end": 1453
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1506,
+                                    "end": 1525
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 1506,
+                                        "end": 1525
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1506,
+                                              "end": 1512
+                                            },
+                                            "node": {
+                                              "Variable": "passed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1515,
+                                              "end": 1525
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1515,
+                                                    "end": 1521
+                                                  },
+                                                  "node": {
+                                                    "Variable": "passed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1524,
+                                                    "end": 1525
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 1434,
+                                "end": 1536
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1705,
+                  "end": 1710
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 1705,
+                      "end": 1710
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 1711,
+                              "end": 1745
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "\n[Test 4] Arithmetic operations"
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 1705,
+                            "end": 1710
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1756,
+                  "end": 1770
+                },
+                "node": {
+                  "Let": {
+                    "name": "num1",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "I32"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "I32"
+                      },
+                      "span": {
+                        "start": 1767,
+                        "end": 1769
+                      },
+                      "node": {
+                        "Literal": {
+                          "Integer": 15
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 1756,
+                      "end": 1770
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1779,
+                  "end": 1793
+                },
+                "node": {
+                  "Let": {
+                    "name": "num2",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "I32"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "I32"
+                      },
+                      "span": {
+                        "start": 1790,
+                        "end": 1792
+                      },
+                      "node": {
+                        "Literal": {
+                          "Integer": 25
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 1779,
+                      "end": 1793
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1802,
+                  "end": 1824
+                },
+                "node": {
+                  "Let": {
+                    "name": "sum",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "I32"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "I32"
+                      },
+                      "span": {
+                        "start": 1812,
+                        "end": 1823
+                      },
+                      "node": {
+                        "Binary": {
+                          "left": {
+                            "ty": {
+                              "Primitive": "I32"
+                            },
+                            "span": {
+                              "start": 1812,
+                              "end": 1816
+                            },
+                            "node": {
+                              "Variable": "num1"
+                            }
+                          },
+                          "right": {
+                            "ty": {
+                              "Primitive": "I32"
+                            },
+                            "span": {
+                              "start": 1819,
+                              "end": 1823
+                            },
+                            "node": {
+                              "Variable": "num2"
+                            }
+                          },
+                          "op": "Add"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 1802,
+                      "end": 1824
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 1833,
+                  "end": 2053
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 1833,
+                      "end": 2053
+                    },
+                    "node": {
+                      "If": {
+                        "else_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 1960,
+                            "end": 2053
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1974,
+                                    "end": 1979
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 1974,
+                                        "end": 1979
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 1980,
+                                                "end": 2008
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✗ FAIL: Addition incorrect"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1974,
+                                              "end": 1979
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 2023,
+                                    "end": 2042
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 2023,
+                                        "end": 2042
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2023,
+                                              "end": 2029
+                                            },
+                                            "node": {
+                                              "Variable": "failed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2032,
+                                              "end": 2042
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 2032,
+                                                    "end": 2038
+                                                  },
+                                                  "node": {
+                                                    "Variable": "failed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 2041,
+                                                    "end": 2042
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 1960,
+                                "end": 2053
+                              }
+                            }
+                          }
+                        },
+                        "condition": {
+                          "ty": {
+                            "Primitive": "Bool"
+                          },
+                          "span": {
+                            "start": 1837,
+                            "end": 1846
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 1837,
+                                  "end": 1840
+                                },
+                                "node": {
+                                  "Variable": "sum"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 1844,
+                                  "end": 1846
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "Integer": 40
+                                  }
+                                }
+                              },
+                              "op": "Eq"
+                            }
+                          }
+                        },
+                        "then_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 1848,
+                            "end": 1954
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1862,
+                                    "end": 1867
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 1862,
+                                        "end": 1867
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 1868,
+                                                "end": 1909
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✓ PASS: Addition correct (15 + 25 = 40)"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1862,
+                                              "end": 1867
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 1924,
+                                    "end": 1943
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 1924,
+                                        "end": 1943
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1924,
+                                              "end": 1930
+                                            },
+                                            "node": {
+                                              "Variable": "passed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 1933,
+                                              "end": 1943
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1933,
+                                                    "end": 1939
+                                                  },
+                                                  "node": {
+                                                    "Variable": "passed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 1942,
+                                                    "end": 1943
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 1848,
+                                "end": 1954
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 2119,
+                  "end": 2124
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 2119,
+                      "end": 2124
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 2125,
+                              "end": 2152
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "\n[Test 5] Variable scope"
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 2119,
+                            "end": 2124
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 2163,
+                  "end": 2183
+                },
+                "node": {
+                  "Let": {
+                    "name": "outer",
+                    "visibility": "Private",
+                    "mutability": "Mutable",
+                    "ty": {
+                      "Primitive": "String"
+                    },
+                    "initializer": {
+                      "ty": {
+                        "Primitive": "String"
+                      },
+                      "span": {
+                        "start": 2175,
+                        "end": 2182
+                      },
+                      "node": {
+                        "Literal": {
+                          "String": "outer"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start": 2163,
+                      "end": 2183
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 2223,
+                  "end": 2451
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 2223,
+                      "end": 2451
+                    },
+                    "node": {
+                      "If": {
+                        "else_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 2352,
+                            "end": 2451
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 2366,
+                                    "end": 2371
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 2366,
+                                        "end": 2371
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 2372,
+                                                "end": 2406
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✗ FAIL: Variable scope incorrect"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2366,
+                                              "end": 2371
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 2421,
+                                    "end": 2440
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 2421,
+                                        "end": 2440
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2421,
+                                              "end": 2427
+                                            },
+                                            "node": {
+                                              "Variable": "failed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2430,
+                                              "end": 2440
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 2430,
+                                                    "end": 2436
+                                                  },
+                                                  "node": {
+                                                    "Variable": "failed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 2439,
+                                                    "end": 2440
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 2352,
+                                "end": 2451
+                              }
+                            }
+                          }
+                        },
+                        "condition": {
+                          "ty": {
+                            "Primitive": "Bool"
+                          },
+                          "span": {
+                            "start": 2227,
+                            "end": 2247
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 2208,
+                                  "end": 2213
+                                },
+                                "node": {
+                                  "Variable": "outer"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "String"
+                                },
+                                "span": {
+                                  "start": 2240,
+                                  "end": 2247
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "String": "outer"
+                                  }
+                                }
+                              },
+                              "op": "Eq"
+                            }
+                          }
+                        },
+                        "then_branch": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 2249,
+                            "end": 2346
+                          },
+                          "node": {
+                            "Block": {
+                              "statements": [
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 2263,
+                                    "end": 2268
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "Unit"
+                                      },
+                                      "span": {
+                                        "start": 2263,
+                                        "end": 2268
+                                      },
+                                      "node": {
+                                        "Call": {
+                                          "type_args": [],
+                                          "positional_args": [
+                                            {
+                                              "ty": {
+                                                "Primitive": "String"
+                                              },
+                                              "span": {
+                                                "start": 2269,
+                                                "end": 2301
+                                              },
+                                              "node": {
+                                                "Literal": {
+                                                  "String": "✓ PASS: Variable scope correct"
+                                                }
+                                              }
+                                            }
+                                          ],
+                                          "named_args": [],
+                                          "callee": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2263,
+                                              "end": 2268
+                                            },
+                                            "node": {
+                                              "Variable": "$String$println"
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "ty": {
+                                    "Primitive": "Unit"
+                                  },
+                                  "span": {
+                                    "start": 2316,
+                                    "end": 2335
+                                  },
+                                  "node": {
+                                    "Expression": {
+                                      "ty": {
+                                        "Primitive": "I32"
+                                      },
+                                      "span": {
+                                        "start": 2316,
+                                        "end": 2335
+                                      },
+                                      "node": {
+                                        "Binary": {
+                                          "left": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2316,
+                                              "end": 2322
+                                            },
+                                            "node": {
+                                              "Variable": "passed"
+                                            }
+                                          },
+                                          "right": {
+                                            "ty": {
+                                              "Primitive": "I32"
+                                            },
+                                            "span": {
+                                              "start": 2325,
+                                              "end": 2335
+                                            },
+                                            "node": {
+                                              "Binary": {
+                                                "left": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 2325,
+                                                    "end": 2331
+                                                  },
+                                                  "node": {
+                                                    "Variable": "passed"
+                                                  }
+                                                },
+                                                "right": {
+                                                  "ty": {
+                                                    "Primitive": "I32"
+                                                  },
+                                                  "span": {
+                                                    "start": 2334,
+                                                    "end": 2335
+                                                  },
+                                                  "node": {
+                                                    "Literal": {
+                                                      "Integer": 1
+                                                    }
+                                                  }
+                                                },
+                                                "op": "Add"
+                                              }
+                                            }
+                                          },
+                                          "op": "Add"
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              ],
+                              "span": {
+                                "start": 2249,
+                                "end": 2346
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 2496,
+                  "end": 2501
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 2496,
+                      "end": 2501
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 2502,
+                              "end": 2526
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "\n=== TEST RESULTS ==="
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 2496,
+                            "end": 2501
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 2537,
+                  "end": 2542
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 2537,
+                      "end": 2542
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 2543,
+                              "end": 2604
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "Passed: (count not shown - int to string conversion needed)"
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 2537,
+                            "end": 2542
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 2615,
+                  "end": 2620
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 2615,
+                      "end": 2620
+                    },
+                    "node": {
+                      "Call": {
+                        "type_args": [],
+                        "positional_args": [
+                          {
+                            "ty": {
+                              "Primitive": "String"
+                            },
+                            "span": {
+                              "start": 2621,
+                              "end": 2682
+                            },
+                            "node": {
+                              "Literal": {
+                                "String": "Failed: (count not shown - int to string conversion needed)"
+                              }
+                            }
+                          }
+                        ],
+                        "named_args": [],
+                        "callee": {
+                          "ty": {
+                            "Primitive": "I32"
+                          },
+                          "span": {
+                            "start": 2615,
+                            "end": 2620
+                          },
+                          "node": {
+                            "Variable": "$String$println"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "ty": {
+                  "Primitive": "Unit"
+                },
+                "span": {
+                  "start": 2702,
+                  "end": 2831
+                },
+                "node": {
+                  "Expression": {
+                    "ty": {
+                      "Primitive": "Unit"
+                    },
+                    "span": {
+                      "start": 2702,
+                      "end": 2831
+                    },
+                    "node": {
+                      "If": {
+                        "else_branch": {
+                          "ty": {
+                            "Primitive": "Unit"
+                          },
+                          "span": {
+                            "start": 2792,
+                            "end": 2797
+                          },
+                          "node": {
+                            "Call": {
+                              "type_args": [],
+                              "positional_args": [
+                                {
+                                  "ty": {
+                                    "Primitive": "String"
+                                  },
+                                  "span": {
+                                    "start": 2798,
+                                    "end": 2819
+                                  },
+                                  "node": {
+                                    "Literal": {
+                                      "String": "✗ SOME TESTS FAILED"
+                                    }
+                                  }
+                                }
+                              ],
+                              "named_args": [],
+                              "callee": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 2792,
+                                  "end": 2797
+                                },
+                                "node": {
+                                  "Variable": "$String$println"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "condition": {
+                          "ty": {
+                            "Primitive": "Bool"
+                          },
+                          "span": {
+                            "start": 2706,
+                            "end": 2717
+                          },
+                          "node": {
+                            "Binary": {
+                              "left": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 2706,
+                                  "end": 2712
+                                },
+                                "node": {
+                                  "Variable": "failed"
+                                }
+                              },
+                              "right": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 2716,
+                                  "end": 2717
+                                },
+                                "node": {
+                                  "Literal": {
+                                    "Integer": 0
+                                  }
+                                }
+                              },
+                              "op": "Eq"
+                            }
+                          }
+                        },
+                        "then_branch": {
+                          "ty": {
+                            "Primitive": "Unit"
+                          },
+                          "span": {
+                            "start": 2733,
+                            "end": 2738
+                          },
+                          "node": {
+                            "Call": {
+                              "type_args": [],
+                              "positional_args": [
+                                {
+                                  "ty": {
+                                    "Primitive": "String"
+                                  },
+                                  "span": {
+                                    "start": 2739,
+                                    "end": 2760
+                                  },
+                                  "node": {
+                                    "Literal": {
+                                      "String": "✓ ALL TESTS PASSED!"
+                                    }
+                                  }
+                                }
+                              ],
+                              "named_args": [],
+                              "callee": {
+                                "ty": {
+                                  "Primitive": "I32"
+                                },
+                                "span": {
+                                  "start": 2733,
+                                  "end": 2738
+                                },
+                                "node": {
+                                  "Variable": "$String$println"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "span": {
+              "start": 160,
+              "end": 2837
+            }
+          },
+          "is_external": false,
+          "is_async": false,
+          "return_type": {
+            "Primitive": "Unit"
+          }
+        }
+      }
+    }
+  ],
+  "span": {
+    "start": 0,
+    "end": 0
+  }
+}

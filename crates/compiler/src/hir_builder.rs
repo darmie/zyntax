@@ -434,6 +434,47 @@ impl<'arena> HirBuilder<'arena> {
         value_id
     }
 
+    /// Creates a global string constant and returns a pointer to it
+    pub fn string_constant(&mut self, string_data: &str) -> HirId {
+        use crate::hir::{HirGlobal, HirConstant, Linkage, Visibility};
+
+        // Create a unique name for this string global
+        let global_id = HirId::new();
+        let global_name = self.intern(&format!("str_{:?}", global_id));
+
+        // Create the global with the string data
+        let global = HirGlobal {
+            id: global_id,
+            name: global_name,
+            ty: self.ptr_type(self.i8_type()),
+            initializer: Some(HirConstant::String(self.intern(string_data))),
+            is_const: true,
+            is_thread_local: false,
+            linkage: Linkage::Private,
+            visibility: Visibility::Default,
+        };
+
+        // Add to module globals
+        self.module.globals.insert(global_id, global);
+
+        // Create a value that references this global
+        let value_id = HirId::new();
+        let ptr_ty = self.ptr_type(self.i8_type());
+
+        let func_id = self.current_function.unwrap();
+        let func = self.module.functions.get_mut(&func_id).unwrap();
+
+        func.values.insert(value_id, HirValue {
+            id: value_id,
+            ty: ptr_ty,
+            kind: HirValueKind::Global(global_id),
+            uses: std::collections::HashSet::new(),
+            span: None,
+        });
+
+        value_id
+    }
+
     /// Emits an instruction in the current block
     fn emit(&mut self, inst: HirInstruction) {
         let block_id = self.current_block.unwrap();
@@ -651,6 +692,25 @@ impl<'arena> HirBuilder<'arena> {
     /// Marks block as unreachable
     pub fn unreachable(&mut self) {
         self.set_terminator(HirTerminator::Unreachable);
+    }
+
+    /// Adds a PHI node to the current block
+    pub fn add_phi(&mut self, ty: HirType, incoming: Vec<(HirId, HirId)>) -> HirId {
+        let result = HirId::new();
+        let phi = HirPhi {
+            result,
+            ty,
+            incoming,
+        };
+
+        let func_id = self.current_function.expect("No current function");
+        let block_id = self.current_block.expect("No current block");
+
+        let func = self.module.functions.get_mut(&func_id).unwrap();
+        let block = func.blocks.get_mut(&block_id).unwrap();
+        block.phis.push(phi);
+
+        result
     }
 
     // ========================================

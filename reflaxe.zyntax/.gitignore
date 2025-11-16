@@ -1,0 +1,21 @@
+# Compiled output
+output/*.zbc
+output/_GeneratedFiles.json
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Haxe
+dump/

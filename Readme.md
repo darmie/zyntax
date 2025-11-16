@@ -31,6 +31,35 @@ Think of Zyntax as **LLVM + Rust's type system + V8's tiered compilation** - a c
 
 ---
 
+## 🔌 Frontend Integrations
+
+Zyntax supports multiple language frontends through its TypedAST intermediate representation:
+
+### ✅ Haxe Integration (via Reflaxe)
+
+Compile Haxe code to native executables using the [reflaxe.zyntax](./reflaxe.zyntax/README.md) backend:
+
+```bash
+# Install dependencies
+haxelib install reflaxe 4.0.0-beta
+haxelib dev reflaxe.zyntax ./reflaxe.zyntax
+
+# Compile Haxe to native
+haxe -lib reflaxe.zyntax -main Main -D zyntax-output=out
+zyntax compile out/*.json -o myprogram --run
+```
+
+**Status:** 🚧 In development - JSON AST generation complete, HIR conversion in progress
+
+See [Haxe Integration Guide](./docs/HAXE_INTEGRATION.md) for details.
+
+### 🔜 Planned Integrations
+
+- **Whirlwind** - Direct AST adapter (in progress)
+- **Custom Languages** - Use TypedAST builder API or JSON format
+
+---
+
 ## 🚀 Quick Start
 
 ```bash

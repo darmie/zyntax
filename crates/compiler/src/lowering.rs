@@ -598,7 +598,7 @@ impl LoweringContext {
         let typed_cfg = typed_cfg_builder.build_from_block(body, hir_func.entry_block)?;
 
         // Convert to SSA form, processing TypedStatements to emit HIR instructions
-        let ssa_builder = SsaBuilder::new(hir_func, self.type_registry.clone());
+        let ssa_builder = SsaBuilder::new(hir_func, self.type_registry.clone(), self.symbols.functions.clone());
         let ssa = ssa_builder.build_from_typed_cfg(&typed_cfg)?;
 
         // Verify SSA properties
@@ -609,6 +609,11 @@ impl LoweringContext {
         ssa.optimize_trivial_phis();
 
         hir_func = ssa.function;
+
+        // Add string globals generated during SSA construction
+        for global in ssa.string_globals {
+            self.module.globals.insert(global.id, global);
+        }
 
         // Gap 6 Phase 2: Transform async functions to state machines
         if func.is_async {

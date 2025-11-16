@@ -878,7 +878,8 @@ impl TypeChecker {
             | TypedExpression::Try(_)
             | TypedExpression::Reference(_)
             | TypedExpression::Dereference(_)
-            | TypedExpression::Range(_) => {
+            | TypedExpression::Range(_)
+            | TypedExpression::Block(_) => {
                 // Placeholder for now
                 Ok(self.inference.fresh_type_var())
             }

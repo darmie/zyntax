@@ -35,6 +35,10 @@ pub struct SsaBuilder {
     type_registry: Arc<zyntax_typed_ast::TypeRegistry>,
     /// Generated closure functions (collected during translation)
     closure_functions: Vec<HirFunction>,
+    /// Function symbol table for resolving function references
+    function_symbols: HashMap<InternedString, HirId>,
+    /// Generated string globals (collected during translation)
+    string_globals: Vec<crate::hir::HirGlobal>,
 }
 
 /// SSA form representation
@@ -47,6 +51,8 @@ pub struct SsaForm {
     pub use_def_chains: HashMap<HirId, HirId>,
     /// Closure functions generated during translation
     pub closure_functions: Vec<HirFunction>,
+    /// String globals generated during translation
+    pub string_globals: Vec<crate::hir::HirGlobal>,
 }
 
 /// Phi node during construction
@@ -59,7 +65,11 @@ pub struct PhiNode {
 }
 
 impl SsaBuilder {
-    pub fn new(function: HirFunction, type_registry: Arc<zyntax_typed_ast::TypeRegistry>) -> Self {
+    pub fn new(
+        function: HirFunction,
+        type_registry: Arc<zyntax_typed_ast::TypeRegistry>,
+        function_symbols: HashMap<InternedString, HirId>,
+    ) -> Self {
         Self {
             function,
             definitions: HashMap::new(),
@@ -70,6 +80,8 @@ impl SsaBuilder {
             filled_blocks: HashSet::new(),
             type_registry,
             closure_functions: Vec::new(),
+            function_symbols,
+            string_globals: Vec::new(),
         }
     }
     
@@ -99,6 +111,7 @@ impl SsaBuilder {
             def_use_chains,
             use_def_chains,
             closure_functions: self.closure_functions,
+            string_globals: self.string_globals,
         })
     }
 
@@ -168,6 +181,7 @@ impl SsaBuilder {
             def_use_chains,
             use_def_chains,
             closure_functions: self.closure_functions,
+            string_globals: self.string_globals,
         })
     }
 
@@ -341,9 +355,16 @@ impl SsaBuilder {
             }
             
             TypedExpression::Literal(lit) => {
-                let constant = self.translate_literal(lit);
-                let ty = self.convert_type(&expr.ty);
-                Ok(self.create_value(ty, HirValueKind::Constant(constant)))
+                use zyntax_typed_ast::typed_ast::TypedLiteral;
+
+                // String literals need to be stored as globals
+                if let TypedLiteral::String(s) = lit {
+                    Ok(self.create_string_global(*s))
+                } else {
+                    let constant = self.translate_literal(lit);
+                    let ty = self.convert_type(&expr.ty);
+                    Ok(self.create_value(ty, HirValueKind::Constant(constant)))
+                }
             }
             
             TypedExpression::Binary(binary) => {
@@ -406,8 +427,23 @@ impl SsaBuilder {
             TypedExpression::Call(call) => {
                 let callee = &call.callee;
                 let args = &call.positional_args;
-                // Translate callee
-                let callee_val = self.translate_expression(block_id, callee)?;
+
+                // Check if callee is a function name (direct call) vs expression (indirect call)
+                let (hir_callable, indirect_callee_val) = if let TypedExpression::Variable(func_name) = &callee.node {
+                    // Check if this variable is a function in the symbol table
+                    if let Some(&func_id) = self.function_symbols.get(func_name) {
+                        // Direct function call
+                        (crate::hir::HirCallable::Function(func_id), None)
+                    } else {
+                        // Variable lookup (function pointer)
+                        let callee_val = self.translate_expression(block_id, callee)?;
+                        (crate::hir::HirCallable::Indirect(callee_val), Some(callee_val))
+                    }
+                } else {
+                    // General expression (e.g., field access, method call result)
+                    let callee_val = self.translate_expression(block_id, callee)?;
+                    (crate::hir::HirCallable::Indirect(callee_val), Some(callee_val))
+                };
 
                 // Translate arguments
                 let mut arg_vals = Vec::new();
@@ -431,7 +467,7 @@ impl SsaBuilder {
 
                 let inst = HirInstruction::Call {
                     result,
-                    callee: crate::hir::HirCallable::Indirect(callee_val),
+                    callee: hir_callable,
                     args: arg_vals.clone(),
                     type_args,  // Preserve type arguments from TypedCall
                     const_args: vec![], // TODO: Preserve const args when TypedCall supports them
@@ -442,16 +478,21 @@ impl SsaBuilder {
                     // Estimated effort: 8-10 hours (requires CFG analysis)
                     is_tail: false,
                 };
-                
+
                 self.add_instruction(block_id, inst);
-                
-                // Add uses
-                self.add_use(callee_val, result.unwrap_or(callee_val));
-                for arg in arg_vals {
-                    self.add_use(arg, result.unwrap_or(callee_val));
+
+                // Add uses (for indirect calls, track callee value)
+                if let Some(callee_val) = indirect_callee_val {
+                    self.add_use(callee_val, result.unwrap_or(callee_val));
                 }
-                
-                Ok(result.unwrap_or_else(|| self.create_undef(HirType::Void)))
+
+                // Track argument uses
+                let result_or_void = result.unwrap_or_else(|| self.create_undef(HirType::Void));
+                for arg in &arg_vals {
+                    self.add_use(*arg, result_or_void);
+                }
+
+                Ok(result_or_void)
             }
             
             TypedExpression::Field(field_access) => {
@@ -1021,7 +1062,38 @@ impl SsaBuilder {
     fn create_undef(&mut self, ty: HirType) -> HirId {
         self.create_value(ty, HirValueKind::Undef)
     }
-    
+
+    /// Create a global string constant and return a value referencing it
+    fn create_string_global(&mut self, string_name: InternedString) -> HirId {
+        use crate::hir::{HirGlobal, HirConstant, Linkage, Visibility};
+
+        // Create a unique global ID and name
+        let global_id = HirId::new();
+
+        // Create the global with the string data
+        let global = HirGlobal {
+            id: global_id,
+            name: string_name, // Use the interned string name as the global name
+            ty: HirType::Ptr(Box::new(HirType::I8)), // String is a pointer to i8
+            initializer: Some(HirConstant::String(string_name)),
+            is_const: true,
+            is_thread_local: false,
+            linkage: Linkage::Private,
+            visibility: Visibility::Default,
+        };
+
+        // Store the global for later addition to the module
+        self.string_globals.push(global);
+
+        // Create a value that references this global
+        let value_id = self.create_value(
+            HirType::Ptr(Box::new(HirType::I8)),
+            HirValueKind::Global(global_id)
+        );
+
+        value_id
+    }
+
     /// Add an instruction to a block
     fn add_instruction(&mut self, block: HirId, inst: HirInstruction) {
         self.function.blocks.get_mut(&block).unwrap().add_instruction(inst);
@@ -2572,7 +2644,7 @@ impl SsaForm {
                 // Check if it's a constant or parameter (self-defining values)
                 if let Some(value) = self.function.values.get(def_id) {
                     match value.kind {
-                        HirValueKind::Constant(_) | HirValueKind::Parameter(_) | HirValueKind::Undef => {
+                        HirValueKind::Constant(_) | HirValueKind::Parameter(_) | HirValueKind::Undef | HirValueKind::Global(_) => {
                             // These are self-defining, so it's OK
                             continue;
                         }

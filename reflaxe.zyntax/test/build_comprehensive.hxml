@@ -1,0 +1,4 @@
+-lib reflaxe.zyntax
+-main ComprehensiveTest
+-D zyntax-output=output
+--macro exclude('haxe.Log')

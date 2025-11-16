@@ -1,0 +1,4 @@
+# Test build file for string concatenation runtime transformation
+-lib reflaxe.zyntax
+-main StringConcatRuntimeTest
+-D zyntax-output=output

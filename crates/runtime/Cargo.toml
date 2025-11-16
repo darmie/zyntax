@@ -1,0 +1,13 @@
+[package]
+name = "zyntax_runtime"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libc = "0.2"
+zyntax_compiler = { path = "../compiler" }
+zyntax_plugin_macros = { path = "../zyntax_plugin_macros" }
+inventory = "0.3"

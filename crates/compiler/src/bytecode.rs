@@ -207,22 +207,92 @@ pub fn serialize_module_to_file(
     serialize_module_to_writer(module, format, &mut file)
 }
 
+/// Deserialize raw header (44 bytes fixed format, no bincode)
+fn deserialize_raw_header(bytes: &[u8]) -> Result<(BytecodeHeader, usize)> {
+    const HEADER_SIZE: usize = 44;
+    if bytes.len() < HEADER_SIZE {
+        return Err(BytecodeError::InvalidFormat);
+    }
+
+    let mut cursor = std::io::Cursor::new(bytes);
+    use std::io::Read;
+
+    // Read magic (u32 little-endian)
+    let mut buf4 = [0u8; 4];
+    cursor.read_exact(&mut buf4)?;
+    let magic = u32::from_le_bytes(buf4);
+
+    // Read major_version (u16 little-endian)
+    let mut buf2 = [0u8; 2];
+    cursor.read_exact(&mut buf2)?;
+    let major_version = u16::from_le_bytes(buf2);
+
+    // Read minor_version (u16 little-endian)
+    cursor.read_exact(&mut buf2)?;
+    let minor_version = u16::from_le_bytes(buf2);
+
+    // Read format (u8)
+    let mut buf1 = [0u8; 1];
+    cursor.read_exact(&mut buf1)?;
+    let format = buf1[0];
+
+    // Skip padding (3 bytes)
+    let mut padding = [0u8; 3];
+    cursor.read_exact(&mut padding)?;
+
+    // Read flags (u32 little-endian)
+    cursor.read_exact(&mut buf4)?;
+    let flags = u32::from_le_bytes(buf4);
+
+    // Read module_id (16 bytes UUID)
+    let mut uuid_bytes = [0u8; 16];
+    cursor.read_exact(&mut uuid_bytes)?;
+    let module_id = uuid::Uuid::from_bytes(uuid_bytes);
+
+    // Read payload_size (u64 little-endian)
+    let mut buf8 = [0u8; 8];
+    cursor.read_exact(&mut buf8)?;
+    let payload_size = u64::from_le_bytes(buf8);
+
+    // Read checksum (u32 little-endian)
+    cursor.read_exact(&mut buf4)?;
+    let checksum = u32::from_le_bytes(buf4);
+
+    let header = BytecodeHeader {
+        magic,
+        major_version,
+        minor_version,
+        format,
+        flags,
+        module_id,
+        payload_size,
+        checksum,
+    };
+
+    Ok((header, HEADER_SIZE))
+}
+
 /// Deserialize a HIR module from bytecode
 pub fn deserialize_module(bytes: &[u8]) -> Result<HirModule> {
     if bytes.len() < 64 {
         return Err(BytecodeError::InvalidFormat);
     }
 
-    // Deserialize header (bincode)
-    let header: BytecodeHeader = bincode::deserialize(bytes)
-        .map_err(|e| BytecodeError::DeserializationError(format!("Failed to deserialize header: {}", e)))?;
+    // Try raw header first (for Haxe compatibility), then fall back to bincode
+    let (header, header_size) = match deserialize_raw_header(bytes) {
+        Ok(result) => result,
+        Err(_) => {
+            // Fall back to bincode header
+            let header: BytecodeHeader = bincode::deserialize(bytes)
+                .map_err(|e| BytecodeError::DeserializationError(format!("Failed to deserialize header: {}", e)))?;
+            let header_size = bincode::serialized_size(&header)
+                .map_err(|e| BytecodeError::DeserializationError(format!("Failed to get header size: {}", e)))? as usize;
+            (header, header_size)
+        }
+    };
 
     // Validate header
     header.validate()?;
-
-    // Get header size
-    let header_size = bincode::serialized_size(&header)
-        .map_err(|e| BytecodeError::DeserializationError(format!("Failed to get header size: {}", e)))? as usize;
 
     // Extract payload
     let payload = &bytes[header_size..];

@@ -49,6 +49,7 @@ pub mod llvm_jit_backend;  // LLVM MCJIT for hot-path optimization
 
 pub mod profiling;  // Runtime profiling for tiered compilation
 pub mod tiered_backend;  // Tiered JIT/AOT compilation system
+pub mod plugin;  // Plugin system for frontend runtime registration
 
 // Re-export key types
 pub use hir::{HirModule, HirFunction, HirBlock, HirInstruction, HirValue, HirId};

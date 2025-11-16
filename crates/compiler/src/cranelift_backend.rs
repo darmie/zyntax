@@ -35,6 +35,8 @@ pub struct CraneliftBackend {
     data_desc: DataDescription,
     /// Mapping from HIR functions to JIT function IDs
     function_map: HashMap<HirId, FuncId>,
+    /// Mapping from HIR globals to Cranelift data IDs
+    global_map: HashMap<HirId, cranelift_module::DataId>,
     /// Mapping from HIR values to Cranelift values
     value_map: HashMap<HirId, Value>,
     /// Mapping from HIR blocks to Cranelift blocks
@@ -78,8 +80,21 @@ struct StructLayout {
 }
 
 impl CraneliftBackend {
+    /// Create a new Cranelift backend with custom runtime symbols
+    ///
+    /// # Arguments
+    /// * `additional_symbols` - Frontend-specific runtime symbols to register
+    ///   Format: (symbol_name, function_pointer)
+    pub fn with_runtime_symbols(additional_symbols: &[(&str, *const u8)]) -> CompilerResult<Self> {
+        Self::new_internal(Some(additional_symbols))
+    }
+
     /// Create a new Cranelift backend
     pub fn new() -> CompilerResult<Self> {
+        Self::new_internal(None)
+    }
+
+    fn new_internal(additional_symbols: Option<&[(&str, *const u8)]>) -> CompilerResult<Self> {
         // Configure Cranelift for the current platform
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
@@ -89,9 +104,18 @@ impl CraneliftBackend {
         
         let isa_builder = cranelift_native::builder().unwrap();
         let isa = isa_builder.finish(settings::Flags::new(flag_builder)).unwrap();
-        
-        // Create JIT module
-        let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+
+        // Create JIT module and register runtime functions
+        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+
+        // Register all runtime symbols (both stdlib and frontend-specific)
+        // All symbols are now provided via the plugin system
+        if let Some(symbols) = additional_symbols {
+            for (name, ptr) in symbols {
+                builder.symbol(*name, *ptr);
+            }
+        }
+
         let module = JITModule::new(builder);
         
         Ok(Self {
@@ -100,6 +124,7 @@ impl CraneliftBackend {
             codegen_context: codegen::Context::new(),
             data_desc: DataDescription::new(),
             function_map: HashMap::new(),
+            global_map: HashMap::new(),
             value_map: HashMap::new(),
             block_map: HashMap::new(),
             compiled_functions: HashMap::new(),
@@ -118,59 +143,77 @@ impl CraneliftBackend {
             self.compile_global(*id, global)?;
         }
 
-        // Then compile functions
+        // Two-pass function compilation:
+        // Pass 1: Declare all functions (populate function_map)
         for (id, function) in &module.functions {
-            self.compile_function(*id, function)?;
+            self.declare_function(*id, function)?;
         }
-        
+
+        // Pass 2: Compile all function bodies
+        for (id, function) in &module.functions {
+            if !function.is_external {
+                self.compile_function_body(*id, function)?;
+            }
+        }
+
         // Finalize the module
         let _ = self.module.finalize_definitions();
-        
+
         // Update function pointers after finalization
         for (hir_id, compiled_func) in &self.compiled_functions {
             let code_ptr = self.module.get_finalized_function(compiled_func.function_id);
             self.hot_reload.function_pointers.write().unwrap().insert(*hir_id, code_ptr);
         }
-        
+
         Ok(())
     }
-    
-    /// Compile a single function with hot-reload support
-    pub fn compile_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
-        // Gap 11: Skip compilation for extern functions (just declare them)
+
+    /// Declare a function signature without compiling its body
+    fn declare_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
+        let sig = self.translate_signature(function)?;
+
         if function.is_external {
-            // Create function signature
-            let sig = self.translate_signature(function)?;
-
-            // Use the actual function name (not mangled) for external linkage
-            let link_name = function.name.to_string();
-
-            // Declare as import (external linkage)
+            // External functions use Import linkage
+            let link_name = function.name.resolve_global()
+                .unwrap_or_else(|| format!("{:?}", function.name));
             let func_id = self.module.declare_function(
                 &link_name,
-                Linkage::Import,  // External functions use Import linkage
+                Linkage::Import,
                 &sig,
             ).map_err(|e| CompilerError::Backend(format!("Failed to declare extern function: {}", e)))?;
 
             self.function_map.insert(id, func_id);
+        } else {
+            // Regular functions use Export linkage with unique name
+            let unique_name = format!("{}__{:?}", function.name.to_string(), id);
+            let func_id = self.module.declare_function(
+                &unique_name,
+                Linkage::Export,
+                &sig,
+            ).map_err(|e| CompilerError::Backend(format!("Failed to declare function: {}", e)))?;
 
-            // Don't compile body - just declare and return
-            return Ok(());
+            self.function_map.insert(id, func_id);
         }
 
-        // Regular function: compile body
-        // Create function signature
+        Ok(())
+    }
+    
+    /// Compile a single function with hot-reload support (legacy, calls declare + compile_body)
+    pub fn compile_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
+        self.declare_function(id, function)?;
+        if !function.is_external {
+            self.compile_function_body(id, function)?;
+        }
+        Ok(())
+    }
+
+    /// Compile just the body of a function (assumes signature already declared)
+    fn compile_function_body(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
+        // Get the already-declared function ID
+        let func_id = *self.function_map.get(&id)
+            .ok_or_else(|| CompilerError::Backend(format!("Function {:?} not declared", id)))?;
+
         let sig = self.translate_signature(function)?;
-
-        // Declare function in module with unique name including HirId
-        let unique_name = format!("{}__{:?}", function.name.to_string(), id);
-        let func_id = self.module.declare_function(
-            &unique_name,
-            Linkage::Export,
-            &sig,
-        ).map_err(|e| CompilerError::Backend(format!("Failed to declare function: {}", e)))?;
-
-        self.function_map.insert(id, func_id);
         
         // Pre-calculate parameter types before creating builder
         let param_types: Result<Vec<_>, _> = function.signature.params.iter()
@@ -318,6 +361,15 @@ impl CraneliftBackend {
             let block_order = self.compute_block_order(function);
             let predecessor_map = self.build_predecessor_map(function);
 
+            // Pre-compute type mappings for global references to avoid borrow checker issues
+            let mut global_types = HashMap::new();
+            for value in function.values.values() {
+                if let HirValueKind::Global(_) = value.kind {
+                    let ptr_ty = self.translate_type(&value.ty)?;
+                    global_types.insert(value.id, ptr_ty);
+                }
+            }
+
             // Phase 2: Create builder and all Cranelift blocks
             let mut builder = FunctionBuilder::new(
                 &mut self.codegen_context.func,
@@ -403,6 +455,22 @@ impl CraneliftBackend {
                         _ => continue, // Complex constants not yet supported
                     };
                     self.value_map.insert(value.id, cranelift_val);
+                }
+            }
+
+            // Map global references (like string constants)
+            for value in function.values.values() {
+                if let HirValueKind::Global(global_id) = value.kind {
+                    // Get the Cranelift data ID for this global
+                    if let Some(&data_id) = self.global_map.get(&global_id) {
+                        // Declare the data in the function context
+                        let local_data = self.module.declare_data_in_func(data_id, &mut builder.func);
+
+                        // Get the address of the global data
+                        let ptr_ty = global_types[&value.id];
+                        let addr = builder.ins().symbol_value(ptr_ty, local_data);
+                        self.value_map.insert(value.id, addr);
+                    }
                 }
             }
 
@@ -567,7 +635,7 @@ impl CraneliftBackend {
 
                         HirInstruction::Call { result, callee, args, is_tail, .. } => {
                             let arg_values: Vec<Value> = args.iter()
-                                .filter_map(|arg_id| self.value_map.get(arg_id).copied())
+                                .map(|arg_id| self.value_map[arg_id])
                                 .collect();
 
                             match callee {
@@ -648,9 +716,9 @@ impl CraneliftBackend {
                                 }
                                 HirCallable::Function(func_id) => {
                                     // Call another HIR function
-                                    if let Some(compiled_func) = self.compiled_functions.get(func_id) {
+                                    if let Some(&cranelift_func_id) = self.function_map.get(func_id) {
                                         let local_callee = self.module
-                                            .declare_func_in_func(compiled_func.function_id, builder.func);
+                                            .declare_func_in_func(cranelift_func_id, builder.func);
 
                                         let call = builder.ins().call(local_callee, &arg_values);
 
@@ -661,7 +729,7 @@ impl CraneliftBackend {
                                             }
                                         }
                                     } else {
-                                        eprintln!("WARNING: Function {:?} not compiled yet", func_id);
+                                        eprintln!("WARNING: Function {:?} not in function_map", func_id);
                                         // Create a dummy value to avoid unmapped error
                                         if let Some(result_id) = result {
                                             self.value_map.insert(*result_id, builder.ins().iconst(types::I32, 0));
@@ -1587,6 +1655,21 @@ impl CraneliftBackend {
             }
 
             eprintln!("INFO: Vtable with {} methods emitted with function pointer relocations", vtable.methods.len());
+        } else if let Some(HirConstant::String(s)) = &global.initializer {
+            // String constants - emit as Haxe String format: [length: i32][utf8_bytes...]
+            let string_val = s.resolve_global()
+                .ok_or_else(|| CompilerError::CodeGen(format!("Failed to resolve string constant: {:?}", s)))?;
+
+            // Get UTF-8 bytes
+            let bytes = string_val.as_bytes();
+            let length = bytes.len() as i32;
+
+            // Create Haxe String structure: length header (i32) + UTF-8 bytes
+            let mut data = Vec::with_capacity(4 + bytes.len());
+            data.extend_from_slice(&length.to_le_bytes()); // Length as little-endian i32
+            data.extend_from_slice(bytes);
+
+            self.data_desc.define(data.into_boxed_slice());
         } else if global.initializer.is_some() {
             // Other constants - emit as zeroinit placeholder for now
             // TODO: Implement other constant types
@@ -1602,6 +1685,9 @@ impl CraneliftBackend {
         self.module
             .define_data(data_id, &self.data_desc)
             .map_err(|e| CompilerError::CodeGen(format!("Failed to define global: {}", e)))?;
+
+        // Store the data ID for later reference
+        self.global_map.insert(id, data_id);
 
         Ok(())
     }
@@ -2233,7 +2319,7 @@ impl CraneliftBackend {
                             cranelift_func,
                             builder.func,
                         );
-                        
+
                         let call = if *is_tail {
                             builder.ins().return_call(func_ref, &arg_vals)
                         } else {
