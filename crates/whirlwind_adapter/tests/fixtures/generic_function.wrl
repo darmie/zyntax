@@ -1,0 +1,8 @@
+// Generic function test
+function identity<T>(value: T) -> T {
+    return value
+}
+
+function useGeneric() -> i32 {
+    return identity<i32>(42)
+}

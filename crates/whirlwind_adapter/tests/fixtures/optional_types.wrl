@@ -1,0 +1,11 @@
+module Test;
+
+// Optional types test - using proper Whirlwind syntax
+function findItem(items: ArrayOf<int>, target: int) -> ?int {
+    for item in items {
+        if item == target {
+            return item
+        }
+    }
+    return null
+}

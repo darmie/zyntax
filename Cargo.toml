@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/typed_ast", "crates/compiler", "crates/whirlwind_adapter"]
+
+
+[workspace.dependencies]
+rayon = "1.10.0"
+dashmap = "6.1.0"
+crossbeam = "0.8.4"
+parking_lot = "0.12.3"
+thiserror = "2.0.11"
+serde_json = "1.0.138"
+serde = {version= "1.0.217", features = ["derive"]}
+tempfile = "3.16.0"
+colored = "3.0.0"
+lazy_static = "1.5.0"
+regex = "1.11.1"
+uuid = { version = "1.10.0", features = ["v4", "serde"] }
+miette = "7.2.0"
+typed-arena = "2.0.2"
+string-interner = "0.17.0"

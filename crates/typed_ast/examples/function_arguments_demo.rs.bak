@@ -1,0 +1,692 @@
+//! # Function Arguments Support Demonstration
+//!
+//! This example showcases the comprehensive function argument support in the Zyntax TypedAST,
+//! demonstrating how it handles various parameter passing conventions from different languages.
+
+use zyntax_typed_ast::{
+    typed_ast::*,
+    Type, PrimitiveType, Mutability, Visibility, ParamInfo,
+    AstArena, Span,
+};
+
+/// Demonstrates basic positional arguments (C, Go, Java style)
+fn positional_arguments_demo() {
+    let mut arena = AstArena::new();
+    
+    println!("🔥 Basic Positional Arguments:\n");
+    
+    // function add(x: int, y: int) -> int
+    let add_function = TypedFunction {
+        name: arena.intern_string("add"),
+        params: vec![
+            TypedParameter::regular(
+                arena.intern_string("x"),
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Immutable,
+                Span::new(10, 16)
+            ),
+            TypedParameter::regular(
+                arena.intern_string("y"),
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Immutable,
+                Span::new(18, 24)
+            ),
+        ],
+        return_type: Type::Primitive(PrimitiveType::I32),
+        body: TypedBlock {
+            statements: vec![],
+            span: Span::new(35, 50),
+        },
+        visibility: Visibility::Public,
+        is_async: false,
+    };
+    
+    // Function call: add(10, 20)
+    let add_call = TypedCall::positional(
+        typed_node(
+            TypedExpression::Variable(arena.intern_string("add")),
+            Type::Function {
+                params: vec![
+                    ParamInfo {
+                        name: Some(arena.intern_string("x")),
+                        ty: Type::Primitive(PrimitiveType::I32),
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                        is_out: false,
+                        is_ref: false,
+                        is_inout: false,
+                    },
+                    ParamInfo {
+                        name: Some(arena.intern_string("y")),
+                        ty: Type::Primitive(PrimitiveType::I32),
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                ],
+                return_type: Box::new(Type::Primitive(PrimitiveType::I32)),
+                is_varargs: false,
+                has_named_params: false,
+                has_default_params: false,
+            },
+            Span::new(0, 3)
+        ),
+        vec![
+            typed_node(
+                TypedExpression::Literal(TypedLiteral::Integer(10)),
+                Type::Primitive(PrimitiveType::I32),
+                Span::new(4, 6)
+            ),
+            typed_node(
+                TypedExpression::Literal(TypedLiteral::Integer(20)),
+                Type::Primitive(PrimitiveType::I32),
+                Span::new(8, 10)
+            ),
+        ]
+    );
+    
+    println!("✅ C/Go/Java style: add(10, 20)");
+    assert_eq!(add_call.positional_args.len(), 2);
+    assert_eq!(add_call.named_args.len(), 0);
+}
+
+/// Demonstrates named arguments (Python, Swift, Kotlin style)
+fn named_arguments_demo() {
+    let mut arena = AstArena::new();
+    
+    println!("\n🐍 Named Arguments (Python/Swift style):\n");
+    
+    // function create_user(name: str, age: int, email: str)
+    let create_user_function = TypedFunction {
+        name: arena.intern_string("create_user"),
+        params: vec![
+            TypedParameter::regular(
+                arena.intern_string("name"),
+                Type::Primitive(PrimitiveType::String),
+                Mutability::Immutable,
+                Span::new(17, 27)
+            ),
+            TypedParameter::regular(
+                arena.intern_string("age"),
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Immutable,
+                Span::new(29, 37)
+            ),
+            TypedParameter::regular(
+                arena.intern_string("email"),
+                Type::Primitive(PrimitiveType::String),
+                Mutability::Immutable,
+                Span::new(39, 50)
+            ),
+        ],
+        return_type: Type::Primitive(PrimitiveType::Unit),
+        body: TypedBlock {
+            statements: vec![],
+            span: Span::new(55, 70),
+        },
+        visibility: Visibility::Public,
+        is_async: false,
+    };
+    
+    // Function call: create_user(name="Alice", age=30, email="alice@example.com")
+    let create_user_call = TypedCall::named_only(
+        typed_node(
+            TypedExpression::Variable(arena.intern_string("create_user")),
+            Type::Function {
+                params: vec![
+                    ParamInfo {
+                        name: Some(arena.intern_string("name")),
+                        ty: Type::Primitive(PrimitiveType::String),
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                    ParamInfo {
+                        name: Some(arena.intern_string("age")),
+                        ty: Type::Primitive(PrimitiveType::I32),
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                    ParamInfo {
+                        name: Some(arena.intern_string("email")),
+                        ty: Type::Primitive(PrimitiveType::String),
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                ],
+                return_type: Box::new(Type::Primitive(PrimitiveType::Unit)),
+                is_varargs: false,
+                has_named_params: true,
+                has_default_params: false,
+            },
+            Span::new(0, 11)
+        ),
+        vec![
+            TypedNamedArg::new(
+                arena.intern_string("name"),
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::String(arena.intern_string("Alice"))),
+                    Type::Primitive(PrimitiveType::String),
+                    Span::new(17, 24)
+                ),
+                Span::new(12, 24)
+            ),
+            TypedNamedArg::new(
+                arena.intern_string("age"),
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::Integer(30)),
+                    Type::Primitive(PrimitiveType::I32),
+                    Span::new(30, 32)
+                ),
+                Span::new(26, 32)
+            ),
+            TypedNamedArg::new(
+                arena.intern_string("email"),
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::String(arena.intern_string("alice@example.com"))),
+                    Type::Primitive(PrimitiveType::String),
+                    Span::new(40, 58)
+                ),
+                Span::new(34, 58)
+            ),
+        ]
+    );
+    
+    println!("✅ Named arguments: create_user(name=\"Alice\", age=30, email=\"alice@example.com\")");
+    assert_eq!(create_user_call.named_args.len(), 3);
+    assert_eq!(create_user_call.positional_args.len(), 0);
+}
+
+/// Demonstrates default parameter values (C++, Python, Swift style)
+fn default_parameters_demo() {
+    let mut arena = AstArena::new();
+    
+    println!("\n⚙️ Default Parameters (C++/Python/Swift style):\n");
+    
+    // function connect(host: str, port: int = 8080, timeout: int = 30)
+    let connect_function = TypedFunction {
+        name: arena.intern_string("connect"),
+        params: vec![
+            TypedParameter::regular(
+                arena.intern_string("host"),
+                Type::Primitive(PrimitiveType::String),
+                Mutability::Immutable,
+                Span::new(16, 26)
+            ),
+            TypedParameter::optional(
+                arena.intern_string("port"),
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Immutable,
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::Integer(8080)),
+                    Type::Primitive(PrimitiveType::I32),
+                    Span::new(39, 43)
+                ),
+                Span::new(28, 43)
+            ),
+            TypedParameter::optional(
+                arena.intern_string("timeout"),
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Immutable,
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::Integer(30)),
+                    Type::Primitive(PrimitiveType::I32),
+                    Span::new(60, 62)
+                ),
+                Span::new(45, 62)
+            ),
+        ],
+        return_type: Type::Primitive(PrimitiveType::Unit),
+        body: TypedBlock {
+            statements: vec![],
+            span: Span::new(70, 80),
+        },
+        visibility: Visibility::Public,
+        is_async: false,
+    };
+    
+    // Call with some defaults: connect("localhost", port=9000)
+    let connect_call = TypedCall::mixed(
+        typed_node(
+            TypedExpression::Variable(arena.intern_string("connect")),
+            Type::Function {
+                params: vec![
+                    ParamInfo {
+                        name: Some(arena.intern_string("host")),
+                        ty: Type::Primitive(PrimitiveType::String),
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                    ParamInfo {
+                        name: Some(arena.intern_string("port")),
+                        ty: Type::Primitive(PrimitiveType::I32),
+                        is_optional: true,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                    ParamInfo {
+                        name: Some(arena.intern_string("timeout")),
+                        ty: Type::Primitive(PrimitiveType::I32),
+                        is_optional: true,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                ],
+                return_type: Box::new(Type::Primitive(PrimitiveType::Unit)),
+                is_varargs: false,
+                has_named_params: true,
+                has_default_params: true,
+            },
+            Span::new(0, 7)
+        ),
+        vec![
+            typed_node(
+                TypedExpression::Literal(TypedLiteral::String(arena.intern_string("localhost"))),
+                Type::Primitive(PrimitiveType::String),
+                Span::new(8, 19)
+            ),
+        ],
+        vec![
+            TypedNamedArg::new(
+                arena.intern_string("port"),
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::Integer(9000)),
+                    Type::Primitive(PrimitiveType::I32),
+                    Span::new(26, 30)
+                ),
+                Span::new(21, 30)
+            ),
+        ],
+        vec![]
+    );
+    
+    println!("✅ Mixed call: connect(\"localhost\", port=9000) // timeout uses default");
+    assert_eq!(connect_function.params.len(), 3);
+    assert_eq!(connect_call.positional_args.len(), 1);
+    assert_eq!(connect_call.named_args.len(), 1);
+}
+
+/// Demonstrates variadic/rest parameters (C, Go, JavaScript style)
+fn variadic_parameters_demo() {
+    let mut arena = AstArena::new();
+    
+    println!("\n📦 Variadic/Rest Parameters:\n");
+    
+    // function printf(format: str, ...args)
+    let printf_function = TypedFunction {
+        name: arena.intern_string("printf"),
+        params: vec![
+            TypedParameter::regular(
+                arena.intern_string("format"),
+                Type::Primitive(PrimitiveType::String),
+                Mutability::Immutable,
+                Span::new(15, 28)
+            ),
+            TypedParameter::rest(
+                arena.intern_string("args"),
+                Type::Array {
+                    element_type: Box::new(Type::Any),
+                    size: None,
+                },
+                Mutability::Immutable,
+                Span::new(30, 39)
+            ),
+        ],
+        return_type: Type::Primitive(PrimitiveType::Unit),
+        body: TypedBlock {
+            statements: vec![],
+            span: Span::new(45, 55),
+        },
+        visibility: Visibility::Public,
+        is_async: false,
+    };
+    
+    // Call: printf("Hello %s, you have %d messages", "Alice", 5)
+    let printf_call = TypedCall::positional(
+        typed_node(
+            TypedExpression::Variable(arena.intern_string("printf")),
+            Type::Function {
+                params: vec![
+                    ParamInfo {
+                        name: Some(arena.intern_string("format")),
+                        ty: Type::Primitive(PrimitiveType::String),
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                    ParamInfo {
+                        name: Some(arena.intern_string("args")),
+                        ty: Type::Array {
+                            element_type: Box::new(Type::Any),
+                            size: None,
+                        },
+                        is_optional: false,
+                        is_varargs: true,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                    },
+                ],
+                return_type: Box::new(Type::Primitive(PrimitiveType::Unit)),
+                is_varargs: true,
+                has_named_params: false,
+                has_default_params: false,
+            },
+            Span::new(0, 6)
+        ),
+        vec![
+            typed_node(
+                TypedExpression::Literal(TypedLiteral::String(arena.intern_string("Hello %s, you have %d messages"))),
+                Type::Primitive(PrimitiveType::String),
+                Span::new(7, 40)
+            ),
+            typed_node(
+                TypedExpression::Literal(TypedLiteral::String(arena.intern_string("Alice"))),
+                Type::Primitive(PrimitiveType::String),
+                Span::new(42, 49)
+            ),
+            typed_node(
+                TypedExpression::Literal(TypedLiteral::Integer(5)),
+                Type::Primitive(PrimitiveType::I32),
+                Span::new(51, 52)
+            ),
+        ]
+    );
+    
+    println!("✅ C-style varargs: printf(\"Hello %s, you have %d messages\", \"Alice\", 5)");
+    assert!(printf_function.params[1].kind == ParameterKind::Rest);
+    assert_eq!(printf_call.positional_args.len(), 3);
+}
+
+/// Demonstrates C#-style out/ref parameters
+fn out_ref_parameters_demo() {
+    let mut arena = AstArena::new();
+    
+    println!("\n🔄 Out/Ref Parameters (C# style):\n");
+    
+    // function try_parse(input: str, out result: int) -> bool
+    let try_parse_function = TypedFunction {
+        name: arena.intern_string("try_parse"),
+        params: vec![
+            TypedParameter::regular(
+                arena.intern_string("input"),
+                Type::Primitive(PrimitiveType::String),
+                Mutability::Immutable,
+                Span::new(19, 31)
+            ),
+            TypedParameter::out(
+                arena.intern_string("result"),
+                Type::Primitive(PrimitiveType::I32),
+                Span::new(33, 49)
+            ),
+        ],
+        return_type: Type::Primitive(PrimitiveType::Bool),
+        body: TypedBlock {
+            statements: vec![],
+            span: Span::new(58, 70),
+        },
+        visibility: Visibility::Public,
+        is_async: false,
+    };
+    
+    // function swap(ref a: int, ref b: int)
+    let swap_function = TypedFunction {
+        name: arena.intern_string("swap"),
+        params: vec![
+            TypedParameter::ref_param(
+                arena.intern_string("a"),
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Mutable,
+                Span::new(13, 22)
+            ),
+            TypedParameter::ref_param(
+                arena.intern_string("b"),
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Mutable,
+                Span::new(24, 33)
+            ),
+        ],
+        return_type: Type::Primitive(PrimitiveType::Unit),
+        body: TypedBlock {
+            statements: vec![],
+            span: Span::new(38, 50),
+        },
+        visibility: Visibility::Public,
+        is_async: false,
+    };
+    
+    println!("✅ Out parameter: try_parse(input: str, out result: int) -> bool");
+    println!("✅ Ref parameters: swap(ref a: int, ref b: int)");
+    
+    assert!(try_parse_function.params[1].kind == ParameterKind::Out);
+    assert!(swap_function.params[0].kind == ParameterKind::Ref);
+    assert!(swap_function.params[1].kind == ParameterKind::Ref);
+}
+
+/// Demonstrates Swift-style inout parameters
+fn inout_parameters_demo() {
+    let mut arena = AstArena::new();
+    
+    println!("\n🔄 InOut Parameters (Swift style):\n");
+    
+    // function increment(inout value: Int)
+    let increment_function = TypedFunction {
+        name: arena.intern_string("increment"),
+        params: vec![
+            TypedParameter::inout(
+                arena.intern_string("value"),
+                Type::Primitive(PrimitiveType::I32),
+                Span::new(19, 31)
+            ),
+        ],
+        return_type: Type::Primitive(PrimitiveType::Unit),
+        body: TypedBlock {
+            statements: vec![],
+            span: Span::new(36, 50),
+        },
+        visibility: Visibility::Public,
+        is_async: false,
+    };
+    
+    println!("✅ InOut parameter: increment(inout value: Int)");
+    assert!(increment_function.params[0].kind == ParameterKind::InOut);
+    assert_eq!(increment_function.params[0].mutability, Mutability::Mutable);
+}
+
+/// Demonstrates method calls with different argument styles
+fn method_calls_demo() {
+    let mut arena = AstArena::new();
+    
+    println!("\n🏗️ Method Calls with Advanced Arguments:\n");
+    
+    // obj.configure(width: 100, height: 200)
+    let method_call = TypedMethodCall::named(
+        typed_node(
+            TypedExpression::Variable(arena.intern_string("obj")),
+            Type::Named {
+                id: TypeId::next(), // "Widget",
+                type_args: vec![],
+            },
+            Span::new(0, 3)
+        ),
+        arena.intern_string("configure"),
+        vec![
+            TypedNamedArg::new(
+                arena.intern_string("width"),
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::Integer(100)),
+                    Type::Primitive(PrimitiveType::I32),
+                    Span::new(20, 23)
+                ),
+                Span::new(14, 23)
+            ),
+            TypedNamedArg::new(
+                arena.intern_string("height"),
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::Integer(200)),
+                    Type::Primitive(PrimitiveType::I32),
+                    Span::new(32, 35)
+                ),
+                Span::new(25, 35)
+            ),
+        ]
+    );
+    
+    println!("✅ Method call with named args: obj.configure(width: 100, height: 200)");
+    assert_eq!(method_call.named_args.len(), 2);
+    assert_eq!(method_call.positional_args.len(), 0);
+}
+
+/// Demonstrates language compatibility comparison
+fn language_compatibility_comparison() {
+    println!("\n🌍 Language Compatibility Summary:\n");
+    
+    println!("📋 Fully Supported Languages:");
+    println!("   ✅ Rust: Regular params, references, generics");
+    println!("   ✅ Go: Regular params, variadic, methods");
+    println!("   ✅ C/C++: Regular params, variadic (...args)");
+    println!("   ✅ Java: Regular params, overloading, varargs");
+    println!("   ✅ C#: All features including out/ref parameters");
+    println!("   ✅ Swift: Named args, inout parameters, defaults");
+    println!("   ✅ Python: Named args, defaults, *args, **kwargs");
+    println!("   ✅ JavaScript: Regular, rest/spread (...args)");
+    println!("   ✅ Kotlin: Named args, defaults, varargs");
+    println!("   ✅ TypeScript: All JavaScript + type annotations");
+    
+    println!("\n📋 Parameter Features Matrix:");
+    println!("   • Positional arguments: ✅ All languages");
+    println!("   • Named arguments: ✅ Python, Swift, Kotlin, C#");
+    println!("   • Default parameters: ✅ C++, Python, Swift, JavaScript");
+    println!("   • Variadic parameters: ✅ C, Go, Java, JavaScript");
+    println!("   • Out parameters: ✅ C#");
+    println!("   • Ref parameters: ✅ C#");
+    println!("   • InOut parameters: ✅ Swift");
+    println!("   • Rest parameters: ✅ JavaScript, Python");
+    println!("   • Keyword-only: ✅ Python");
+    println!("   • Positional-only: ✅ Python 3.8+");
+    
+    println!("\n📋 Advanced Features:");
+    println!("   • Parameter attributes/annotations: ✅ Supported");
+    println!("   • Generic type arguments in calls: ✅ Supported");
+    println!("   • Mixed positional/named args: ✅ Supported");
+    println!("   • Method calls with advanced args: ✅ Supported");
+    println!("   • Type checking for all param types: ✅ Supported");
+}
+
+fn main() {
+    println!("🚀 Zyntax TypedAST Function Arguments Support Demo\n");
+    
+    positional_arguments_demo();
+    named_arguments_demo();
+    default_parameters_demo();
+    variadic_parameters_demo();
+    out_ref_parameters_demo();
+    inout_parameters_demo();
+    method_calls_demo();
+    language_compatibility_comparison();
+    
+    println!("\n✨ All function argument patterns are now fully supported!");
+    println!("🎯 Ready for comprehensive multi-language function compilation!");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parameter_kinds() {
+        let mut arena = AstArena::new();
+        
+        let regular = TypedParameter::regular(
+            arena.intern_string("x"),
+            Type::Primitive(PrimitiveType::I32),
+            Mutability::Immutable,
+            Span::new(0, 5)
+        );
+        assert_eq!(regular.kind, ParameterKind::Regular);
+        
+        let out_param = TypedParameter::out(
+            arena.intern_string("result"),
+            Type::Primitive(PrimitiveType::I32),
+            Span::new(0, 10)
+        );
+        assert_eq!(out_param.kind, ParameterKind::Out);
+        assert_eq!(out_param.mutability, Mutability::Mutable);
+    }
+    
+    #[test]
+    fn test_named_arguments() {
+        let mut arena = AstArena::new();
+        
+        let named_arg = TypedNamedArg::new(
+            arena.intern_string("width"),
+            typed_node(
+                TypedExpression::Literal(TypedLiteral::Integer(100)),
+                Type::Primitive(PrimitiveType::I32),
+                Span::new(0, 3)
+            ),
+            Span::new(0, 10)
+        );
+        
+        assert_eq!(named_arg.name, arena.intern_string("width"));
+        if let TypedExpression::Literal(TypedLiteral::Integer(100)) = named_arg.value.node {
+            // Test passes
+        } else {
+            panic!("Expected integer literal");
+        }
+    }
+    
+    #[test]
+    fn test_mixed_call() {
+        let mut arena = AstArena::new();
+        
+        let call = TypedCall::mixed(
+            typed_node(
+                TypedExpression::Variable(arena.intern_string("func")),
+                Type::Function {
+                    params: vec![],
+                    return_type: Box::new(Type::Primitive(PrimitiveType::Unit)),
+                    is_varargs: false,
+                    has_named_params: true,
+                    has_default_params: false,
+                },
+                Span::new(0, 4)
+            ),
+            vec![
+                typed_node(
+                    TypedExpression::Literal(TypedLiteral::Integer(1)),
+                    Type::Primitive(PrimitiveType::I32),
+                    Span::new(5, 6)
+                ),
+            ],
+            vec![
+                TypedNamedArg::new(
+                    arena.intern_string("flag"),
+                    typed_node(
+                        TypedExpression::Literal(TypedLiteral::Bool(true)),
+                        Type::Primitive(PrimitiveType::Bool),
+                        Span::new(12, 16)
+                    ),
+                    Span::new(7, 16)
+                ),
+            ],
+            vec![]
+        );
+        
+        assert_eq!(call.positional_args.len(), 1);
+        assert_eq!(call.named_args.len(), 1);
+        assert_eq!(call.type_args.len(), 0);
+    }
+}

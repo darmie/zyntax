@@ -1,0 +1,31 @@
+[package]
+name = "zyntax_typed_ast"
+version = "0.3.0"
+edition = "2021"
+authors = ["Damilare Akinlaja"]
+description = "TypedAST - Common typed intermediate representation for multiple languages"
+
+[dependencies]
+# Error handling and diagnostics
+thiserror = { workspace = true }
+miette = { workspace = true }
+
+# Basic utilities
+serde = { workspace = true }
+uuid = { workspace = true }
+
+# Memory management
+typed-arena = { workspace = true }
+string-interner = { workspace = true }
+
+# Optional features
+derive_builder = { version = "0.20.2", optional = true }
+
+[features]
+default = []
+builders = ["derive_builder"]  # Enable builder pattern helpers
+
+
+[[example]]
+name = "generics_demo"
+path = "examples/generics_demo.rs"

@@ -1,0 +1,3622 @@
+//! # Cranelift Backend Integration
+//! 
+//! Provides JIT compilation capabilities using Cranelift for fast development
+//! cycles and hot-reloading support.
+
+use cranelift::prelude::*;
+use cranelift_codegen::ir::entities::Value;
+use cranelift_codegen::ir::types;
+use cranelift_codegen::ir::{Signature, UserFuncName, AbiParam};
+use cranelift_codegen::ir::condcodes::{IntCC, FloatCC};
+use cranelift_codegen::isa::CallConv;
+use cranelift_codegen::settings;
+use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_module::{DataDescription, FuncId, Linkage, Module};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+
+use crate::hir::{
+    HirModule, HirFunction, HirInstruction, HirTerminator,
+    HirType, HirStructType, HirId, BinaryOp, UnaryOp, HirConstant,
+    HirCallable, HirPhi, HirValueKind, Intrinsic, HirPatternKind,
+    HirGlobal, HirVTable,
+};
+use crate::{CompilerResult, CompilerError};
+
+/// Cranelift backend for JIT compilation
+pub struct CraneliftBackend {
+    /// JIT module for code generation
+    module: JITModule,
+    /// Current function builder
+    builder_context: FunctionBuilderContext,
+    /// Codegen context
+    codegen_context: codegen::Context,
+    /// Data description for constants
+    data_desc: DataDescription,
+    /// Mapping from HIR functions to JIT function IDs
+    function_map: HashMap<HirId, FuncId>,
+    /// Mapping from HIR values to Cranelift values
+    value_map: HashMap<HirId, Value>,
+    /// Mapping from HIR blocks to Cranelift blocks
+    block_map: HashMap<HirId, Block>,
+    /// Compiled function metadata
+    compiled_functions: HashMap<HirId, CompiledFunction>,
+    /// Hot-reload state
+    hot_reload: HotReloadState,
+}
+
+/// Hot-reload state management
+#[derive(Clone)]
+struct HotReloadState {
+    /// Version counter for functions
+    versions: Arc<RwLock<HashMap<HirId, u64>>>,
+    /// Previous function versions for rollback
+    previous_versions: Arc<RwLock<HashMap<HirId, Vec<CompiledFunction>>>>,
+    /// Active function pointers
+    function_pointers: Arc<RwLock<HashMap<HirId, *const u8>>>,
+}
+
+/// Compiled function metadata
+struct CompiledFunction {
+    function_id: FuncId,
+    version: u64,
+    code_ptr: *const u8,
+    size: usize,
+    signature: Signature,
+}
+
+/// Struct layout information
+#[derive(Debug, Clone)]
+struct StructLayout {
+    /// Offset of each field in bytes
+    #[allow(dead_code)]
+    field_offsets: Vec<u32>,
+    /// Total size of the struct
+    total_size: u32,
+    /// Alignment requirement
+    alignment: u32,
+}
+
+impl CraneliftBackend {
+    /// Create a new Cranelift backend
+    pub fn new() -> CompilerResult<Self> {
+        // Configure Cranelift for the current platform
+        let mut flag_builder = settings::builder();
+        flag_builder.set("use_colocated_libcalls", "false").unwrap();
+        flag_builder.set("is_pic", "false").unwrap();
+        flag_builder.set("opt_level", "speed").unwrap(); // Optimize for JIT speed
+        flag_builder.set("enable_verifier", "true").unwrap(); // Enable detailed verifier errors
+        
+        let isa_builder = cranelift_native::builder().unwrap();
+        let isa = isa_builder.finish(settings::Flags::new(flag_builder)).unwrap();
+        
+        // Create JIT module
+        let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        let module = JITModule::new(builder);
+        
+        Ok(Self {
+            module,
+            builder_context: FunctionBuilderContext::new(),
+            codegen_context: codegen::Context::new(),
+            data_desc: DataDescription::new(),
+            function_map: HashMap::new(),
+            value_map: HashMap::new(),
+            block_map: HashMap::new(),
+            compiled_functions: HashMap::new(),
+            hot_reload: HotReloadState {
+                versions: Arc::new(RwLock::new(HashMap::new())),
+                previous_versions: Arc::new(RwLock::new(HashMap::new())),
+                function_pointers: Arc::new(RwLock::new(HashMap::new())),
+            },
+        })
+    }
+    
+    /// Compile a HIR module to native code
+    pub fn compile_module(&mut self, module: &HirModule) -> CompilerResult<()> {
+        // Process globals first (including vtables)
+        for (id, global) in &module.globals {
+            self.compile_global(*id, global)?;
+        }
+
+        // Then compile functions
+        for (id, function) in &module.functions {
+            self.compile_function(*id, function)?;
+        }
+        
+        // Finalize the module
+        let _ = self.module.finalize_definitions();
+        
+        // Update function pointers after finalization
+        for (hir_id, compiled_func) in &self.compiled_functions {
+            let code_ptr = self.module.get_finalized_function(compiled_func.function_id);
+            self.hot_reload.function_pointers.write().unwrap().insert(*hir_id, code_ptr);
+        }
+        
+        Ok(())
+    }
+    
+    /// Compile a single function with hot-reload support
+    pub fn compile_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
+        // Gap 11: Skip compilation for extern functions (just declare them)
+        if function.is_external {
+            // Create function signature
+            let sig = self.translate_signature(function)?;
+
+            // Use the actual function name (not mangled) for external linkage
+            let link_name = function.name.to_string();
+
+            // Declare as import (external linkage)
+            let func_id = self.module.declare_function(
+                &link_name,
+                Linkage::Import,  // External functions use Import linkage
+                &sig,
+            ).map_err(|e| CompilerError::Backend(format!("Failed to declare extern function: {}", e)))?;
+
+            self.function_map.insert(id, func_id);
+
+            // Don't compile body - just declare and return
+            return Ok(());
+        }
+
+        // Regular function: compile body
+        // Create function signature
+        let sig = self.translate_signature(function)?;
+
+        // Declare function in module with unique name including HirId
+        let unique_name = format!("{}__{:?}", function.name.to_string(), id);
+        let func_id = self.module.declare_function(
+            &unique_name,
+            Linkage::Export,
+            &sig,
+        ).map_err(|e| CompilerError::Backend(format!("Failed to declare function: {}", e)))?;
+
+        self.function_map.insert(id, func_id);
+        
+        // Pre-calculate parameter types before creating builder
+        let param_types: Result<Vec<_>, _> = function.signature.params.iter()
+            .map(|param| self.translate_type(&param.ty))
+            .collect();
+        let param_types = param_types?;
+
+        // Pre-translate ALL types used in the function to avoid borrow checker issues
+        // Build a cache of HirType -> cranelift::Type mappings
+        // and HirType -> size (in bytes) for GEP calculations
+        // and struct layouts for GEP field access
+        // and constant values for GEP struct field indices
+        let mut type_cache: HashMap<HirType, cranelift_codegen::ir::Type> = HashMap::new();
+        let mut size_cache: HashMap<HirType, usize> = HashMap::new();
+        let mut struct_layout_cache: HashMap<crate::hir::HirStructType, StructLayout> = HashMap::new();
+
+        // Build a cache of constant integer values (for struct field indices)
+        let mut const_value_cache: HashMap<HirId, i64> = HashMap::new();
+        for (value_id, value) in &function.values {
+            if let HirValueKind::Constant(constant) = &value.kind {
+                let int_val = match constant {
+                    HirConstant::I8(v) => Some(*v as i64),
+                    HirConstant::I16(v) => Some(*v as i64),
+                    HirConstant::I32(v) => Some(*v as i64),
+                    HirConstant::I64(v) => Some(*v),
+                    HirConstant::U8(v) => Some(*v as i64),
+                    HirConstant::U16(v) => Some(*v as i64),
+                    HirConstant::U32(v) => Some(*v as i64),
+                    HirConstant::U64(v) => Some(*v as i64),
+                    _ => None,
+                };
+                if let Some(val) = int_val {
+                    const_value_cache.insert(*value_id, val);
+                }
+            }
+        }
+
+        // Build a cache of value types (for ExtractValue/InsertValue to know aggregate types)
+        let mut value_type_cache: HashMap<HirId, HirType> = HashMap::new();
+        for (value_id, value) in &function.values {
+            value_type_cache.insert(*value_id, value.ty.clone());
+        }
+
+        for (_block_id, block) in &function.blocks {
+            // Pre-translate phi types
+            for phi in &block.phis {
+                if let Ok(cranelift_ty) = self.translate_type(&phi.ty) {
+                    type_cache.insert(phi.ty.clone(), cranelift_ty);
+                }
+            }
+
+            // Pre-translate instruction types
+            for inst in &block.instructions {
+                match inst {
+                    HirInstruction::ExtractValue { ty, aggregate, .. } => {
+                        if let Ok(cranelift_ty) = self.translate_type(ty) {
+                            type_cache.insert(ty.clone(), cranelift_ty);
+                        }
+                        // Cache struct layouts from the aggregate type
+                        if let Some(agg_value) = function.values.get(aggregate) {
+                            self.cache_struct_layouts_recursive(&agg_value.ty, &mut struct_layout_cache, &mut size_cache);
+                        }
+                    }
+                    HirInstruction::InsertValue { ty, aggregate, .. } => {
+                        if let Ok(cranelift_ty) = self.translate_type(ty) {
+                            type_cache.insert(ty.clone(), cranelift_ty);
+                        }
+                        // Cache struct layouts from the aggregate type
+                        if let Some(agg_value) = function.values.get(aggregate) {
+                            self.cache_struct_layouts_recursive(&agg_value.ty, &mut struct_layout_cache, &mut size_cache);
+                        }
+                    }
+                    HirInstruction::Binary { ty, .. } => {
+                        if let Ok(cranelift_ty) = self.translate_type(ty) {
+                            type_cache.insert(ty.clone(), cranelift_ty);
+                        }
+                    }
+                    HirInstruction::Cast { ty, .. } => {
+                        if let Ok(cranelift_ty) = self.translate_type(ty) {
+                            type_cache.insert(ty.clone(), cranelift_ty);
+                        }
+                    }
+                    HirInstruction::Alloca { ty, .. } => {
+                        if let Ok(cranelift_ty) = self.translate_type(ty) {
+                            type_cache.insert(ty.clone(), cranelift_ty);
+                        }
+                        if let Ok(size) = self.type_size(ty) {
+                            size_cache.insert(ty.clone(), size);
+                        }
+                    }
+                    HirInstruction::Load { ty, .. } => {
+                        if let Ok(cranelift_ty) = self.translate_type(ty) {
+                            type_cache.insert(ty.clone(), cranelift_ty);
+                        }
+                    }
+                    HirInstruction::GetElementPtr { ty, .. } => {
+                        // Pre-compute sizes for all types in GEP chain
+                        // We need to walk through the type structure
+                        if let Ok(size) = self.type_size(ty) {
+                            size_cache.insert(ty.clone(), size);
+                        }
+                        // Also cache sizes for nested types (Ptr, Array, Struct fields)
+                        match ty {
+                            HirType::Ptr(inner) => {
+                                if let Ok(size) = self.type_size(inner) {
+                                    size_cache.insert((**inner).clone(), size);
+                                }
+                            }
+                            HirType::Array(elem_ty, _) => {
+                                if let Ok(size) = self.type_size(elem_ty) {
+                                    size_cache.insert((**elem_ty).clone(), size);
+                                }
+                            }
+                            HirType::Struct(struct_ty) => {
+                                for field_ty in &struct_ty.fields {
+                                    if let Ok(size) = self.type_size(field_ty) {
+                                        size_cache.insert(field_ty.clone(), size);
+                                    }
+                                }
+                                // Pre-compute struct layout
+                                if let Ok(layout) = self.calculate_struct_layout(struct_ty) {
+                                    struct_layout_cache.insert(struct_ty.clone(), layout);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {} // Add more as needed
+                }
+            }
+        }
+
+        // Build function body
+        self.codegen_context.func = cranelift_codegen::ir::Function::with_name_signature(
+            UserFuncName::user(0, func_id.as_u32()),
+            sig.clone(),
+        );
+        
+        {
+            // ================================================================
+            // MULTI-BLOCK CONTROL FLOW IMPLEMENTATION
+            // ================================================================
+
+            // Phase 1: Analyze function structure
+            let block_order = self.compute_block_order(function);
+            let predecessor_map = self.build_predecessor_map(function);
+
+            // Phase 2: Create builder and all Cranelift blocks
+            let mut builder = FunctionBuilder::new(
+                &mut self.codegen_context.func,
+                &mut self.builder_context,
+            );
+
+            let mut block_map = HashMap::new();
+
+            // Create all Cranelift blocks and add phi node parameters
+            for hir_block_id in &block_order {
+                let cranelift_block = builder.create_block();
+                block_map.insert(*hir_block_id, cranelift_block);
+
+                // Add block parameters for phi nodes
+                if let Some(hir_block) = function.blocks.get(hir_block_id) {
+                    for phi in &hir_block.phis {
+                        let phi_type = type_cache.get(&phi.ty).copied().unwrap_or(types::I64);
+                        builder.append_block_param(cranelift_block, phi_type);
+                    }
+                }
+            }
+
+            // Phase 3: Setup entry block with function parameters
+            let entry_block = block_map[&function.entry_block];
+
+            // Add function parameters to entry block (in addition to any phi params)
+            let entry_param_start = builder.block_params(entry_block).len();
+            for cranelift_type in &param_types {
+                builder.append_block_param(entry_block, *cranelift_type);
+            }
+
+            // Switch to entry block for parameter and constant setup
+            // We need an active block to create constant instructions
+            builder.switch_to_block(entry_block);
+
+            // Store block map for use in helper methods
+            self.block_map = block_map.clone();
+
+            // Map HIR function parameters to Cranelift values
+            let entry_params = builder.block_params(entry_block);
+            let function_params = &entry_params[entry_param_start..];
+
+            // Get HIR parameter value IDs sorted by parameter index
+            let mut param_value_ids = Vec::new();
+            for value in function.values.values() {
+                if let HirValueKind::Parameter(param_index) = value.kind {
+                    param_value_ids.push((param_index, value.id));
+                }
+            }
+            param_value_ids.sort_by_key(|(index, _)| *index);
+
+            // Map HIR params to Cranelift values
+            for (i, (_, hir_value_id)) in param_value_ids.iter().enumerate() {
+                if let Some(&cranelift_val) = function_params.get(i) {
+                    self.value_map.insert(*hir_value_id, cranelift_val);
+                }
+            }
+
+            // Map all constant values (needs active block for instruction creation)
+            for value in function.values.values() {
+                if let HirValueKind::Constant(constant) = &value.kind {
+                    let cranelift_val = match constant {
+                        // For narrow integer types, Cranelift expects zero-extended values, not sign-extended
+                        // This avoids "immediate out of bounds" verifier errors for negative constants
+                        // See: https://github.com/bytecodealliance/wasmtime/issues/9041
+                        HirConstant::I8(v) => {
+                            let extended = (*v as u8) as i64;
+                            builder.ins().iconst(types::I8, extended)
+                        }
+                        HirConstant::I16(v) => {
+                            let extended = (*v as u16) as i64;
+                            builder.ins().iconst(types::I16, extended)
+                        }
+                        HirConstant::I32(v) => {
+                            // Zero-extend i32 to i64 instead of sign-extending
+                            let extended = (*v as u32) as i64;
+                            builder.ins().iconst(types::I32, extended)
+                        }
+                        HirConstant::I64(v) => builder.ins().iconst(types::I64, *v),
+                        HirConstant::Bool(v) => builder.ins().iconst(types::I8, if *v { 1 } else { 0 }),
+                        HirConstant::F32(v) => builder.ins().f32const(*v),
+                        HirConstant::F64(v) => builder.ins().f64const(*v),
+                        _ => continue, // Complex constants not yet supported
+                    };
+                    self.value_map.insert(value.id, cranelift_val);
+                }
+            }
+
+            // Track which blocks can be sealed and which are already sealed
+            let mut seal_tracker: HashMap<HirId, usize> = HashMap::new();
+            let mut sealed_blocks: std::collections::HashSet<HirId> = std::collections::HashSet::new();
+            for hir_block_id in &block_order {
+                let pred_count = predecessor_map.get(hir_block_id).map(|v| v.len()).unwrap_or(0);
+                seal_tracker.insert(*hir_block_id, pred_count);
+            }
+
+            // Phase 4: Process each block in order
+            for hir_block_id in &block_order {
+                let cranelift_block = block_map[hir_block_id];
+                let hir_block = match function.blocks.get(hir_block_id) {
+                    Some(b) => b,
+                    None => continue,
+                };
+
+                // Switch to this block (entry block is already active from Phase 3)
+                if *hir_block_id != function.entry_block {
+                    builder.switch_to_block(cranelift_block);
+                }
+
+                // Seal blocks with no predecessors immediately (like entry block)
+                if let Some(&pred_count) = seal_tracker.get(hir_block_id) {
+                    if pred_count == 0 && !sealed_blocks.contains(hir_block_id) {
+                        builder.seal_block(cranelift_block);
+                        sealed_blocks.insert(*hir_block_id);
+                    }
+                }
+
+                // Map phi node results to block parameters
+                let block_params = builder.block_params(cranelift_block).to_vec();
+                for (i, phi) in hir_block.phis.iter().enumerate() {
+                    if let Some(&param_val) = block_params.get(i) {
+                        self.value_map.insert(phi.result, param_val);
+                    }
+                }
+
+                // Process all instructions in this block
+                for inst in &hir_block.instructions {
+                    // Inline instruction translation to avoid borrow checker issues
+                    match inst {
+                        HirInstruction::Binary { op, result, ty, left, right } => {
+                            let lhs = self.value_map[left];
+                            let rhs = self.value_map[right];
+
+                            let value = match op {
+                                BinaryOp::Add => builder.ins().iadd(lhs, rhs),
+                                BinaryOp::Sub => builder.ins().isub(lhs, rhs),
+                                BinaryOp::Mul => builder.ins().imul(lhs, rhs),
+                                BinaryOp::Div => {
+                                    if ty.is_float() {
+                                        builder.ins().fdiv(lhs, rhs)
+                                    } else if ty.is_signed() {
+                                        builder.ins().sdiv(lhs, rhs)
+                                    } else {
+                                        builder.ins().udiv(lhs, rhs)
+                                    }
+                                }
+                                BinaryOp::Rem => {
+                                    if ty.is_signed() {
+                                        builder.ins().srem(lhs, rhs)
+                                    } else {
+                                        builder.ins().urem(lhs, rhs)
+                                    }
+                                }
+                                BinaryOp::And => builder.ins().band(lhs, rhs),
+                                BinaryOp::Or => builder.ins().bor(lhs, rhs),
+                                BinaryOp::Xor => builder.ins().bxor(lhs, rhs),
+                                BinaryOp::Shl => builder.ins().ishl(lhs, rhs),
+                                BinaryOp::Shr => {
+                                    if ty.is_signed() {
+                                        builder.ins().sshr(lhs, rhs)
+                                    } else {
+                                        builder.ins().ushr(lhs, rhs)
+                                    }
+                                }
+                                // Comparisons
+                                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                                    let cc = match op {
+                                        BinaryOp::Eq => IntCC::Equal,
+                                        BinaryOp::Ne => IntCC::NotEqual,
+                                        BinaryOp::Lt => if ty.is_signed() { IntCC::SignedLessThan } else { IntCC::UnsignedLessThan },
+                                        BinaryOp::Le => if ty.is_signed() { IntCC::SignedLessThanOrEqual } else { IntCC::UnsignedLessThanOrEqual },
+                                        BinaryOp::Gt => if ty.is_signed() { IntCC::SignedGreaterThan } else { IntCC::UnsignedGreaterThan },
+                                        BinaryOp::Ge => if ty.is_signed() { IntCC::SignedGreaterThanOrEqual } else { IntCC::UnsignedGreaterThanOrEqual },
+                                        _ => unreachable!(),
+                                    };
+                                    let cmp = builder.ins().icmp(cc, lhs, rhs);
+                                    if let Some(result_val) = function.values.get(result) {
+                                        if matches!(result_val.ty, HirType::Bool) {
+                                            cmp
+                                        } else {
+                                            builder.ins().uextend(types::I32, cmp)
+                                        }
+                                    } else {
+                                        cmp
+                                    }
+                                }
+                                BinaryOp::FAdd => builder.ins().fadd(lhs, rhs),
+                                BinaryOp::FSub => builder.ins().fsub(lhs, rhs),
+                                BinaryOp::FMul => builder.ins().fmul(lhs, rhs),
+                                BinaryOp::FDiv => builder.ins().fdiv(lhs, rhs),
+                                BinaryOp::FRem => {
+                                    // TODO: Re-implement fmod import in multi-block context
+                                    builder.ins().f64const(0.0)
+                                }
+                                BinaryOp::FEq | BinaryOp::FNe | BinaryOp::FLt | BinaryOp::FLe | BinaryOp::FGt | BinaryOp::FGe => {
+                                    let cc = match op {
+                                        BinaryOp::FEq => FloatCC::Equal,
+                                        BinaryOp::FNe => FloatCC::NotEqual,
+                                        BinaryOp::FLt => FloatCC::LessThan,
+                                        BinaryOp::FLe => FloatCC::LessThanOrEqual,
+                                        BinaryOp::FGt => FloatCC::GreaterThan,
+                                        BinaryOp::FGe => FloatCC::GreaterThanOrEqual,
+                                        _ => unreachable!(),
+                                    };
+                                    let cmp = builder.ins().fcmp(cc, lhs, rhs);
+                                    if let Some(result_val) = function.values.get(result) {
+                                        if matches!(result_val.ty, HirType::Bool) {
+                                            cmp
+                                        } else {
+                                            builder.ins().uextend(types::I32, cmp)
+                                        }
+                                    } else {
+                                        cmp
+                                    }
+                                }
+                            };
+
+                            self.value_map.insert(*result, value);
+                        }
+
+                        HirInstruction::Unary { op, result, ty, operand } => {
+                            let val = self.value_map[operand];
+
+                            let value = match op {
+                                UnaryOp::Neg => {
+                                    if ty.is_float() {
+                                        builder.ins().fneg(val)
+                                    } else {
+                                        builder.ins().ineg(val)
+                                    }
+                                }
+                                UnaryOp::FNeg => builder.ins().fneg(val),
+                                UnaryOp::Not => builder.ins().bnot(val),
+                            };
+
+                            self.value_map.insert(*result, value);
+                        }
+
+                        HirInstruction::Select { result, ty, condition, true_val, false_val } => {
+                            let cond = self.value_map[condition];
+                            let true_v = self.value_map[true_val];
+                            let false_v = self.value_map[false_val];
+
+                            let value = builder.ins().select(cond, true_v, false_v);
+                            self.value_map.insert(*result, value);
+                        }
+
+                        HirInstruction::Call { result, callee, args, is_tail, .. } => {
+                            let arg_values: Vec<Value> = args.iter()
+                                .filter_map(|arg_id| self.value_map.get(arg_id).copied())
+                                .collect();
+
+                            match callee {
+                                HirCallable::Intrinsic(intrinsic) => {
+                                    // Handle intrinsic calls
+                                    let value = match intrinsic {
+                                        Intrinsic::Sqrt => {
+                                            if let Some(&arg) = arg_values.first() {
+                                                builder.ins().sqrt(arg)
+                                            } else {
+                                                continue; // Skip if no argument
+                                            }
+                                        }
+                                        Intrinsic::Ctpop => {
+                                            if let Some(&arg) = arg_values.first() {
+                                                builder.ins().popcnt(arg)
+                                            } else {
+                                                continue;
+                                            }
+                                        }
+                                        Intrinsic::Malloc => {
+                                            // Call external malloc from libc
+                                            if let Some(&size_arg) = arg_values.first() {
+                                                // Get or declare malloc function
+                                                let malloc_sig = {
+                                                    let mut sig = self.module.make_signature();
+                                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+                                                    sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I64)); // pointer as i64
+                                                    sig
+                                                };
+
+                                                let malloc_func = self.module
+                                                    .declare_function("malloc", Linkage::Import, &malloc_sig)
+                                                    .expect("Failed to declare malloc");
+
+                                                let local_malloc = self.module
+                                                    .declare_func_in_func(malloc_func, builder.func);
+
+                                                let call = builder.ins().call(local_malloc, &[size_arg]);
+                                                builder.inst_results(call)[0]
+                                            } else {
+                                                continue;
+                                            }
+                                        }
+                                        Intrinsic::Free => {
+                                            // Call external free from libc
+                                            if let Some(&ptr_arg) = arg_values.first() {
+                                                let free_sig = {
+                                                    let mut sig = self.module.make_signature();
+                                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+                                                    // free returns void
+                                                    sig
+                                                };
+
+                                                let free_func = self.module
+                                                    .declare_function("free", Linkage::Import, &free_sig)
+                                                    .expect("Failed to declare free");
+
+                                                let local_free = self.module
+                                                    .declare_func_in_func(free_func, builder.func);
+
+                                                builder.ins().call(local_free, &[ptr_arg]);
+                                                // Free returns void, so create a dummy value
+                                                builder.ins().iconst(types::I64, 0)
+                                            } else {
+                                                continue;
+                                            }
+                                        }
+                                        _ => {
+                                            // Other intrinsics not implemented yet
+                                            continue;
+                                        }
+                                    };
+
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, value);
+                                    }
+                                }
+                                HirCallable::Function(func_id) => {
+                                    // Call another HIR function
+                                    if let Some(compiled_func) = self.compiled_functions.get(func_id) {
+                                        let local_callee = self.module
+                                            .declare_func_in_func(compiled_func.function_id, builder.func);
+
+                                        let call = builder.ins().call(local_callee, &arg_values);
+
+                                        if let Some(result_id) = result {
+                                            // Get first return value (we only support single returns for now)
+                                            if let Some(&ret_val) = builder.inst_results(call).first() {
+                                                self.value_map.insert(*result_id, ret_val);
+                                            }
+                                        }
+                                    } else {
+                                        eprintln!("WARNING: Function {:?} not compiled yet", func_id);
+                                        // Create a dummy value to avoid unmapped error
+                                        if let Some(result_id) = result {
+                                            self.value_map.insert(*result_id, builder.ins().iconst(types::I32, 0));
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    // Other callable types (closures, etc.) not implemented yet
+                                    eprintln!("WARNING: Unsupported callable type");
+                                }
+                            }
+                        }
+
+                        HirInstruction::IndirectCall { result, func_ptr, args, return_ty } => {
+                            // Indirect call through function pointer (for trait dispatch)
+                            let func_ptr_val = self.value_map.get(func_ptr).copied()
+                                .unwrap_or_else(|| builder.ins().iconst(types::I64, 0));
+
+                            let arg_values: Vec<Value> = args.iter()
+                                .filter_map(|arg_id| self.value_map.get(arg_id).copied())
+                                .collect();
+
+                            // Create signature for the indirect call
+                            let mut sig = self.module.make_signature();
+
+                            // Add parameters
+                            for _ in &arg_values {
+                                sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+                            }
+
+                            // Add return type if not void
+                            let cranelift_return_ty = match return_ty {
+                                HirType::Void => None,
+                                HirType::I32 => Some(types::I32),
+                                HirType::I64 => Some(types::I64),
+                                HirType::F32 => Some(types::F32),
+                                HirType::F64 => Some(types::F64),
+                                HirType::Bool => Some(types::I8),
+                                _ => Some(types::I64), // Default to i64 for complex types
+                            };
+
+                            if let Some(ret_ty) = cranelift_return_ty {
+                                sig.returns.push(cranelift_codegen::ir::AbiParam::new(ret_ty));
+                            }
+
+                            let sig_ref = builder.import_signature(sig);
+                            let call_inst = builder.ins().call_indirect(sig_ref, func_ptr_val, &arg_values);
+
+                            // Map result if present
+                            if let Some(result_id) = result {
+                                let results = builder.inst_results(call_inst);
+                                if !results.is_empty() {
+                                    self.value_map.insert(*result_id, results[0]);
+                                }
+                            }
+                        }
+
+                        HirInstruction::Alloca { result, ty, count, align } => {
+                            // Stack allocation
+                            let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+
+                            let slot = if let Some(count_val_id) = count {
+                                // Dynamic allocation (array)
+                                let _count_val = self.value_map[count_val_id];
+                                // Cranelift stack_store/load work with fixed slots
+                                // For dynamic count, we need to calculate size and use stack_alloc
+                                // For now, create a fixed-size slot and warn
+                                eprintln!("WARNING: Dynamic alloca not fully supported, using fixed size");
+                                builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                    64, // Fixed size for now
+                                ))
+                            } else {
+                                // Static allocation (single value)
+                                // IMPORTANT: Check size_cache FIRST because arrays/structs translate
+                                // to I64 (pointer) in Cranelift but need actual allocated size
+                                let size = if let Some(&cached_size) = size_cache.get(ty) {
+                                    cached_size as u32
+                                } else {
+                                    // Fallback to Cranelift type size for primitives
+                                    match cranelift_ty.bytes() {
+                                        1 => 1,
+                                        2 => 2,
+                                        4 => 4,
+                                        8 => 8,
+                                        16 => 16,
+                                        _ => 8, // Default fallback
+                                    }
+                                };
+
+                                builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                    cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                    size,
+                                ))
+                            };
+
+                            // Get pointer to stack slot
+                            let ptr = builder.ins().stack_addr(types::I64, slot, 0);
+                            self.value_map.insert(*result, ptr);
+                        }
+
+                        HirInstruction::Load { result, ty, ptr, align, volatile } => {
+                            // Load value from memory
+                            let ptr_val = self.value_map[ptr];
+                            let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+
+                            // TODO: Properly handle volatile flag
+                            let flags = cranelift_codegen::ir::MemFlags::new();
+
+                            let loaded = builder.ins().load(cranelift_ty, flags, ptr_val, 0);
+                            self.value_map.insert(*result, loaded);
+                        }
+
+                        HirInstruction::Store { value, ptr, align, volatile } => {
+                            // Store value to memory
+                            let val = self.value_map[value];
+                            let ptr_val = self.value_map[ptr];
+
+                            // TODO: Properly handle volatile flag
+                            let flags = cranelift_codegen::ir::MemFlags::new();
+
+                            builder.ins().store(flags, val, ptr_val, 0);
+                            // Store has no result value
+                        }
+
+                        HirInstruction::GetElementPtr { result, ty, ptr, indices } => {
+                            // Calculate pointer offset for struct field or array element access
+                            let mut current_ptr = self.value_map[ptr];
+                            let mut current_type = ty.clone();
+
+                            for index_id in indices {
+                                let index = self.value_map[index_id];
+
+                                match &current_type {
+                                    HirType::Ptr(inner) => {
+                                        // Pointer dereference - calculate offset
+                                        let elem_size = size_cache.get(&**inner).copied().unwrap_or(1) as i64;
+
+                                        // offset = index * elem_size
+                                        let size_val = builder.ins().iconst(types::I64, elem_size);
+                                        let offset = builder.ins().imul(index, size_val);
+                                        current_ptr = builder.ins().iadd(current_ptr, offset);
+                                        current_type = (**inner).clone();
+                                    }
+                                    HirType::Array(elem_ty, _) => {
+                                        // Array indexing
+                                        let elem_size = size_cache.get(&**elem_ty).copied().unwrap_or(1) as i64;
+
+                                        let size_val = builder.ins().iconst(types::I64, elem_size);
+                                        let offset = builder.ins().imul(index, size_val);
+                                        current_ptr = builder.ins().iadd(current_ptr, offset);
+                                        current_type = (**elem_ty).clone();
+                                    }
+                                    HirType::Struct(struct_ty) => {
+                                        // Struct field access - index must be a constant
+                                        // Extract the constant field index
+                                        let field_index = if let Some(&const_val) = const_value_cache.get(index_id) {
+                                            if const_val >= 0 && (const_val as usize) < struct_ty.fields.len() {
+                                                const_val as usize
+                                            } else {
+                                                eprintln!("WARNING: GEP struct field index {} out of bounds (struct has {} fields)",
+                                                    const_val, struct_ty.fields.len());
+                                                0 // Fallback to first field
+                                            }
+                                        } else {
+                                            eprintln!("WARNING: GEP for struct requires constant index, got non-constant value");
+                                            0 // Fallback to first field
+                                        };
+
+                                        if let Some(layout) = struct_layout_cache.get(struct_ty) {
+                                            if let Some(&field_offset) = layout.field_offsets.get(field_index) {
+                                                let offset_val = builder.ins().iconst(types::I64, field_offset as i64);
+                                                current_ptr = builder.ins().iadd(current_ptr, offset_val);
+                                                if let Some(field_ty) = struct_ty.fields.get(field_index) {
+                                                    current_type = field_ty.clone();
+                                                }
+                                            }
+                                        } else {
+                                            eprintln!("WARNING: No struct layout found for GEP");
+                                        }
+                                    }
+                                    _ => {
+                                        eprintln!("WARNING: GEP on unsupported type");
+                                        break;
+                                    }
+                                }
+                            }
+
+                            self.value_map.insert(*result, current_ptr);
+                        }
+
+                        HirInstruction::CreateUnion { result, union_ty, variant_index, value } => {
+                            // Simplified union creation: allocate space and store discriminant + value
+                            // For now, create a dummy pointer value
+                            // TODO: Implement proper union layout with malloc + field storage
+                            eprintln!("WARNING: CreateUnion called - returning null pointer (not implemented)");
+                            let dummy_ptr = builder.ins().iconst(types::I64, 0);
+                            self.value_map.insert(*result, dummy_ptr);
+                        }
+
+                        HirInstruction::CreateTraitObject { result, trait_id, data_ptr, vtable_id } => {
+                            // Create trait object as fat pointer: { *data, *vtable }
+                            // A trait object is represented as a struct with two pointer fields
+
+                            // Get the data pointer value
+                            let data_ptr_val = self.value_map.get(data_ptr).copied()
+                                .unwrap_or_else(|| builder.ins().iconst(types::I64, 0));
+
+                            // Get the vtable pointer
+                            // Note: Vtable globals may not be in value_map yet during compilation
+                            // They will be resolved during linking/finalization
+                            let vtable_ptr_val = self.value_map.get(vtable_id).copied()
+                                .unwrap_or_else(|| {
+                                    // Use placeholder - actual vtable address resolved at link time
+                                    builder.ins().iconst(types::I64, 0)
+                                });
+
+                            // Allocate space for fat pointer on stack (2 pointers = 16 bytes on 64-bit)
+                            let ptr_type = self.module.target_config().pointer_type();
+                            let fat_ptr_size = ptr_type.bytes() * 2; // 2 pointers
+                            let stack_slot = builder.create_sized_stack_slot(
+                                StackSlotData::new(StackSlotKind::ExplicitSlot, fat_ptr_size)
+                            );
+
+                            // Get pointer to stack slot
+                            let fat_ptr = builder.ins().stack_addr(ptr_type, stack_slot, 0);
+
+                            // Store data pointer at offset 0
+                            builder.ins().store(
+                                MemFlags::new(),
+                                data_ptr_val,
+                                fat_ptr,
+                                0
+                            );
+
+                            // Store vtable pointer at offset pointer_size
+                            let vtable_offset = ptr_type.bytes() as i32;
+                            builder.ins().store(
+                                MemFlags::new(),
+                                vtable_ptr_val,
+                                fat_ptr,
+                                vtable_offset
+                            );
+
+                            // Return the fat pointer address
+                            self.value_map.insert(*result, fat_ptr);
+                        }
+
+                        HirInstruction::UpcastTraitObject { result, sub_trait_object, sub_trait_id, super_trait_id, super_vtable_id } => {
+                            // Upcast trait object: extract data pointer from sub-trait, combine with super-trait vtable
+                            // Fat pointer layout: { *data (offset 0), *vtable (offset ptr_size) }
+
+                            let ptr_type = self.module.target_config().pointer_type();
+                            let ptr_size = ptr_type.bytes() as i32;
+
+                            // Step 1: Get sub-trait fat pointer
+                            let sub_trait_fat_ptr = self.value_map.get(sub_trait_object).copied()
+                                .ok_or_else(|| CompilerError::CodeGen(
+                                    format!("Sub-trait object {:?} not found", sub_trait_object)
+                                ))?;
+
+                            // Step 2: Extract data pointer from sub-trait object (offset 0)
+                            let data_ptr = builder.ins().load(
+                                ptr_type,
+                                MemFlags::new(),
+                                sub_trait_fat_ptr,
+                                0
+                            );
+
+                            // Step 3: Get super-trait vtable pointer
+                            // Note: Vtable globals may not be in value_map yet during compilation
+                            // They will be resolved during linking/finalization
+                            let super_vtable_ptr = self.value_map.get(super_vtable_id).copied()
+                                .unwrap_or_else(|| {
+                                    // Use placeholder - actual vtable address resolved at link time
+                                    builder.ins().iconst(ptr_type, 0)
+                                });
+
+                            // Step 4: Allocate space for new fat pointer on stack
+                            let fat_ptr_size = ptr_type.bytes() * 2;
+                            let stack_slot = builder.create_sized_stack_slot(
+                                StackSlotData::new(StackSlotKind::ExplicitSlot, fat_ptr_size)
+                            );
+
+                            // Get pointer to stack slot
+                            let super_trait_fat_ptr = builder.ins().stack_addr(ptr_type, stack_slot, 0);
+
+                            // Step 5: Store data pointer at offset 0 (same as sub-trait)
+                            builder.ins().store(
+                                MemFlags::new(),
+                                data_ptr,
+                                super_trait_fat_ptr,
+                                0
+                            );
+
+                            // Step 6: Store super-trait vtable pointer at offset ptr_size
+                            builder.ins().store(
+                                MemFlags::new(),
+                                super_vtable_ptr,
+                                super_trait_fat_ptr,
+                                ptr_size
+                            );
+
+                            // Return the new fat pointer
+                            self.value_map.insert(*result, super_trait_fat_ptr);
+                        }
+
+                        HirInstruction::TraitMethodCall { result, trait_object, method_index, method_sig, args, return_ty } => {
+                            // Dynamic dispatch: call method on trait object
+                            // Fat pointer layout: { *data (offset 0), *vtable (offset ptr_size) }
+
+                            let ptr_type = self.module.target_config().pointer_type();
+                            let ptr_size = ptr_type.bytes() as i32;
+
+                            // Get fat pointer (trait object)
+                            let fat_ptr = self.value_map.get(trait_object).copied()
+                                .ok_or_else(|| CompilerError::CodeGen(
+                                    format!("Trait object {:?} not found", trait_object)
+                                ))?;
+
+                            // TODO: Type-safe signatures
+                            // Current limitation: Using ptr_type for all parameters
+                            // Proper implementation requires method_sig.params translation
+                            // Issue: Builder borrows prevent calling self.translate_type() here
+                            // Will be fixed in next refactoring pass
+                            let _ = method_sig; // Silence unused warning
+
+                            // Step 1: Load data pointer from fat_ptr[0]
+                            let data_ptr = builder.ins().load(
+                                ptr_type,
+                                MemFlags::new(),
+                                fat_ptr,
+                                0
+                            );
+
+                            // Step 2: Load vtable pointer from fat_ptr[ptr_size]
+                            let vtable_ptr = builder.ins().load(
+                                ptr_type,
+                                MemFlags::new(),
+                                fat_ptr,
+                                ptr_size
+                            );
+
+                            // Step 3: Load function pointer from vtable[method_index]
+                            let method_offset = (*method_index as i32) * ptr_size;
+                            let func_ptr = builder.ins().load(
+                                ptr_type,
+                                MemFlags::new(),
+                                vtable_ptr,
+                                method_offset
+                            );
+
+                            // Step 4: Build arguments: prepend self (data_ptr) to args
+                            let mut call_args = vec![data_ptr];
+                            for arg_id in args {
+                                let arg_val = self.value_map.get(arg_id).copied()
+                                    .ok_or_else(|| CompilerError::CodeGen(
+                                        format!("Argument {:?} not found", arg_id)
+                                    ))?;
+                                call_args.push(arg_val);
+                            }
+
+                            // Step 5: Create function signature for indirect call
+                            // Build signature: first parameter is always self (data pointer)
+                            let mut param_types: Vec<AbiParam> = vec![AbiParam::new(ptr_type)]; // self
+                            for _ in args {
+                                // TODO: Use actual types from method_sig.params
+                                param_types.push(AbiParam::new(ptr_type));
+                            }
+
+                            let return_types = if matches!(return_ty, HirType::Void) {
+                                vec![]
+                            } else {
+                                // TODO: Translate return_ty from method_sig
+                                vec![AbiParam::new(ptr_type)]
+                            };
+
+                            let sig = builder.func.import_signature(Signature {
+                                params: param_types,
+                                returns: return_types,
+                                call_conv: CallConv::SystemV,
+                            });
+
+                            // Step 6: Perform indirect call
+                            let call_inst = builder.ins().call_indirect(sig, func_ptr, &call_args);
+
+                            // Step 7: Get return value if non-void
+                            if let Some(result_id) = result {
+                                let return_vals = builder.inst_results(call_inst);
+                                if !return_vals.is_empty() {
+                                    self.value_map.insert(*result_id, return_vals[0]);
+                                }
+                            }
+                        }
+
+                        HirInstruction::CreateClosure { result, closure_ty, function, captures } => {
+                            // Simplified closure creation: allocate environment and create function pointer
+                            // For now, create a dummy pointer value
+                            // TODO: Implement proper closure environment allocation and capture
+                            eprintln!("WARNING: CreateClosure called - returning null pointer (not implemented)");
+                            let dummy_ptr = builder.ins().iconst(types::I64, 0);
+                            self.value_map.insert(*result, dummy_ptr);
+                        }
+
+                        HirInstruction::ExtractValue { result, ty, aggregate, indices } => {
+                            // Extract value from aggregate (struct/array)
+                            // Strategy: Use GEP-like logic to calculate pointer, then Load the value
+
+                            // aggregate is a POINTER to the struct/array
+                            let mut current_ptr = self.value_map[aggregate];
+
+                            // Get the type of the aggregate from our cache
+                            let mut current_type = value_type_cache.get(aggregate)
+                                .cloned()
+                                .unwrap_or(HirType::Void);
+
+                            // If the aggregate type is a pointer, dereference it first
+                            if let HirType::Ptr(inner) = &current_type {
+                                current_type = (**inner).clone();
+                            }
+
+                            if indices.is_empty() {
+                                // No indices - this shouldn't happen, but handle gracefully
+                                // Just load the value at the pointer
+                                let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+                                let flags = cranelift_codegen::ir::MemFlags::new();
+                                let loaded = builder.ins().load(cranelift_ty, flags, current_ptr, 0);
+                                self.value_map.insert(*result, loaded);
+                            } else {
+                                // Navigate through indices using GEP-like logic
+                                for (i, &index_u32) in indices.iter().enumerate() {
+                                    let is_last = i == indices.len() - 1;
+
+                                    match &current_type {
+                                        HirType::Array(elem_ty, _) => {
+                                            // Array indexing - index can be constant or we treat it as constant
+                                            let elem_size = size_cache.get(&**elem_ty).copied().unwrap_or(1) as i64;
+                                            let offset = (index_u32 as i64) * elem_size;
+
+                                            if !is_last {
+                                                // Intermediate: just calculate new pointer
+                                                let offset_val = builder.ins().iconst(types::I64, offset);
+                                                current_ptr = builder.ins().iadd(current_ptr, offset_val);
+                                                current_type = (**elem_ty).clone();
+                                            } else {
+                                                // Last index: calculate pointer and load
+                                                let offset_val = builder.ins().iconst(types::I64, offset);
+                                                let elem_ptr = builder.ins().iadd(current_ptr, offset_val);
+
+                                                let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+                                                let flags = cranelift_codegen::ir::MemFlags::new();
+                                                let loaded = builder.ins().load(cranelift_ty, flags, elem_ptr, 0);
+                                                self.value_map.insert(*result, loaded);
+                                            }
+                                        }
+                                        HirType::Struct(struct_ty) => {
+                                            // Struct field access - index is always constant
+                                            let field_index = index_u32 as usize;
+
+                                            if let Some(layout) = struct_layout_cache.get(struct_ty) {
+                                                if let Some(&field_offset) = layout.field_offsets.get(field_index) {
+                                                    if !is_last {
+                                                        // Intermediate: calculate new pointer
+                                                        let offset_val = builder.ins().iconst(types::I64, field_offset as i64);
+                                                        current_ptr = builder.ins().iadd(current_ptr, offset_val);
+                                                        if let Some(field_ty) = struct_ty.fields.get(field_index) {
+                                                            current_type = field_ty.clone();
+                                                        }
+                                                    } else {
+                                                        // Last index: calculate pointer and load
+                                                        let offset_val = builder.ins().iconst(types::I64, field_offset as i64);
+                                                        let field_ptr = builder.ins().iadd(current_ptr, offset_val);
+
+                                                        let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+                                                        let flags = cranelift_codegen::ir::MemFlags::new();
+                                                        let loaded = builder.ins().load(cranelift_ty, flags, field_ptr, 0);
+                                                        self.value_map.insert(*result, loaded);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            // Unsupported type - just return a dummy value
+                                            eprintln!("WARNING: ExtractValue on unsupported type");
+                                            let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+                                            let dummy = builder.ins().iconst(cranelift_ty, 0);
+                                            self.value_map.insert(*result, dummy);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        HirInstruction::InsertValue { result, ty: _, aggregate, value, indices } => {
+                            // Insert value into aggregate (struct/array)
+                            // Strategy: Use GEP-like logic to calculate pointer, then Store the value
+
+                            // aggregate is a POINTER to the struct/array
+                            let base_ptr = self.value_map[aggregate];
+                            let val = self.value_map[value];
+                            let mut current_ptr = base_ptr;
+
+                            // Get the type of the aggregate from our cache
+                            let mut current_type = value_type_cache.get(aggregate)
+                                .cloned()
+                                .unwrap_or(HirType::Void);
+
+                            // If the aggregate type is a pointer, dereference it first
+                            if let HirType::Ptr(inner) = &current_type {
+                                current_type = (**inner).clone();
+                            }
+
+                            if indices.is_empty() {
+                                // No indices - just store at the pointer
+                                let flags = cranelift_codegen::ir::MemFlags::new();
+                                builder.ins().store(flags, val, current_ptr, 0);
+                                self.value_map.insert(*result, base_ptr);
+                            } else {
+                                // Navigate through indices using GEP-like logic
+                                for (i, &index_u32) in indices.iter().enumerate() {
+                                    let is_last = i == indices.len() - 1;
+
+                                    match &current_type {
+                                        HirType::Array(elem_ty, _) => {
+                                            // Array indexing
+                                            let elem_size = size_cache.get(&**elem_ty).copied().unwrap_or(1) as i64;
+                                            let offset = (index_u32 as i64) * elem_size;
+
+                                            if !is_last {
+                                                // Intermediate: calculate new pointer
+                                                let offset_val = builder.ins().iconst(types::I64, offset);
+                                                current_ptr = builder.ins().iadd(current_ptr, offset_val);
+                                                current_type = (**elem_ty).clone();
+                                            } else {
+                                                // Last index: calculate pointer and store
+                                                let offset_val = builder.ins().iconst(types::I64, offset);
+                                                let elem_ptr = builder.ins().iadd(current_ptr, offset_val);
+
+                                                let flags = cranelift_codegen::ir::MemFlags::new();
+                                                builder.ins().store(flags, val, elem_ptr, 0);
+                                                self.value_map.insert(*result, base_ptr);
+                                            }
+                                        }
+                                        HirType::Struct(struct_ty) => {
+                                            // Struct field access
+                                            let field_index = index_u32 as usize;
+
+                                            if let Some(layout) = struct_layout_cache.get(struct_ty) {
+                                                if let Some(&field_offset) = layout.field_offsets.get(field_index) {
+                                                    if !is_last {
+                                                        // Intermediate: calculate new pointer
+                                                        let offset_val = builder.ins().iconst(types::I64, field_offset as i64);
+                                                        current_ptr = builder.ins().iadd(current_ptr, offset_val);
+                                                        if let Some(field_ty) = struct_ty.fields.get(field_index) {
+                                                            current_type = field_ty.clone();
+                                                        }
+                                                    } else {
+                                                        // Last index: calculate pointer and store
+                                                        let offset_val = builder.ins().iconst(types::I64, field_offset as i64);
+                                                        let field_ptr = builder.ins().iadd(current_ptr, offset_val);
+
+                                                        let flags = cranelift_codegen::ir::MemFlags::new();
+                                                        builder.ins().store(flags, val, field_ptr, 0);
+                                                        self.value_map.insert(*result, base_ptr);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {
+                                            // Unsupported type
+                                            eprintln!("WARNING: InsertValue on unsupported type");
+                                            self.value_map.insert(*result, base_ptr);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        _ => {
+                            // Other instructions not yet implemented
+                            // This will cause values to be unmapped, leading to verifier errors
+                            eprintln!("WARNING: Unimplemented instruction type");
+                        }
+                    }
+                }
+
+                // Process terminator (inline to avoid borrow checker)
+                match &hir_block.terminator {
+                    HirTerminator::Return { values } => {
+                        let cranelift_vals: Vec<_> = values.iter()
+                            .filter_map(|v| self.value_map.get(v).copied())
+                            .collect();
+                        builder.ins().return_(&cranelift_vals);
+                    }
+
+                    HirTerminator::Branch { target } => {
+                        let target_block = self.block_map[target];
+
+                        // Inline phi args extraction
+                        let args: Vec<Value> = if let Some(target_hir_block) = function.blocks.get(target) {
+                            target_hir_block.phis.iter().filter_map(|phi| {
+                                phi.incoming.iter()
+                                    .find(|(pred_block, _)| *pred_block == *hir_block_id)
+                                    .and_then(|(_, value)| self.value_map.get(value).copied())
+                            }).collect()
+                        } else {
+                            vec![]
+                        };
+
+                        builder.ins().jump(target_block, &args);
+
+                        if let Some(count) = seal_tracker.get_mut(target) {
+                            *count = count.saturating_sub(1);
+                            if *count == 0 && !sealed_blocks.contains(target) {
+                                builder.seal_block(target_block);
+                                sealed_blocks.insert(*target);
+                            }
+                        }
+                    }
+
+                    HirTerminator::CondBranch { condition, true_target, false_target } => {
+                        let cond = self.value_map[condition];
+                        let true_block = self.block_map[true_target];
+                        let false_block = self.block_map[false_target];
+
+                        // Inline phi args extraction for true branch
+                        let true_args: Vec<Value> = if let Some(target_hir_block) = function.blocks.get(true_target) {
+                            target_hir_block.phis.iter().filter_map(|phi| {
+                                phi.incoming.iter()
+                                    .find(|(pred_block, _)| *pred_block == *hir_block_id)
+                                    .and_then(|(_, value)| self.value_map.get(value).copied())
+                            }).collect()
+                        } else {
+                            vec![]
+                        };
+
+                        // Inline phi args extraction for false branch
+                        let false_args: Vec<Value> = if let Some(target_hir_block) = function.blocks.get(false_target) {
+                            target_hir_block.phis.iter().filter_map(|phi| {
+                                phi.incoming.iter()
+                                    .find(|(pred_block, _)| *pred_block == *hir_block_id)
+                                    .and_then(|(_, value)| self.value_map.get(value).copied())
+                            }).collect()
+                        } else {
+                            vec![]
+                        };
+
+                        builder.ins().brif(cond, true_block, &true_args, false_block, &false_args);
+
+                        for target in [true_target, false_target] {
+                            let target_block = self.block_map[target];
+                            if let Some(count) = seal_tracker.get_mut(target) {
+                                *count = count.saturating_sub(1);
+                                if *count == 0 && !sealed_blocks.contains(target) {
+                                    builder.seal_block(target_block);
+                                    sealed_blocks.insert(*target);
+                                }
+                            }
+                        }
+                    }
+
+                    HirTerminator::Switch { value, default, cases } => {
+                        let switch_val = self.value_map[value];
+                        let default_block = self.block_map[default];
+
+                        // Create a switch using Cranelift's br_table for integer switches
+                        // For now, use a series of conditional branches
+                        // TODO: Optimize to use br_table for dense integer ranges
+
+                        let mut current_block_filled = false;
+
+                        for (i, (constant, target)) in cases.iter().enumerate() {
+                            let target_block = self.block_map[target];
+
+                            // Create constant value for comparison
+                            let const_val = match constant {
+                                HirConstant::I8(v) => {
+                                    let extended = (*v as u8) as i64;
+                                    builder.ins().iconst(types::I8, extended)
+                                }
+                                HirConstant::I16(v) => {
+                                    let extended = (*v as u16) as i64;
+                                    builder.ins().iconst(types::I16, extended)
+                                }
+                                HirConstant::I32(v) => {
+                                    let extended = (*v as u32) as i64;
+                                    builder.ins().iconst(types::I32, extended)
+                                }
+                                HirConstant::I64(v) => builder.ins().iconst(types::I64, *v),
+                                _ => continue, // Skip non-integer constants
+                            };
+
+                            // Compare switch value with this case
+                            let cmp = builder.ins().icmp(IntCC::Equal, switch_val, const_val);
+
+                            if i == cases.len() - 1 {
+                                // Last case: branch to target or default
+                                builder.ins().brif(cmp, target_block, &[], default_block, &[]);
+                                current_block_filled = true;
+
+                                // Seal both targets
+                                for target_id in [target, default] {
+                                    if let Some(count) = seal_tracker.get_mut(target_id) {
+                                        *count = count.saturating_sub(1);
+                                        if *count == 0 && !sealed_blocks.contains(target_id) {
+                                            builder.seal_block(self.block_map[target_id]);
+                                            sealed_blocks.insert(*target_id);
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Not last case: need to create a fallthrough block for next comparison
+                                let next_block = builder.create_block();
+                                builder.ins().brif(cmp, target_block, &[], next_block, &[]);
+
+                                // Seal target
+                                if let Some(count) = seal_tracker.get_mut(target) {
+                                    *count = count.saturating_sub(1);
+                                    if *count == 0 && !sealed_blocks.contains(target) {
+                                        builder.seal_block(target_block);
+                                        sealed_blocks.insert(*target);
+                                    }
+                                }
+
+                                // Switch to next block for next comparison
+                                builder.switch_to_block(next_block);
+                                builder.seal_block(next_block); // No predecessors from outside
+                            }
+                        }
+
+                        // If no cases, just jump to default
+                        if cases.is_empty() && !current_block_filled {
+                            builder.ins().jump(default_block, &[]);
+                            if let Some(count) = seal_tracker.get_mut(default) {
+                                *count = count.saturating_sub(1);
+                                if *count == 0 && !sealed_blocks.contains(default) {
+                                    builder.seal_block(default_block);
+                                    sealed_blocks.insert(*default);
+                                }
+                            }
+                        }
+                    }
+
+                    HirTerminator::PatternMatch { value, patterns, default } => {
+                        // For now, pattern matching on constants is lowered to Switch
+                        // Extract constant patterns
+                        let cases: Vec<(HirConstant, HirId)> = patterns.iter()
+                            .filter_map(|pattern| {
+                                if let HirPatternKind::Constant(ref c) = pattern.kind {
+                                    Some((c.clone(), pattern.target))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+
+                        let default_target = default.unwrap_or_else(|| {
+                            // If no default, this is unreachable - create unreachable
+                            eprintln!("WARNING: PatternMatch without default target, using unreachable");
+                            *hir_block_id // Fallback to current block (will cause error)
+                        });
+
+                        // Reuse Switch implementation
+                        let switch_val = self.value_map[value];
+                        let default_block = self.block_map[&default_target];
+
+                        let mut current_block_filled = false;
+
+                        for (i, (constant, target)) in cases.iter().enumerate() {
+                            let target_block = self.block_map[target];
+
+                            let const_val = match constant {
+                                HirConstant::I8(v) => {
+                                    let extended = (*v as u8) as i64;
+                                    builder.ins().iconst(types::I8, extended)
+                                }
+                                HirConstant::I16(v) => {
+                                    let extended = (*v as u16) as i64;
+                                    builder.ins().iconst(types::I16, extended)
+                                }
+                                HirConstant::I32(v) => {
+                                    let extended = (*v as u32) as i64;
+                                    builder.ins().iconst(types::I32, extended)
+                                }
+                                HirConstant::I64(v) => builder.ins().iconst(types::I64, *v),
+                                _ => continue,
+                            };
+
+                            let cmp = builder.ins().icmp(IntCC::Equal, switch_val, const_val);
+
+                            if i == cases.len() - 1 {
+                                builder.ins().brif(cmp, target_block, &[], default_block, &[]);
+                                current_block_filled = true;
+
+                                for target_id in [target, &default_target] {
+                                    if let Some(count) = seal_tracker.get_mut(target_id) {
+                                        *count = count.saturating_sub(1);
+                                        if *count == 0 && !sealed_blocks.contains(target_id) {
+                                            builder.seal_block(self.block_map[target_id]);
+                                            sealed_blocks.insert(*target_id);
+                                        }
+                                    }
+                                }
+                            } else {
+                                let next_block = builder.create_block();
+                                builder.ins().brif(cmp, target_block, &[], next_block, &[]);
+
+                                if let Some(count) = seal_tracker.get_mut(target) {
+                                    *count = count.saturating_sub(1);
+                                    if *count == 0 && !sealed_blocks.contains(target) {
+                                        builder.seal_block(target_block);
+                                        sealed_blocks.insert(*target);
+                                    }
+                                }
+
+                                builder.switch_to_block(next_block);
+                                builder.seal_block(next_block);
+                            }
+                        }
+
+                        if cases.is_empty() && !current_block_filled {
+                            builder.ins().jump(default_block, &[]);
+                            if let Some(count) = seal_tracker.get_mut(&default_target) {
+                                *count = count.saturating_sub(1);
+                                if *count == 0 && !sealed_blocks.contains(&default_target) {
+                                    builder.seal_block(default_block);
+                                    sealed_blocks.insert(default_target);
+                                }
+                            }
+                        }
+                    }
+
+                    HirTerminator::Unreachable => {
+                        builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
+                    }
+
+                    _ => {
+                        // Other terminators not implemented
+                        eprintln!("WARNING: Unimplemented terminator in block {:?}", hir_block_id);
+                    }
+                }
+            }
+
+            // Finalize builder
+            builder.finalize();
+        }
+
+        // Debug: Uncomment to dump IR for all functions
+        // self.dump_cranelift_ir(&function.name.to_string());
+
+        // Compile the function
+        let code = self.module.define_function(
+            func_id,
+            &mut self.codegen_context,
+        ).map_err(|e| {
+            eprintln!("Function compilation failed for: {}", function.name);
+            eprintln!("Error: {}", e);
+            eprintln!("Function dump:\n{}", self.codegen_context.func.display());
+            CompilerError::Backend(format!("Failed to compile function: {}", e))
+        })?;
+        
+        // Store compiled function info - will get actual pointer after finalization
+        let compiled_func = CompiledFunction {
+            function_id: func_id,
+            version: 1,
+            code_ptr: std::ptr::null(),
+            size: 0, // Will be updated after finalization
+            signature: sig,
+        };
+        self.compiled_functions.insert(id, compiled_func);
+        
+        // Clear context for next function
+        self.codegen_context.clear();
+        self.value_map.clear();
+        self.block_map.clear();
+        
+        Ok(())
+    }
+
+    /// Compile a global variable (including vtables)
+    ///
+    /// This emits global data declarations for constants, static variables,
+    /// and vtables (arrays of function pointers for trait dispatch).
+    pub fn compile_global(&mut self, id: HirId, global: &HirGlobal) -> CompilerResult<()> {
+        // For vtables, we need to emit an array of function pointers
+        // For now, emit a simple data declaration
+
+        // Declare the global data
+        let unique_name = format!("global__{:?}", id);
+        let data_id = self.module
+            .declare_data(&unique_name, cranelift_module::Linkage::Export, false, false)
+            .map_err(|e| CompilerError::CodeGen(format!("Failed to declare global: {}", e)))?;
+
+        // For now, just define empty data
+        // TODO: Initialize with actual vtable contents (array of function pointers)
+        self.data_desc.clear();
+
+        // If this is a vtable, emit function pointer array
+        if let Some(HirConstant::VTable(vtable)) = &global.initializer {
+            // Emit vtable as array of function pointers
+            let ptr_size = self.module.target_config().pointer_bytes() as usize;
+            let vtable_size = vtable.methods.len() * ptr_size;
+
+            // Define the vtable data with correct size
+            self.data_desc.define_zeroinit(vtable_size);
+
+            // Emit function pointers using declare_func_in_data + write_function_addr
+            // This creates relocations that the linker will resolve
+            for (index, method_entry) in vtable.methods.iter().enumerate() {
+                // Get the FuncId from function_map
+                if let Some(func_id) = self.function_map.get(&method_entry.function_id) {
+                    // Declare function in data context - this gives us a FuncRef
+                    let func_ref = self.module.declare_func_in_data(*func_id, &mut self.data_desc);
+
+                    // Write function address at appropriate offset
+                    let offset = (index * ptr_size) as u32;
+                    self.data_desc.write_function_addr(offset, func_ref);
+                } else {
+                    eprintln!("WARNING: Vtable method function {:?} not found in function_map", method_entry.function_id);
+                }
+            }
+
+            eprintln!("INFO: Vtable with {} methods emitted with function pointer relocations", vtable.methods.len());
+        } else if global.initializer.is_some() {
+            // Other constants - emit as zeroinit placeholder for now
+            // TODO: Implement other constant types
+            let size = self.type_size(&global.ty).unwrap_or(8) as usize;
+            self.data_desc.define_zeroinit(size);
+        } else {
+            // No initializer, define as zeroinit based on type
+            let size = self.type_size(&global.ty).unwrap_or(8) as usize;
+            self.data_desc.define_zeroinit(size);
+        }
+
+        // Define the data
+        self.module
+            .define_data(data_id, &self.data_desc)
+            .map_err(|e| CompilerError::CodeGen(format!("Failed to define global: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Translate function signature
+    pub fn translate_signature(&self, function: &HirFunction) -> CompilerResult<Signature> {
+        let mut cranelift_sig = self.module.make_signature();
+        
+        // Set calling convention
+        cranelift_sig.call_conv = match function.calling_convention {
+            crate::hir::CallingConvention::C => CallConv::SystemV,
+            crate::hir::CallingConvention::Fast => CallConv::Fast,
+            crate::hir::CallingConvention::System => CallConv::SystemV,
+            crate::hir::CallingConvention::WebKit => CallConv::Fast,
+        };
+        
+        // Add parameters
+        for param in &function.signature.params {
+            let ty = self.translate_type(&param.ty)?;
+            cranelift_sig.params.push(AbiParam::new(ty));
+        }
+        
+        // Add return types
+        for ret_ty in &function.signature.returns {
+            if *ret_ty != HirType::Void {
+                let ty = self.translate_type(ret_ty)?;
+                cranelift_sig.returns.push(AbiParam::new(ty));
+            }
+        }
+        
+        Ok(cranelift_sig)
+    }
+    
+    /// Translate HIR type to Cranelift type
+    pub fn translate_type(&self, ty: &HirType) -> CompilerResult<types::Type> {
+        match ty {
+            HirType::Void => Ok(types::I8), // Void represented as i8
+            HirType::Bool => Ok(types::I8), // Cranelift uses i8 for bools
+            HirType::I8 => Ok(types::I8),
+            HirType::I16 => Ok(types::I16),
+            HirType::I32 => Ok(types::I32),
+            HirType::I64 => Ok(types::I64),
+            HirType::I128 => Ok(types::I128),
+            HirType::U8 => Ok(types::I8),
+            HirType::U16 => Ok(types::I16),
+            HirType::U32 => Ok(types::I32),
+            HirType::U64 => Ok(types::I64),
+            HirType::U128 => Ok(types::I128),
+            HirType::F32 => Ok(types::F32),
+            HirType::F64 => Ok(types::F64),
+            HirType::Ptr(_) => Ok(self.module.target_config().pointer_type()),
+            HirType::Ref { .. } => {
+                // References are treated as pointers in Cranelift
+                Ok(self.module.target_config().pointer_type())
+            },
+            HirType::Array(_elem_ty, _) => {
+                // Arrays decay to pointers in Cranelift
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::Struct(_) => {
+                // Structs are passed by reference
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::Function(_) => {
+                // Function pointers
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::Vector(elem_ty, _count) => {
+                // Vector types for SIMD - use the element type for now
+                self.translate_type(elem_ty)
+            }
+            HirType::Union(_) => {
+                // Unions are treated as pointers to stack-allocated memory
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::Closure(_) => {
+                // Closures are treated as pointers to their environment
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::Opaque(_) => {
+                // Opaque types are treated as pointers
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::ConstGeneric(_) => {
+                // Const generic parameters should be resolved before codegen
+                Err(CompilerError::Backend("Unresolved const generic parameter".into()))
+            }
+            HirType::Generic { .. } => {
+                // Generic types should be monomorphized before codegen
+                Err(CompilerError::Backend("Generic types must be monomorphized before codegen".into()))
+            }
+            HirType::TraitObject { .. } => {
+                // Trait objects are represented as fat pointers: { *data, *vtable }
+                // For now, treat as pointer (will need struct with two pointers later)
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::Interface { .. } => {
+                // Interface types are also trait objects
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::AssociatedType { trait_id, self_ty, name } => {
+                // Associated types must be resolved to concrete types before codegen
+                Err(CompilerError::Backend(format!(
+                    "Unresolved associated type: <{:?} as {:?}>::{}",
+                    self_ty, trait_id, name
+                )))
+            }
+        }
+    }
+
+    /// Call libm fmod function for float remainder operation
+    fn call_libm_fmod(&mut self, builder: &mut FunctionBuilder, lhs: Value, rhs: Value) -> CompilerResult<Value> {
+        // Declare fmod signature: double fmod(double x, double y)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(types::F64));
+
+        // Declare fmod as an external function
+        let fmod_id = self.module.declare_function(
+            "fmod",
+            Linkage::Import,
+            &sig,
+        ).map_err(|e| CompilerError::Backend(format!("Failed to declare fmod: {}", e)))?;
+
+        // Import the function into the current function
+        let fmod_func = self.module.declare_func_in_func(fmod_id, builder.func);
+
+        // Call fmod
+        let call = builder.ins().call(fmod_func, &[lhs, rhs]);
+        let result = builder.inst_results(call)[0];
+
+        Ok(result)
+    }
+
+    /// Call malloc for heap allocation
+    fn call_malloc(&mut self, builder: &mut FunctionBuilder, size: Value) -> CompilerResult<Value> {
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        // Declare malloc signature: void* malloc(size_t size)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty)); // size_t is pointer-sized
+        sig.returns.push(AbiParam::new(ptr_ty));
+
+        // Declare malloc as an external function
+        let malloc_id = self.module.declare_function(
+            "malloc",
+            Linkage::Import,
+            &sig,
+        ).map_err(|e| CompilerError::Backend(format!("Failed to declare malloc: {}", e)))?;
+
+        // Import the function into the current function
+        let malloc_func = self.module.declare_func_in_func(malloc_id, &mut builder.func);
+
+        // Call malloc
+        let call = builder.ins().call(malloc_func, &[size]);
+        let result = builder.inst_results(call)[0];
+
+        Ok(result)
+    }
+
+    /// Call free for heap deallocation
+    fn call_free(&mut self, builder: &mut FunctionBuilder, ptr: Value) -> CompilerResult<()> {
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        // Declare free signature: void free(void* ptr)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));
+
+        // Declare free as an external function
+        let free_id = self.module.declare_function(
+            "free",
+            Linkage::Import,
+            &sig,
+        ).map_err(|e| CompilerError::Backend(format!("Failed to declare free: {}", e)))?;
+
+        // Import the function into the current function
+        let free_func = self.module.declare_func_in_func(free_id, builder.func);
+
+        // Call free
+        builder.ins().call(free_func, &[ptr]);
+
+        Ok(())
+    }
+
+    /// Call realloc for heap reallocation
+    fn call_realloc(&mut self, builder: &mut FunctionBuilder, ptr: Value, new_size: Value) -> CompilerResult<Value> {
+        let ptr_ty = self.module.target_config().pointer_type();
+
+        // Declare realloc signature: void* realloc(void* ptr, size_t size)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));
+        sig.params.push(AbiParam::new(ptr_ty));
+        sig.returns.push(AbiParam::new(ptr_ty));
+
+        // Declare realloc as an external function
+        let realloc_id = self.module.declare_function(
+            "realloc",
+            Linkage::Import,
+            &sig,
+        ).map_err(|e| CompilerError::Backend(format!("Failed to declare realloc: {}", e)))?;
+
+        // Import the function into the current function
+        let realloc_func = self.module.declare_func_in_func(realloc_id, builder.func);
+
+        // Call realloc
+        let call = builder.ins().call(realloc_func, &[ptr, new_size]);
+        let result = builder.inst_results(call)[0];
+
+        Ok(result)
+    }
+
+    /// Call libm sin function
+    fn call_libm_sin(&mut self, builder: &mut FunctionBuilder, val: Value) -> CompilerResult<Value> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(types::F64));
+
+        let sin_id = self.module.declare_function("sin", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare sin: {}", e)))?;
+        let sin_func = self.module.declare_func_in_func(sin_id, builder.func);
+
+        let call = builder.ins().call(sin_func, &[val]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Call libm cos function
+    fn call_libm_cos(&mut self, builder: &mut FunctionBuilder, val: Value) -> CompilerResult<Value> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(types::F64));
+
+        let cos_id = self.module.declare_function("cos", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare cos: {}", e)))?;
+        let cos_func = self.module.declare_func_in_func(cos_id, builder.func);
+
+        let call = builder.ins().call(cos_func, &[val]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Call libm pow function
+    fn call_libm_pow(&mut self, builder: &mut FunctionBuilder, base: Value, exp: Value) -> CompilerResult<Value> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(types::F64));
+
+        let pow_id = self.module.declare_function("pow", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare pow: {}", e)))?;
+        let pow_func = self.module.declare_func_in_func(pow_id, builder.func);
+
+        let call = builder.ins().call(pow_func, &[base, exp]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Call libm log function
+    fn call_libm_log(&mut self, builder: &mut FunctionBuilder, val: Value) -> CompilerResult<Value> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(types::F64));
+
+        let log_id = self.module.declare_function("log", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare log: {}", e)))?;
+        let log_func = self.module.declare_func_in_func(log_id, builder.func);
+
+        let call = builder.ins().call(log_func, &[val]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Call libm exp function
+    fn call_libm_exp(&mut self, builder: &mut FunctionBuilder, val: Value) -> CompilerResult<Value> {
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(types::F64));
+
+        let exp_id = self.module.declare_function("exp", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare exp: {}", e)))?;
+        let exp_func = self.module.declare_func_in_func(exp_id, builder.func);
+
+        let call = builder.ins().call(exp_func, &[val]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Call libc memcpy function
+    fn call_memcpy(&mut self, builder: &mut FunctionBuilder, dest: Value, src: Value, len: Value) -> CompilerResult<Value> {
+        let ptr_ty = self.module.target_config().pointer_type();
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));  // dest
+        sig.params.push(AbiParam::new(ptr_ty));  // src
+        sig.params.push(AbiParam::new(ptr_ty));  // len
+        sig.returns.push(AbiParam::new(ptr_ty)); // returns dest
+
+        let memcpy_id = self.module.declare_function("memcpy", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare memcpy: {}", e)))?;
+        let memcpy_func = self.module.declare_func_in_func(memcpy_id, builder.func);
+
+        let call = builder.ins().call(memcpy_func, &[dest, src, len]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Call libc memset function
+    fn call_memset(&mut self, builder: &mut FunctionBuilder, dest: Value, val: Value, len: Value) -> CompilerResult<Value> {
+        let ptr_ty = self.module.target_config().pointer_type();
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));  // dest
+        sig.params.push(AbiParam::new(types::I32)); // val (int)
+        sig.params.push(AbiParam::new(ptr_ty));  // len
+        sig.returns.push(AbiParam::new(ptr_ty)); // returns dest
+
+        let memset_id = self.module.declare_function("memset", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare memset: {}", e)))?;
+        let memset_func = self.module.declare_func_in_func(memset_id, builder.func);
+
+        let call = builder.ins().call(memset_func, &[dest, val, len]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Call libc memmove function
+    fn call_memmove(&mut self, builder: &mut FunctionBuilder, dest: Value, src: Value, len: Value) -> CompilerResult<Value> {
+        let ptr_ty = self.module.target_config().pointer_type();
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr_ty));  // dest
+        sig.params.push(AbiParam::new(ptr_ty));  // src
+        sig.params.push(AbiParam::new(ptr_ty));  // len
+        sig.returns.push(AbiParam::new(ptr_ty)); // returns dest
+
+        let memmove_id = self.module.declare_function("memmove", Linkage::Import, &sig)
+            .map_err(|e| CompilerError::Backend(format!("Failed to declare memmove: {}", e)))?;
+        let memmove_func = self.module.declare_func_in_func(memmove_id, builder.func);
+
+        let call = builder.ins().call(memmove_func, &[dest, src, len]);
+        Ok(builder.inst_results(call)[0])
+    }
+
+    /// Translate a HIR instruction to Cranelift
+    #[allow(dead_code)]
+    fn translate_hir_instruction(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        inst: &HirInstruction,
+    ) -> CompilerResult<()> {
+        match inst {
+            HirInstruction::Binary { op, result, left, right, .. } => {
+                let lhs = self.value_map[left];
+                let rhs = self.value_map[right];
+                
+                let value = match op {
+                    // Integer arithmetic
+                    BinaryOp::Add => builder.ins().iadd(lhs, rhs),
+                    BinaryOp::Sub => builder.ins().isub(lhs, rhs),
+                    BinaryOp::Mul => builder.ins().imul(lhs, rhs),
+                    BinaryOp::Div => builder.ins().sdiv(lhs, rhs),
+                    BinaryOp::Rem => builder.ins().srem(lhs, rhs),
+
+                    // Float arithmetic
+                    BinaryOp::FAdd => builder.ins().fadd(lhs, rhs),
+                    BinaryOp::FSub => builder.ins().fsub(lhs, rhs),
+                    BinaryOp::FMul => builder.ins().fmul(lhs, rhs),
+                    BinaryOp::FDiv => builder.ins().fdiv(lhs, rhs),
+                    // Float remainder requires libm fmod function call
+                    BinaryOp::FRem => {
+                        self.call_libm_fmod(builder, lhs, rhs)?
+                    },
+
+                    // Bitwise
+                    BinaryOp::And => builder.ins().band(lhs, rhs),
+                    BinaryOp::Or => builder.ins().bor(lhs, rhs),
+                    BinaryOp::Xor => builder.ins().bxor(lhs, rhs),
+                    BinaryOp::Shl => builder.ins().ishl(lhs, rhs),
+                    BinaryOp::Shr => builder.ins().sshr(lhs, rhs),
+
+                    // Integer comparisons
+                    BinaryOp::Eq => builder.ins().icmp(IntCC::Equal, lhs, rhs),
+                    BinaryOp::Ne => builder.ins().icmp(IntCC::NotEqual, lhs, rhs),
+                    BinaryOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs),
+                    BinaryOp::Le => builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs),
+                    BinaryOp::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs),
+                    BinaryOp::Ge => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
+
+                    // Float comparisons
+                    BinaryOp::FEq => builder.ins().fcmp(FloatCC::Equal, lhs, rhs),
+                    BinaryOp::FNe => builder.ins().fcmp(FloatCC::NotEqual, lhs, rhs),
+                    BinaryOp::FLt => builder.ins().fcmp(FloatCC::LessThan, lhs, rhs),
+                    BinaryOp::FLe => builder.ins().fcmp(FloatCC::LessThanOrEqual, lhs, rhs),
+                    BinaryOp::FGt => builder.ins().fcmp(FloatCC::GreaterThan, lhs, rhs),
+                    BinaryOp::FGe => builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs),
+                };
+                
+                self.value_map.insert(*result, value);
+                Ok(())
+            }
+            
+            _ => {
+                // TODO: Implement other instruction types
+                Ok(())
+            }
+        }
+    }
+    
+    /// Translate a HIR terminator to Cranelift
+    #[allow(dead_code)]
+    fn translate_hir_terminator(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        terminator: &HirTerminator,
+    ) -> CompilerResult<()> {
+        match terminator {
+            HirTerminator::Return { values } => {
+                let ret_vals: Vec<_> = values.iter()
+                    .map(|v| self.value_map[v])
+                    .collect();
+                builder.ins().return_(&ret_vals);
+                Ok(())
+            }
+            
+            HirTerminator::Unreachable => {
+                builder.ins().return_(&[]);
+                Ok(())
+            }
+            
+            _ => {
+                // NOTE: Some terminator types not yet implemented.
+                // Main terminators (Return, Branch, CondBranch, Switch) already handled elsewhere.
+                // Missing: Resume (for exception handling), IndirectBr (for computed gotos)
+                //
+                // WORKAROUND: Emits return instruction (safe fallback)
+                // FUTURE (v2.0): Add missing terminator types as needed
+                // Estimated effort: 2-3 hours per terminator type
+                builder.ins().return_(&[]);
+                Ok(())
+            }
+        }
+    }
+    
+    /// Translate phi node
+    #[allow(dead_code)]
+    fn translate_phi(&mut self, builder: &mut FunctionBuilder, phi: &HirPhi) -> CompilerResult<()> {
+        // Phi nodes in SSA form are handled by block parameters in Cranelift
+        let block = builder.current_block().unwrap();
+        let ty = self.translate_type(&phi.ty)?;
+        let param = builder.append_block_param(block, ty);
+        self.value_map.insert(phi.result, param);
+        
+        // The incoming values will be added when we process the predecessor blocks
+        Ok(())
+    }
+    
+    /// Translate instruction
+    #[allow(dead_code)]
+    fn translate_instruction(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        inst: &HirInstruction,
+    ) -> CompilerResult<()> {
+        match inst {
+            HirInstruction::Binary { op, result, ty, left, right } => {
+                let lhs = self.value_map[left];
+                let rhs = self.value_map[right];
+                
+                let value = match op {
+                    BinaryOp::Add => builder.ins().iadd(lhs, rhs),
+                    BinaryOp::Sub => builder.ins().isub(lhs, rhs),
+                    BinaryOp::Mul => builder.ins().imul(lhs, rhs),
+                    BinaryOp::Div => {
+                        if ty.is_float() {
+                            builder.ins().fdiv(lhs, rhs)
+                        } else if ty.is_signed() {
+                            builder.ins().sdiv(lhs, rhs)
+                        } else {
+                            builder.ins().udiv(lhs, rhs)
+                        }
+                    }
+                    BinaryOp::Rem => {
+                        if ty.is_signed() {
+                            builder.ins().srem(lhs, rhs)
+                        } else {
+                            builder.ins().urem(lhs, rhs)
+                        }
+                    }
+                    BinaryOp::And => builder.ins().band(lhs, rhs),
+                    BinaryOp::Or => builder.ins().bor(lhs, rhs),
+                    BinaryOp::Xor => builder.ins().bxor(lhs, rhs),
+                    BinaryOp::Shl => builder.ins().ishl(lhs, rhs),
+                    BinaryOp::Shr => {
+                        if ty.is_signed() {
+                            builder.ins().sshr(lhs, rhs)
+                        } else {
+                            builder.ins().ushr(lhs, rhs)
+                        }
+                    }
+                    BinaryOp::Eq => {
+                        let cmp = builder.ins().icmp(IntCC::Equal, lhs, rhs);
+                        // Extend i8 boolean result to match HIR result type
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::Ne => {
+                        let cmp = builder.ins().icmp(IntCC::NotEqual, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::Lt => {
+                        let cc = if ty.is_signed() { IntCC::SignedLessThan } else { IntCC::UnsignedLessThan };
+                        let cmp = builder.ins().icmp(cc, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::Le => {
+                        let cc = if ty.is_signed() { IntCC::SignedLessThanOrEqual } else { IntCC::UnsignedLessThanOrEqual };
+                        let cmp = builder.ins().icmp(cc, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::Gt => {
+                        let cc = if ty.is_signed() { IntCC::SignedGreaterThan } else { IntCC::UnsignedGreaterThan };
+                        let cmp = builder.ins().icmp(cc, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::Ge => {
+                        let cc = if ty.is_signed() { IntCC::SignedGreaterThanOrEqual } else { IntCC::UnsignedGreaterThanOrEqual };
+                        let cmp = builder.ins().icmp(cc, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    // Floating point operations
+                    BinaryOp::FAdd => builder.ins().fadd(lhs, rhs),
+                    BinaryOp::FSub => builder.ins().fsub(lhs, rhs),
+                    BinaryOp::FMul => builder.ins().fmul(lhs, rhs),
+                    BinaryOp::FDiv => builder.ins().fdiv(lhs, rhs),
+                    BinaryOp::FRem => {
+                        // Cranelift doesn't have frem, use libm fmod
+                        self.call_libm_fmod(builder, lhs, rhs)?
+                    }
+                    // Floating point comparisons
+                    BinaryOp::FEq => {
+                        let cmp = builder.ins().fcmp(FloatCC::Equal, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::FNe => {
+                        let cmp = builder.ins().fcmp(FloatCC::NotEqual, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::FLt => {
+                        let cmp = builder.ins().fcmp(FloatCC::LessThan, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::FLe => {
+                        let cmp = builder.ins().fcmp(FloatCC::LessThanOrEqual, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::FGt => {
+                        let cmp = builder.ins().fcmp(FloatCC::GreaterThan, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                    BinaryOp::FGe => {
+                        let cmp = builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs);
+                        builder.ins().uextend(types::I32, cmp)
+                    }
+                };
+                
+                self.value_map.insert(*result, value);
+            }
+            
+            HirInstruction::Unary { op, result, ty, operand } => {
+                let val = self.value_map[operand];
+                
+                let value = match op {
+                    UnaryOp::Neg => {
+                        if ty.is_float() {
+                            builder.ins().fneg(val)
+                        } else {
+                            builder.ins().ineg(val)
+                        }
+                    }
+                    UnaryOp::Not => builder.ins().bnot(val),
+                    UnaryOp::FNeg => builder.ins().fneg(val),
+                };
+                
+                self.value_map.insert(*result, value);
+            }
+            
+            HirInstruction::Load { result, ty, ptr, align: _, volatile } => {
+                let ptr_val = self.value_map[ptr];
+                let cranelift_ty = self.translate_type(ty)?;
+                let flags = if *volatile {
+                    MemFlags::new().with_notrap()
+                } else {
+                    MemFlags::new().with_aligned().with_notrap()
+                };
+                let value = builder.ins().load(cranelift_ty, flags, ptr_val, 0);
+                self.value_map.insert(*result, value);
+            }
+            
+            HirInstruction::Store { value, ptr, align: _, volatile } => {
+                let val = self.value_map[value];
+                let ptr_val = self.value_map[ptr];
+                let flags = if *volatile {
+                    MemFlags::new().with_notrap()
+                } else {
+                    MemFlags::new().with_aligned().with_notrap()
+                };
+                builder.ins().store(flags, val, ptr_val, 0);
+            }
+            
+            HirInstruction::Alloca { result, ty, count, align: _ } => {
+                // Cranelift doesn't have alloca - use stack slots
+                let size = self.type_size(ty)?;
+                // For alloca with count, we need to allocate count * size
+                let alloc_size = if let Some(_count_val) = count {
+                    // Multiply size by count - simplified for now
+                    size
+                } else {
+                    size
+                };
+                let slot_data = StackSlotData::new(StackSlotKind::ExplicitSlot, alloc_size as u32);
+                let slot = builder.create_sized_stack_slot(slot_data);
+                let addr = builder.ins().stack_addr(
+                    self.module.target_config().pointer_type(),
+                    slot,
+                    0,
+                );
+                self.value_map.insert(*result, addr);
+            }
+            
+            HirInstruction::Call { result, callee, args, type_args, is_tail, .. } => {
+                let arg_vals: Vec<_> = args.iter()
+                    .map(|arg| self.value_map[arg])
+                    .collect();
+
+                match callee {
+                    HirCallable::Function(func_id) => {
+                        let cranelift_func = self.function_map[func_id];
+                        let func_ref = self.module.declare_func_in_func(
+                            cranelift_func,
+                            builder.func,
+                        );
+                        
+                        let call = if *is_tail {
+                            builder.ins().return_call(func_ref, &arg_vals)
+                        } else {
+                            builder.ins().call(func_ref, &arg_vals)
+                        };
+                        
+                        if let Some(result_id) = result {
+                            let results = builder.inst_results(call);
+                            if !results.is_empty() {
+                                self.value_map.insert(*result_id, results[0]);
+                            }
+                        }
+                    }
+                    HirCallable::Indirect(func_ptr) => {
+                        let ptr_val = self.value_map[func_ptr];
+                        // For indirect calls, we need a signature reference
+                        // This is a simplified version - in reality we'd need to track function signatures
+                        let sig_ref = builder.import_signature(self.module.make_signature());
+                        
+                        let call = if *is_tail {
+                            builder.ins().return_call_indirect(sig_ref, ptr_val, &arg_vals)
+                        } else {
+                            builder.ins().call_indirect(sig_ref, ptr_val, &arg_vals)
+                        };
+                        
+                        if let Some(result_id) = result {
+                            let results = builder.inst_results(call);
+                            if !results.is_empty() {
+                                self.value_map.insert(*result_id, results[0]);
+                            }
+                        }
+                    }
+                    HirCallable::Intrinsic(intrinsic) => {
+                        // Handle intrinsics
+                        match intrinsic {
+                            crate::hir::Intrinsic::Memcpy => {
+                                // memcpy(dst, src, size)
+                                if args.len() == 3 {
+                                    let dst = arg_vals[0];
+                                    let src = arg_vals[1];
+                                    let size = arg_vals[2];
+                                    builder.call_memcpy(self.module.target_config(), dst, src, size);
+                                    // memcpy returns void, but HIR might expect a value
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, dst); // Return destination
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("memcpy requires 3 arguments".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Memset => {
+                                // memset(dst, value, size)
+                                if args.len() == 3 {
+                                    let dst = arg_vals[0];
+                                    let val = arg_vals[1];
+                                    let size = arg_vals[2];
+                                    builder.call_memset(self.module.target_config(), dst, val, size);
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, dst); // Return destination
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("memset requires 3 arguments".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Memmove => {
+                                // memmove(dst, src, size)
+                                if args.len() == 3 {
+                                    let dst = arg_vals[0];
+                                    let src = arg_vals[1];
+                                    let size = arg_vals[2];
+                                    builder.call_memmove(self.module.target_config(), dst, src, size);
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, dst); // Return destination
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("memmove requires 3 arguments".into()));
+                                }
+                            }
+                            // Math intrinsics
+                            crate::hir::Intrinsic::Sqrt => {
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let sqrt_val = builder.ins().sqrt(val);
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, sqrt_val);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("sqrt requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Sin => {
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let sin_val = self.call_libm_sin(builder, val)?;
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, sin_val);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("sin requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Cos => {
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let cos_val = self.call_libm_cos(builder, val)?;
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, cos_val);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("cos requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Log => {
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let log_val = self.call_libm_log(builder, val)?;
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, log_val);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("log requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Exp => {
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let exp_val = self.call_libm_exp(builder, val)?;
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, exp_val);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("exp requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Pow => {
+                                if args.len() == 2 {
+                                    let base = arg_vals[0];
+                                    let exp = arg_vals[1];
+                                    let pow_val = self.call_libm_pow(builder, base, exp)?;
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, pow_val);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("pow requires 2 arguments".into()));
+                                }
+                            }
+                            // Bit manipulation intrinsics
+                            crate::hir::Intrinsic::Ctpop => {
+                                // Count population (number of 1 bits)
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let popcnt = builder.ins().popcnt(val);
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, popcnt);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("ctpop requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Ctlz => {
+                                // Count leading zeros
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let clz = builder.ins().clz(val);
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, clz);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("ctlz requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Cttz => {
+                                // Count trailing zeros
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let ctz = builder.ins().ctz(val);
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, ctz);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("cttz requires 1 argument".into()));
+                                }
+                            }
+                            crate::hir::Intrinsic::Bswap => {
+                                // Byte swap (endianness conversion)
+                                if args.len() == 1 {
+                                    let val = arg_vals[0];
+                                    let swapped = builder.ins().bswap(val);
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, swapped);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("bswap requires 1 argument".into()));
+                                }
+                            }
+                            // Type query intrinsics
+                            crate::hir::Intrinsic::SizeOf => {
+                                // Get the size of the type from type_args
+                                if type_args.is_empty() {
+                                    return Err(CompilerError::Backend("sizeof requires a type argument".into()));
+                                }
+                                let ty = &type_args[0];
+                                let size = self.type_size(ty)? as u64;
+                                let size_val = builder.ins().iconst(types::I64, size as i64);
+                                if let Some(result_id) = result {
+                                    self.value_map.insert(*result_id, size_val);
+                                }
+                            }
+                            crate::hir::Intrinsic::AlignOf => {
+                                // Get the alignment of the type from type_args
+                                if type_args.is_empty() {
+                                    return Err(CompilerError::Backend("alignof requires a type argument".into()));
+                                }
+                                let ty = &type_args[0];
+                                let align = self.type_alignment(ty)? as u64;
+                                let align_val = builder.ins().iconst(types::I64, align as i64);
+                                if let Some(result_id) = result {
+                                    self.value_map.insert(*result_id, align_val);
+                                }
+                            }
+                            // Overflow checking intrinsics
+                            crate::hir::Intrinsic::AddWithOverflow |
+                            crate::hir::Intrinsic::SubWithOverflow |
+                            crate::hir::Intrinsic::MulWithOverflow => {
+                                if args.len() == 2 {
+                                    let lhs = arg_vals[0];
+                                    let rhs = arg_vals[1];
+                                    
+                                    // Perform the operation
+                                    let result_val = match intrinsic {
+                                        crate::hir::Intrinsic::AddWithOverflow => {
+                                            // For overflow detection, we'd need to use specific overflow instructions
+                                            // Cranelift has iadd_overflow_trap but not a direct overflow flag
+                                            // For now, just perform the operation
+                                            builder.ins().iadd(lhs, rhs)
+                                        }
+                                        crate::hir::Intrinsic::SubWithOverflow => {
+                                            // Similar to add, just perform the operation for now
+                                            builder.ins().isub(lhs, rhs)
+                                        }
+                                        crate::hir::Intrinsic::MulWithOverflow => {
+                                            // Similar to add/sub, just perform the operation for now
+                                            builder.ins().imul(lhs, rhs)
+                                        }
+                                        _ => unreachable!(),
+                                    };
+                                    
+                                    // NOTE: Overflow intrinsics should return (result, bool overflow_flag).
+                                    // Cranelift has overflow checking via: iadd_cout, isub_bout, etc.
+                                    // Need: (1) Use overflow-checking instructions, (2) Create tuple/struct return,
+                                    // (3) Map both values to result.
+                                    //
+                                    // WORKAROUND: Returns only result value (overflow unchecked)
+                                    // FUTURE (v2.0): Use Cranelift overflow instructions + tuple returns
+                                    // Estimated effort: 4-6 hours
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, result_val);
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("overflow intrinsics require 2 arguments".into()));
+                                }
+                            }
+                            
+                            // Memory management intrinsics
+                            crate::hir::Intrinsic::Malloc => {
+                                if !args.is_empty() {
+                                    if let Some(&size) = args.get(0).and_then(|id| self.value_map.get(id)) {
+                                        let ptr = self.call_malloc(builder, size)?;
+                                        if let Some(result_id) = result {
+                                            self.value_map.insert(*result_id, ptr);
+                                        }
+                                    } else {
+                                        return Err(CompilerError::Backend("malloc: size argument not found in value map".into()));
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("malloc requires size argument".into()));
+                                }
+                            }
+                            
+                            crate::hir::Intrinsic::Free => {
+                                if !args.is_empty() {
+                                    if let Some(&ptr) = args.get(0).and_then(|id| self.value_map.get(id)) {
+                                        self.call_free(builder, ptr)?;
+                                    } else {
+                                        return Err(CompilerError::Backend("free: pointer argument not found in value map".into()));
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("free requires pointer argument".into()));
+                                }
+                            }
+                            
+                            crate::hir::Intrinsic::Realloc => {
+                                if args.len() >= 2 {
+                                    if let (Some(&ptr), Some(&new_size)) = (
+                                        args.get(0).and_then(|id| self.value_map.get(id)),
+                                        args.get(1).and_then(|id| self.value_map.get(id))
+                                    ) {
+                                        let new_ptr = self.call_realloc(builder, ptr, new_size)?;
+                                        if let Some(result_id) = result {
+                                            self.value_map.insert(*result_id, new_ptr);
+                                        }
+                                    } else {
+                                        return Err(CompilerError::Backend("realloc: arguments not found in value map".into()));
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("realloc requires pointer and size arguments".into()));
+                                }
+                            }
+                            
+                            crate::hir::Intrinsic::Drop => {
+                                // Call destructor for type
+                                if !args.is_empty() {
+                                    if let Some(&_ptr) = args.get(0).and_then(|id| self.value_map.get(id)) {
+                                        // NOTE: Destructor dispatch requires type information + vtable.
+                                        // Need: (1) Type ID from pointer, (2) Destructor lookup table,
+                                        // (3) Indirect call to destructor function.
+                                        //
+                                        // WORKAROUND: No-op (works for POD types without destructors)
+                                        // FUTURE (v2.0): Implement destructor dispatch system
+                                        // Estimated effort: 10-15 hours (depends on trait system)
+                                    } else {
+                                        return Err(CompilerError::Backend("drop: pointer argument not found in value map".into()));
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("drop requires pointer argument".into()));
+                                }
+                            }
+                            
+                            crate::hir::Intrinsic::IncRef => {
+                                // Increment reference count
+                                if !args.is_empty() {
+                                    if let Some(&ptr) = args.get(0).and_then(|id| self.value_map.get(id)) {
+                                        // Assume refcount is first field of struct
+                                        let ref_count = builder.ins().load(
+                                            types::I32,
+                                            MemFlags::new(),
+                                            ptr,
+                                            0,
+                                        );
+                                        let one = builder.ins().iconst(types::I32, 1);
+                                        let new_count = builder.ins().iadd(ref_count, one);
+                                        builder.ins().store(
+                                            MemFlags::new(),
+                                            new_count,
+                                            ptr,
+                                            0,
+                                        );
+                                    } else {
+                                        return Err(CompilerError::Backend("incref: pointer argument not found in value map".into()));
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("incref requires pointer argument".into()));
+                                }
+                            }
+                            
+                            crate::hir::Intrinsic::DecRef => {
+                                // Decrement reference count
+                                if !args.is_empty() {
+                                    if let Some(&ptr) = args.get(0).and_then(|id| self.value_map.get(id)) {
+                                        // Assume refcount is first field of struct
+                                        let ref_count = builder.ins().load(
+                                            types::I32,
+                                            MemFlags::new(),
+                                            ptr,
+                                            0,
+                                        );
+                                        let one = builder.ins().iconst(types::I32, 1);
+                                        let new_count = builder.ins().isub(ref_count, one);
+                                        builder.ins().store(
+                                            MemFlags::new(),
+                                            new_count,
+                                            ptr,
+                                            0,
+                                        );
+                                        
+                                        // Check if count is zero and free if so
+                                        let zero = builder.ins().iconst(types::I32, 0);
+                                        let is_zero = builder.ins().icmp(IntCC::Equal, new_count, zero);
+
+                                        // Create blocks for conditional free
+                                        let free_block = builder.create_block();
+                                        let continue_block = builder.create_block();
+
+                                        // Branch based on refcount
+                                        builder.ins().brif(is_zero, free_block, &[], continue_block, &[]);
+
+                                        // Free block: call free and jump to continue
+                                        builder.seal_block(free_block);
+                                        builder.switch_to_block(free_block);
+                                        self.call_free(builder, ptr)?;
+                                        builder.ins().jump(continue_block, &[]);
+
+                                        // Continue block
+                                        builder.seal_block(continue_block);
+                                        builder.switch_to_block(continue_block);
+                                    } else {
+                                        return Err(CompilerError::Backend("decref: pointer argument not found in value map".into()));
+                                    }
+                                } else {
+                                    return Err(CompilerError::Backend("decref requires pointer argument".into()));
+                                }
+                            }
+                            
+                            crate::hir::Intrinsic::Alloca => {
+                                // Stack allocation - should be handled as instruction, not intrinsic call
+                                return Err(CompilerError::Backend("Alloca should be an instruction, not intrinsic call".into()));
+                            }
+                            
+                            crate::hir::Intrinsic::GCSafepoint => {
+                                // GC safepoint - no-op for now in Cranelift
+                                // In a real implementation, this would:
+                                // 1. Mark a safepoint for the GC
+                                // 2. Potentially spill registers
+                                // 3. Update GC metadata
+                                // For now, we just ignore it
+                            }
+                            
+                            crate::hir::Intrinsic::Await => {
+                                // Await intrinsic - complex implementation
+                                // This would suspend the current function and register a continuation
+                                // For now, just call a runtime function
+                                return Err(CompilerError::Backend("Await intrinsic not yet implemented in Cranelift backend".into()));
+                            }
+                            
+                            crate::hir::Intrinsic::Yield => {
+                                // Yield intrinsic for generators
+                                // This would suspend execution and yield a value
+                                return Err(CompilerError::Backend("Yield intrinsic not yet implemented in Cranelift backend".into()));
+                            }
+
+                            crate::hir::Intrinsic::Panic => {
+                                // Gap 8 Phase 3: Panic with message
+                                // For now, we call abort() which terminates immediately
+                                // Future: Add message printing, stack unwinding
+
+                                // Call abort() from libc
+                                let abort_sig = {
+                                    let mut sig = self.module.make_signature();
+                                    // abort() takes no arguments and doesn't return
+                                    sig
+                                };
+
+                                let abort_name = "abort";
+                                let abort_func = self.module
+                                    .declare_function(abort_name, cranelift_module::Linkage::Import, &abort_sig)
+                                    .map_err(|e| CompilerError::Backend(format!("Failed to declare abort: {}", e)))?;
+                                let abort_func_ref = self.module
+                                    .declare_func_in_func(abort_func, &mut builder.func);
+
+                                // Call abort() - doesn't return
+                                builder.ins().call(abort_func_ref, &[]);
+
+                                // Add unreachable to satisfy control flow
+                                builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
+                            }
+
+                            crate::hir::Intrinsic::Abort => {
+                                // Gap 8 Phase 3: Immediate abort
+                                // Calls abort() from libc
+
+                                let abort_sig = {
+                                    let mut sig = self.module.make_signature();
+                                    sig
+                                };
+
+                                let abort_name = "abort";
+                                let abort_func = self.module
+                                    .declare_function(abort_name, cranelift_module::Linkage::Import, &abort_sig)
+                                    .map_err(|e| CompilerError::Backend(format!("Failed to declare abort: {}", e)))?;
+                                let abort_func_ref = self.module
+                                    .declare_func_in_func(abort_func, &mut builder.func);
+
+                                builder.ins().call(abort_func_ref, &[]);
+                                builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            HirInstruction::GetElementPtr { result, ty: _, ptr, indices } => {
+                // Simplified GEP - just add offsets
+                let mut addr = self.value_map[ptr];
+                let ptr_ty = self.module.target_config().pointer_type();
+                
+                for (i, idx) in indices.iter().enumerate() {
+                    let idx_val = self.value_map[idx];
+                    // Calculate offset based on type
+                    let offset = if i == 0 {
+                        // First index is array/struct offset
+                        idx_val
+                    } else {
+                        // Subsequent indices need size calculation
+                        let elem_size = 8; // Simplified - would need proper type size
+                        let size_val = builder.ins().iconst(ptr_ty, elem_size);
+                        builder.ins().imul(idx_val, size_val)
+                    };
+                    addr = builder.ins().iadd(addr, offset);
+                }
+                
+                self.value_map.insert(*result, addr);
+            }
+            
+            HirInstruction::Cast { result, ty, op, operand } => {
+                let val = self.value_map[operand];
+                let target_ty = self.translate_type(ty)?;
+                
+                let cast_val = match op {
+                    crate::hir::CastOp::Bitcast => {
+                        // Bitcast - just return the value for now
+                        val
+                    }
+                    crate::hir::CastOp::ZExt => {
+                        builder.ins().uextend(target_ty, val)
+                    }
+                    crate::hir::CastOp::SExt => {
+                        builder.ins().sextend(target_ty, val)
+                    }
+                    crate::hir::CastOp::Trunc => {
+                        builder.ins().ireduce(target_ty, val)
+                    }
+                    crate::hir::CastOp::FpToSi => {
+                        builder.ins().fcvt_to_sint(target_ty, val)
+                    }
+                    crate::hir::CastOp::SiToFp => {
+                        builder.ins().fcvt_from_sint(target_ty, val)
+                    }
+                    crate::hir::CastOp::FpExt => {
+                        builder.ins().fpromote(target_ty, val)
+                    }
+                    crate::hir::CastOp::FpTrunc => {
+                        builder.ins().fdemote(target_ty, val)
+                    }
+                    _ => {
+                        // Other cast operations like PtrToInt, IntToPtr
+                        val // Placeholder
+                    }
+                };
+                
+                self.value_map.insert(*result, cast_val);
+            }
+            
+            HirInstruction::ExtractValue { result, ty, aggregate: _, indices: _ } => {
+                // NOTE: Dead code - not used. See inline implementation in compile_function
+                let cranelift_ty = self.translate_type(ty)?;
+                let dummy = builder.ins().iconst(cranelift_ty, 0);
+                self.value_map.insert(*result, dummy);
+            }
+
+            HirInstruction::InsertValue { result, ty: _, aggregate, value: _, indices: _ } => {
+                // NOTE: Dead code - not used. See inline implementation in compile_function
+                let struct_ptr = self.value_map[aggregate];
+                self.value_map.insert(*result, struct_ptr);
+            }
+            
+            HirInstruction::Atomic { op, result, ty, ptr, value, ordering } => {
+                // Atomic operations
+                let ptr_val = self.value_map[ptr];
+                let target_ty = self.translate_type(ty)?;
+                
+                // Convert HIR atomic ordering to Cranelift memory ordering
+                let mem_flags = match ordering {
+                    crate::hir::AtomicOrdering::Relaxed => MemFlags::new(),
+                    crate::hir::AtomicOrdering::Acquire => MemFlags::new(),
+                    crate::hir::AtomicOrdering::Release => MemFlags::new(), 
+                    crate::hir::AtomicOrdering::AcqRel => MemFlags::new(),
+                    crate::hir::AtomicOrdering::SeqCst => MemFlags::new(),
+                };
+                
+                let atomic_result = match op {
+                    crate::hir::AtomicOp::Load => {
+                        // Atomic load
+                        builder.ins().load(target_ty, mem_flags.with_notrap(), ptr_val, 0)
+                    }
+                    crate::hir::AtomicOp::Store => {
+                        // Atomic store
+                        if let Some(val_id) = value {
+                            let val = self.value_map[val_id];
+                            builder.ins().store(mem_flags.with_notrap(), val, ptr_val, 0);
+                            // Store doesn't return a value, but HIR expects one for SSA
+                            val // Return the stored value
+                        } else {
+                            return Err(CompilerError::Backend("AtomicStore requires a value".into()));
+                        }
+                    }
+                    crate::hir::AtomicOp::Exchange => {
+                        // Atomic exchange (swap)
+                        if let Some(val_id) = value {
+                            let val = self.value_map[val_id];
+                            // For now, use regular load/store (Cranelift has limited atomic support)
+                            let old_val = builder.ins().load(target_ty, mem_flags.with_notrap(), ptr_val, 0);
+                            builder.ins().store(mem_flags.with_notrap(), val, ptr_val, 0);
+                            old_val
+                        } else {
+                            return Err(CompilerError::Backend("AtomicExchange requires a value".into()));
+                        }
+                    }
+                    crate::hir::AtomicOp::Add |
+                    crate::hir::AtomicOp::Sub |
+                    crate::hir::AtomicOp::And |
+                    crate::hir::AtomicOp::Or |
+                    crate::hir::AtomicOp::Xor => {
+                        // Atomic read-modify-write operations
+                        if let Some(val_id) = value {
+                            let val = self.value_map[val_id];
+                            // For now, use load-op-store pattern (not truly atomic)
+                            let old_val = builder.ins().load(target_ty, mem_flags.with_notrap(), ptr_val, 0);
+                            let new_val = match op {
+                                crate::hir::AtomicOp::Add => builder.ins().iadd(old_val, val),
+                                crate::hir::AtomicOp::Sub => builder.ins().isub(old_val, val),
+                                crate::hir::AtomicOp::And => builder.ins().band(old_val, val),
+                                crate::hir::AtomicOp::Or => builder.ins().bor(old_val, val),
+                                crate::hir::AtomicOp::Xor => builder.ins().bxor(old_val, val),
+                                _ => unreachable!(),
+                            };
+                            builder.ins().store(mem_flags.with_notrap(), new_val, ptr_val, 0);
+                            old_val // Return the old value
+                        } else {
+                            return Err(CompilerError::Backend("Atomic RMW operations require a value".into()));
+                        }
+                    }
+                    crate::hir::AtomicOp::CompareExchange => {
+                        // NOTE: CompareExchange requires two values (expected, desired).
+                        // Current HIR AtomicRMW has single `value` field - architecture limitation.
+                        // Needs: (1) Extend HIR instruction, (2) Use Cranelift atomic_cas instruction.
+                        //
+                        // WORKAROUND: Returns error (unimplemented)
+                        // FUTURE (v2.0): Extend AtomicRMW HIR instruction for compare-exchange
+                        // Estimated effort: 4-5 hours (HIR change + Cranelift mapping)
+                        return Err(CompilerError::Backend("CompareExchange not yet fully implemented".into()));
+                    }
+                };
+                
+                self.value_map.insert(*result, atomic_result);
+            }
+            
+            HirInstruction::Fence { ordering: _ } => {
+                // Memory fence
+                // Cranelift doesn't have explicit fence instructions in the same way
+                // This is typically handled at the LLVM level or through target-specific intrinsics
+                // For now, we'll emit a no-op that preserves ordering semantics
+                // In a real implementation, this might emit platform-specific barrier instructions
+            }
+
+            HirInstruction::CreateUnion { result, union_ty, variant_index, value } => {
+                // Create a tagged union value
+                let union_layout = self.calculate_union_layout(union_ty)?;
+                let ptr_ty = self.module.target_config().pointer_type();
+                
+                // Allocate space for the union on the stack
+                let union_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot, 
+                    union_layout.total_size
+                ));
+                let union_ptr = builder.ins().stack_addr(ptr_ty, union_slot, 0);
+                
+                // Store the discriminant in the first field
+                let discriminant = builder.ins().iconst(types::I32, *variant_index as i64);
+                builder.ins().store(MemFlags::new(), discriminant, union_ptr, 0);
+                
+                // Store the value in the data field (after discriminant)
+                let value_val = self.value_map[value];
+                let data_offset = 4; // Assuming 4-byte discriminant
+                builder.ins().store(MemFlags::new(), value_val, union_ptr, data_offset);
+                
+                self.value_map.insert(*result, union_ptr);
+            }
+
+            HirInstruction::GetUnionDiscriminant { result, union_val } => {
+                // Extract discriminant from union
+                let union_ptr = self.value_map[union_val];
+                let discriminant = builder.ins().load(
+                    types::I32,
+                    MemFlags::new(),
+                    union_ptr,
+                    0 // Discriminant is at offset 0
+                );
+                self.value_map.insert(*result, discriminant);
+            }
+
+            HirInstruction::ExtractUnionValue { result, ty, union_val, variant_index: _ } => {
+                // Extract value from union variant (unsafe - assumes correct variant)
+                let union_ptr = self.value_map[union_val];
+                let cranelift_ty = self.translate_type(ty)?;
+                let data_offset = 4; // Skip discriminant
+                
+                let value = builder.ins().load(
+                    cranelift_ty,
+                    MemFlags::new(),
+                    union_ptr,
+                    data_offset
+                );
+                self.value_map.insert(*result, value);
+            }
+
+            HirInstruction::CreateClosure { result, closure_ty, function, captures } => {
+                // Create a closure with captured environment
+                let ptr_ty = self.module.target_config().pointer_type();
+                
+                // Calculate closure layout: function pointer + captured values
+                let closure_layout = self.calculate_closure_layout(closure_ty)?;
+                
+                // Allocate closure on heap (simplified - should use proper allocator)
+                let closure_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    closure_layout.total_size
+                ));
+                let closure_ptr = builder.ins().stack_addr(ptr_ty, closure_slot, 0);
+                
+                // Store function pointer
+                if let Some(&func_id) = self.function_map.get(function) {
+                    // In a real implementation, we'd store the actual function pointer
+                    let func_ptr = builder.ins().iconst(ptr_ty, func_id.as_u32() as i64);
+                    builder.ins().store(MemFlags::new(), func_ptr, closure_ptr, 0);
+                }
+                
+                // Store captured values
+                let mut offset = 8; // After function pointer
+                for capture_id in captures {
+                    if let Some(&capture_val) = self.value_map.get(capture_id) {
+                        builder.ins().store(MemFlags::new(), capture_val, closure_ptr, offset);
+                        offset += 8; // Simplified - should calculate proper size
+                    }
+                }
+                
+                self.value_map.insert(*result, closure_ptr);
+            }
+
+            HirInstruction::CallClosure { result, closure, args } => {
+                // Call a closure (simplified implementation)
+                let closure_ptr = self.value_map[closure];
+                let ptr_ty = self.module.target_config().pointer_type();
+                
+                // Load function pointer from closure
+                let func_ptr = builder.ins().load(
+                    ptr_ty,
+                    MemFlags::new(),
+                    closure_ptr,
+                    0
+                );
+                
+                // Collect arguments (including captured environment)
+                let mut call_args = vec![closure_ptr]; // Pass closure as first arg
+                for arg_id in args {
+                    if let Some(&arg_val) = self.value_map.get(arg_id) {
+                        call_args.push(arg_val);
+                    }
+                }
+                
+                // In a real implementation, we'd call through the function pointer
+                // For now, this is a placeholder that demonstrates the structure
+                if let Some(result_id) = result {
+                    // Create a dummy result for now
+                    let dummy_result = builder.ins().iconst(types::I32, 0);
+                    self.value_map.insert(*result_id, dummy_result);
+                }
+            }
+            
+            _ => {
+                // TODO: Implement remaining instructions
+                return Err(CompilerError::Backend("Unimplemented instruction".into()));
+            }
+        }
+        
+        Ok(())
+    }
+    
+    /// Translate terminator
+    #[allow(dead_code)]
+
+    /// Get function pointer for JIT execution
+    pub fn get_function_ptr(&self, id: HirId) -> Option<*const u8> {
+        self.hot_reload.function_pointers.read().unwrap().get(&id).copied()
+    }
+
+    /// Finalize compiled functions and update function pointers
+    /// This must be called after compile_function() before get_function_ptr() will work
+    pub fn finalize_definitions(&mut self) -> CompilerResult<()> {
+        use cranelift_module::Module;
+
+        // Finalize the module
+        self.module.finalize_definitions()
+            .map_err(|e| CompilerError::Backend(format!("Failed to finalize definitions: {}", e)))?;
+
+        // Update function pointers after finalization
+        for (hir_id, compiled_func) in &self.compiled_functions {
+            let code_ptr = self.module.get_finalized_function(compiled_func.function_id);
+            self.hot_reload.function_pointers.write().unwrap().insert(*hir_id, code_ptr);
+        }
+
+        Ok(())
+    }
+
+    /// Hot-reload a function
+    pub fn hot_reload_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
+        // Recompile the function
+        self.compile_function(id, function)?;
+        
+        // The function pointer is automatically updated in compile_function
+        
+        Ok(())
+    }
+    
+    /// Rollback to previous function version
+    pub fn rollback_function(&mut self, id: HirId) -> CompilerResult<()> {
+        let mut prev_versions = self.hot_reload.previous_versions.write().unwrap();
+        
+        if let Some(versions) = prev_versions.get_mut(&id) {
+            if let Some(prev) = versions.pop() {
+                // Restore previous function pointer
+                let mut ptrs = self.hot_reload.function_pointers.write().unwrap();
+                ptrs.insert(id, prev.code_ptr);
+                
+                // Update version counter
+                let mut versions = self.hot_reload.versions.write().unwrap();
+                if let Some(version) = versions.get_mut(&id) {
+                    *version = prev.version;
+                }
+                
+                Ok(())
+            } else {
+                Err(CompilerError::Backend("No previous version to rollback to".into()))
+            }
+        } else {
+            Err(CompilerError::Backend("Function has no previous versions".into()))
+        }
+    }
+
+    // =========================================================================
+    // Multi-Block Instruction Translation
+    // =========================================================================
+
+    /// Translate a single instruction in multi-block context
+    fn translate_instruction_multiblock(
+        &mut self,
+        builder: &mut FunctionBuilder,
+        inst: &HirInstruction,
+        function: &HirFunction,
+        type_cache: &HashMap<HirType, types::Type>,
+    ) -> CompilerResult<()> {
+        match inst {
+            HirInstruction::Binary { op, result, ty, left, right } => {
+                let lhs = self.value_map[left];
+                let rhs = self.value_map[right];
+
+                let value = match op {
+                    BinaryOp::Add => builder.ins().iadd(lhs, rhs),
+                    BinaryOp::Sub => builder.ins().isub(lhs, rhs),
+                    BinaryOp::Mul => builder.ins().imul(lhs, rhs),
+                    BinaryOp::Div => {
+                        if ty.is_float() {
+                            builder.ins().fdiv(lhs, rhs)
+                        } else if ty.is_signed() {
+                            builder.ins().sdiv(lhs, rhs)
+                        } else {
+                            builder.ins().udiv(lhs, rhs)
+                        }
+                    }
+                    BinaryOp::Rem => {
+                        if ty.is_signed() {
+                            builder.ins().srem(lhs, rhs)
+                        } else {
+                            builder.ins().urem(lhs, rhs)
+                        }
+                    }
+                    BinaryOp::And => builder.ins().band(lhs, rhs),
+                    BinaryOp::Or => builder.ins().bor(lhs, rhs),
+                    BinaryOp::Xor => builder.ins().bxor(lhs, rhs),
+                    BinaryOp::Shl => builder.ins().ishl(lhs, rhs),
+                    BinaryOp::Shr => {
+                        if ty.is_signed() {
+                            builder.ins().sshr(lhs, rhs)
+                        } else {
+                            builder.ins().ushr(lhs, rhs)
+                        }
+                    }
+                    // Comparison operations - extend based on result type
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+                        let cc = match op {
+                            BinaryOp::Eq => IntCC::Equal,
+                            BinaryOp::Ne => IntCC::NotEqual,
+                            BinaryOp::Lt => if ty.is_signed() { IntCC::SignedLessThan } else { IntCC::UnsignedLessThan },
+                            BinaryOp::Le => if ty.is_signed() { IntCC::SignedLessThanOrEqual } else { IntCC::UnsignedLessThanOrEqual },
+                            BinaryOp::Gt => if ty.is_signed() { IntCC::SignedGreaterThan } else { IntCC::UnsignedGreaterThan },
+                            BinaryOp::Ge => if ty.is_signed() { IntCC::SignedGreaterThanOrEqual } else { IntCC::UnsignedGreaterThanOrEqual },
+                            _ => unreachable!(),
+                        };
+                        let cmp = builder.ins().icmp(cc, lhs, rhs);
+                        // Extend if result type is not Bool
+                        if let Some(result_val) = function.values.get(result) {
+                            if matches!(result_val.ty, HirType::Bool) {
+                                cmp
+                            } else {
+                                builder.ins().uextend(types::I32, cmp)
+                            }
+                        } else {
+                            cmp
+                        }
+                    }
+                    // Float operations
+                    BinaryOp::FAdd => builder.ins().fadd(lhs, rhs),
+                    BinaryOp::FSub => builder.ins().fsub(lhs, rhs),
+                    BinaryOp::FMul => builder.ins().fmul(lhs, rhs),
+                    BinaryOp::FDiv => builder.ins().fdiv(lhs, rhs),
+                    BinaryOp::FRem => self.call_libm_fmod(builder, lhs, rhs)?,
+                    // Float comparisons
+                    BinaryOp::FEq | BinaryOp::FNe | BinaryOp::FLt | BinaryOp::FLe | BinaryOp::FGt | BinaryOp::FGe => {
+                        let cc = match op {
+                            BinaryOp::FEq => FloatCC::Equal,
+                            BinaryOp::FNe => FloatCC::NotEqual,
+                            BinaryOp::FLt => FloatCC::LessThan,
+                            BinaryOp::FLe => FloatCC::LessThanOrEqual,
+                            BinaryOp::FGt => FloatCC::GreaterThan,
+                            BinaryOp::FGe => FloatCC::GreaterThanOrEqual,
+                            _ => unreachable!(),
+                        };
+                        let cmp = builder.ins().fcmp(cc, lhs, rhs);
+                        if let Some(result_val) = function.values.get(result) {
+                            if matches!(result_val.ty, HirType::Bool) {
+                                cmp
+                            } else {
+                                builder.ins().uextend(types::I32, cmp)
+                            }
+                        } else {
+                            cmp
+                        }
+                    }
+                };
+
+                self.value_map.insert(*result, value);
+                Ok(())
+            }
+
+            HirInstruction::Unary { op, result, ty, operand } => {
+                let val = self.value_map[operand];
+
+                let value = match op {
+                    UnaryOp::Neg => {
+                        if ty.is_float() {
+                            builder.ins().fneg(val)
+                        } else {
+                            builder.ins().ineg(val)
+                        }
+                    }
+                    UnaryOp::FNeg => builder.ins().fneg(val),
+                    UnaryOp::Not => builder.ins().bnot(val),
+                };
+
+                self.value_map.insert(*result, value);
+                Ok(())
+            }
+
+            _ => {
+                // For now, ignore other instruction types
+                // They can be added incrementally as needed
+                Ok(())
+            }
+        }
+    }
+
+    /// Translate a terminator instruction
+    fn translate_terminator(
+        &mut self,
+        terminator: &HirTerminator,
+        current_block: HirId,
+        function: &HirFunction,
+        builder: &mut FunctionBuilder,
+        seal_tracker: &mut HashMap<HirId, usize>,
+    ) -> CompilerResult<()> {
+        match terminator {
+            HirTerminator::Return { values } => {
+                let cranelift_vals: Vec<_> = values.iter()
+                    .filter_map(|v| self.value_map.get(v).copied())
+                    .collect();
+                builder.ins().return_(&cranelift_vals);
+                Ok(())
+            }
+
+            HirTerminator::Branch { target } => {
+                let target_block = self.block_map[target];
+                let args = self.get_phi_args(*target, current_block, function);
+                builder.ins().jump(target_block, &args);
+
+                // Update seal tracker
+                if let Some(count) = seal_tracker.get_mut(target) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        builder.seal_block(target_block);
+                    }
+                }
+
+                Ok(())
+            }
+
+            HirTerminator::CondBranch { condition, true_target, false_target } => {
+                let cond = self.value_map[condition];
+                let true_block = self.block_map[true_target];
+                let false_block = self.block_map[false_target];
+
+                let true_args = self.get_phi_args(*true_target, current_block, function);
+                let false_args = self.get_phi_args(*false_target, current_block, function);
+
+                // Use brif instruction
+                builder.ins().brif(cond, true_block, &true_args, false_block, &false_args);
+
+                // Update seal tracker for both targets
+                for target in [true_target, false_target] {
+                    let target_block = self.block_map[target];
+                    if let Some(count) = seal_tracker.get_mut(target) {
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            builder.seal_block(target_block);
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+
+            _ => {
+                // Other terminators not yet implemented
+                Err(CompilerError::Backend(format!("Terminator {:?} not yet implemented", terminator)))
+            }
+        }
+    }
+
+    /// Debug helper: Dump Cranelift IR for a function
+    #[allow(dead_code)]
+    fn dump_cranelift_ir(&self, func_name: &str) {
+        eprintln!("=== Cranelift IR for {} ===", func_name);
+        eprintln!("{}", self.codegen_context.func.display());
+        eprintln!("=== End IR ===\n");
+    }
+
+    // =========================================================================
+    // Control Flow Helper Methods
+    // =========================================================================
+
+    /// Compute block ordering for processing (reverse post-order)
+    /// This ensures dominators are processed before dominated blocks
+    fn compute_block_order(&self, function: &HirFunction) -> Vec<HirId> {
+        use std::collections::HashSet;
+
+        let mut visited = HashSet::new();
+        let mut post_order = Vec::new();
+
+        fn visit(
+            block_id: HirId,
+            function: &HirFunction,
+            visited: &mut HashSet<HirId>,
+            post_order: &mut Vec<HirId>,
+        ) {
+            if visited.contains(&block_id) {
+                return;
+            }
+            visited.insert(block_id);
+
+            // Visit successors first (post-order)
+            if let Some(block) = function.blocks.get(&block_id) {
+                for successor in get_successors(&block.terminator) {
+                    visit(successor, function, visited, post_order);
+                }
+            }
+
+            post_order.push(block_id);
+        }
+
+        visit(function.entry_block, function, &mut visited, &mut post_order);
+
+        // Reverse to get reverse post-order
+        post_order.reverse();
+        post_order
+    }
+
+    /// Build predecessor map for all blocks
+    fn build_predecessor_map(&self, function: &HirFunction) -> HashMap<HirId, Vec<HirId>> {
+        let mut predecessors: HashMap<HirId, Vec<HirId>> = HashMap::new();
+
+        for (block_id, block) in &function.blocks {
+            for successor in get_successors(&block.terminator) {
+                predecessors.entry(successor).or_default().push(*block_id);
+            }
+        }
+
+        predecessors
+    }
+
+    /// Get phi arguments for jumping from one block to another
+    fn get_phi_args(
+        &self,
+        target_block: HirId,
+        from_block: HirId,
+        function: &HirFunction,
+    ) -> Vec<Value> {
+        let target = match function.blocks.get(&target_block) {
+            Some(b) => b,
+            None => return vec![],
+        };
+
+        target.phis.iter().map(|phi| {
+            // Find the incoming value from from_block
+            phi.incoming.iter()
+                .find(|(pred_block, _)| *pred_block == from_block)
+                .map(|(_, value)| self.value_map[value])
+                .expect(&format!(
+                    "Phi node in block {:?} must have incoming value from predecessor {:?}",
+                    target_block, from_block
+                ))
+        }).collect()
+    }
+}
+
+/// Helper function to get successors from a terminator
+fn get_successors(terminator: &HirTerminator) -> Vec<HirId> {
+    match terminator {
+        HirTerminator::Return { .. } => vec![],
+        HirTerminator::Branch { target } => vec![*target],
+        HirTerminator::CondBranch { true_target, false_target, .. } => {
+            vec![*true_target, *false_target]
+        }
+        HirTerminator::Switch { default, cases, .. } => {
+            let mut succs = vec![*default];
+            succs.extend(cases.iter().map(|(_, target)| *target));
+            succs
+        }
+        HirTerminator::PatternMatch { patterns, default, .. } => {
+            let mut succs: Vec<HirId> = patterns.iter().map(|p| p.target).collect();
+            if let Some(def) = default {
+                succs.push(*def);
+            }
+            succs
+        }
+        HirTerminator::Unreachable => vec![],
+        _ => vec![], // Handle other terminators as needed
+    }
+}
+
+impl CraneliftBackend {
+    /// Calculate struct layout with proper alignment
+    fn calculate_struct_layout(&self, struct_ty: &HirStructType) -> CompilerResult<StructLayout> {
+        let mut offset = 0u32;
+        let mut field_offsets = Vec::new();
+        let mut max_align = 1u32;
+
+        for field_ty in &struct_ty.fields {
+            let field_size = self.type_size(field_ty)? as u32;
+            let field_align = self.type_alignment(field_ty)? as u32;
+
+            // Update maximum alignment
+            max_align = max_align.max(field_align);
+
+            // Align offset to field alignment
+            if !struct_ty.packed {
+                offset = (offset + field_align - 1) & !(field_align - 1);
+            }
+
+            field_offsets.push(offset);
+            offset += field_size;
+        }
+
+        // Align total size to struct alignment
+        if !struct_ty.packed {
+            offset = (offset + max_align - 1) & !(max_align - 1);
+        }
+
+        Ok(StructLayout {
+            field_offsets,
+            total_size: offset,
+            alignment: max_align,
+        })
+    }
+
+    /// Recursively cache struct layouts for a type (including nested structs)
+    fn cache_struct_layouts_recursive(
+        &self,
+        ty: &HirType,
+        struct_layout_cache: &mut HashMap<crate::hir::HirStructType, StructLayout>,
+        size_cache: &mut HashMap<HirType, usize>,
+    ) {
+        match ty {
+            HirType::Ptr(inner) => {
+                self.cache_struct_layouts_recursive(inner, struct_layout_cache, size_cache);
+            }
+            HirType::Array(elem_ty, _) => {
+                // Cache the ARRAY's size (critical for nested arrays like [[i32; 3]; 2])
+                if let Ok(array_size) = self.type_size(ty) {
+                    size_cache.insert(ty.clone(), array_size);
+                }
+                // Cache element type size
+                if let Ok(elem_size) = self.type_size(elem_ty) {
+                    size_cache.insert((**elem_ty).clone(), elem_size);
+                }
+                // Recursively cache nested arrays/structs
+                self.cache_struct_layouts_recursive(elem_ty, struct_layout_cache, size_cache);
+            }
+            HirType::Struct(struct_ty) => {
+                // Cache this struct's layout
+                if let Ok(layout) = self.calculate_struct_layout(struct_ty) {
+                    struct_layout_cache.insert(struct_ty.clone(), layout);
+                }
+                // Recursively cache field types
+                for field_ty in &struct_ty.fields {
+                    if let Ok(size) = self.type_size(field_ty) {
+                        size_cache.insert(field_ty.clone(), size);
+                    }
+                    self.cache_struct_layouts_recursive(field_ty, struct_layout_cache, size_cache);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Get the size of a type in bytes
+    fn type_size(&self, ty: &HirType) -> CompilerResult<usize> {
+        match ty {
+            HirType::Void => Ok(0),
+            HirType::Bool | HirType::I8 | HirType::U8 => Ok(1),
+            HirType::I16 | HirType::U16 => Ok(2),
+            HirType::I32 | HirType::U32 | HirType::F32 => Ok(4),
+            HirType::I64 | HirType::U64 | HirType::F64 => Ok(8),
+            HirType::I128 | HirType::U128 => Ok(16),
+            HirType::Ptr(_) => Ok(self.module.target_config().pointer_bytes() as usize),
+            HirType::Array(elem_ty, count) => {
+                let elem_size = self.type_size(elem_ty)?;
+                Ok(elem_size * (*count as usize))
+            }
+            HirType::Struct(struct_ty) => {
+                let layout = self.calculate_struct_layout(struct_ty)?;
+                Ok(layout.total_size as usize)
+            }
+            HirType::Union(_) => {
+                let layout = self.calculate_union_layout(ty)?;
+                Ok(layout.total_size as usize)
+            }
+            HirType::Closure(_) => {
+                let layout = self.calculate_closure_layout(ty)?;
+                Ok(layout.total_size as usize)
+            }
+            _ => Ok(self.module.target_config().pointer_bytes() as usize), // Default to pointer size
+        }
+    }
+    
+    /// Get the alignment requirement of a type
+    fn type_alignment(&self, ty: &HirType) -> CompilerResult<usize> {
+        match ty {
+            HirType::Void => Ok(1),
+            HirType::Bool | HirType::I8 | HirType::U8 => Ok(1),
+            HirType::I16 | HirType::U16 => Ok(2),
+            HirType::I32 | HirType::U32 | HirType::F32 => Ok(4),
+            HirType::I64 | HirType::U64 | HirType::F64 => Ok(8),
+            HirType::I128 | HirType::U128 => Ok(16),
+            HirType::Ptr(_) => Ok(self.module.target_config().pointer_bytes() as usize),
+            HirType::Array(elem_ty, _) => self.type_alignment(elem_ty),
+            HirType::Struct(struct_ty) => {
+                if struct_ty.packed {
+                    Ok(1)
+                } else {
+                    // Struct alignment is the maximum of field alignments
+                    let mut max_align = 1;
+                    for field_ty in &struct_ty.fields {
+                        max_align = max_align.max(self.type_alignment(field_ty)?);
+                    }
+                    Ok(max_align)
+                }
+            }
+            HirType::Union(_) => {
+                let layout = self.calculate_union_layout(ty)?;
+                Ok(layout.alignment as usize)
+            }
+            HirType::Closure(_) => {
+                let layout = self.calculate_closure_layout(ty)?;
+                Ok(layout.alignment as usize)
+            }
+            _ => Ok(self.module.target_config().pointer_bytes() as usize),
+        }
+    }
+
+    /// Calculate union layout (discriminant + largest variant)
+    fn calculate_union_layout(&self, union_ty: &HirType) -> CompilerResult<StructLayout> {
+        if let HirType::Union(union_def) = union_ty {
+            let discriminant_size = self.type_size(union_def.discriminant_type.as_ref())? as u32;
+            let discriminant_align = self.type_alignment(union_def.discriminant_type.as_ref())? as u32;
+            
+            if union_def.is_c_union {
+                // C-style union: no discriminant, just largest variant
+                let mut max_size = 0u32;
+                let mut max_align = 1u32;
+                
+                for variant in &union_def.variants {
+                    let variant_size = self.type_size(&variant.ty)? as u32;
+                    let variant_align = self.type_alignment(&variant.ty)? as u32;
+                    max_size = max_size.max(variant_size);
+                    max_align = max_align.max(variant_align);
+                }
+                
+                Ok(StructLayout {
+                    field_offsets: vec![0], // Single field at offset 0
+                    total_size: max_size,
+                    alignment: max_align,
+                })
+            } else {
+                // Tagged union: discriminant + data
+                let mut max_variant_size = 0u32;
+                let mut max_variant_align = 1u32;
+                
+                for variant in &union_def.variants {
+                    let variant_size = self.type_size(&variant.ty)? as u32;
+                    let variant_align = self.type_alignment(&variant.ty)? as u32;
+                    max_variant_size = max_variant_size.max(variant_size);
+                    max_variant_align = max_variant_align.max(variant_align);
+                }
+                
+                // Layout: [discriminant][padding][data]
+                let data_align = max_variant_align.max(discriminant_align);
+                let data_offset = (discriminant_size + data_align - 1) & !(data_align - 1);
+                let total_size = (data_offset + max_variant_size + data_align - 1) & !(data_align - 1);
+                
+                Ok(StructLayout {
+                    field_offsets: vec![0, data_offset], // [discriminant_offset, data_offset]
+                    total_size,
+                    alignment: data_align,
+                })
+            }
+        } else {
+            Err(CompilerError::Backend("Expected union type".into()))
+        }
+    }
+
+    /// Calculate closure layout (function pointer + captured values)
+    fn calculate_closure_layout(&self, closure_ty: &HirType) -> CompilerResult<StructLayout> {
+        if let HirType::Closure(closure_def) = closure_ty {
+            let ptr_size = self.module.target_config().pointer_bytes() as u32;
+            let ptr_align = ptr_size; // Pointer alignment equals pointer size
+            
+            let mut offset = ptr_size; // Start after function pointer
+            let mut field_offsets = vec![0]; // Function pointer at offset 0
+            let mut max_align = ptr_align;
+            
+            for capture in &closure_def.captures {
+                let capture_size = self.type_size(&capture.ty)? as u32;
+                let capture_align = self.type_alignment(&capture.ty)? as u32;
+                
+                max_align = max_align.max(capture_align);
+                
+                // Align offset to capture alignment
+                offset = (offset + capture_align - 1) & !(capture_align - 1);
+                field_offsets.push(offset);
+                offset += capture_size;
+            }
+            
+            // Align total size to closure alignment
+            let total_size = (offset + max_align - 1) & !(max_align - 1);
+            
+            Ok(StructLayout {
+                field_offsets,
+                total_size,
+                alignment: max_align,
+            })
+        } else {
+            Err(CompilerError::Backend("Expected closure type".into()))
+        }
+    }
+}
+
+impl HirType {
+    #[allow(dead_code)]
+    fn is_float(&self) -> bool {
+        matches!(self, HirType::F32 | HirType::F64)
+    }
+    
+    #[allow(dead_code)]
+    fn is_signed(&self) -> bool {
+        matches!(self, HirType::I8 | HirType::I16 | HirType::I32 | HirType::I64 | HirType::I128)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_cranelift_backend_creation() {
+        let backend = CraneliftBackend::new();
+        assert!(backend.is_ok());
+    }
+}

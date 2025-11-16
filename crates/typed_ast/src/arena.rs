@@ -1,0 +1,334 @@
+//! # Arena-based Memory Management
+//! 
+//! Provides efficient memory management for TypedAST nodes using string interning.
+//! This approach significantly reduces memory usage and improves performance by:
+//! - Deduplicating strings through interning
+//! - Enabling efficient string comparison and storage
+//! - Supporting serialization and deserialization
+
+use std::collections::HashMap;
+use std::fmt;
+use std::hash::Hash;
+use string_interner::{StringInterner, DefaultBackend, Symbol as SymbolTrait};
+use serde::{Deserialize, Serialize};
+
+/// Symbol type used for string interning
+pub type Symbol = string_interner::DefaultSymbol;
+
+/// A symbol representing an interned string
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InternedString(Symbol);
+
+impl InternedString {
+    /// Create a new interned string symbol (internal use only)
+    pub(crate) fn new(symbol: Symbol) -> Self {
+        Self(symbol)
+    }
+    
+    /// Create from a raw symbol (for testing)
+    pub fn from_symbol(symbol: Symbol) -> Self {
+        Self(symbol)
+    }
+    
+    /// Get the underlying symbol
+    pub fn symbol(&self) -> Symbol {
+        self.0
+    }
+}
+
+// Custom serialization for InternedString
+impl Serialize for InternedString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Serialize as the underlying symbol index
+        self.0.to_usize().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InternedString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Deserialize from the symbol index
+        let index = usize::deserialize(deserializer)?;
+        Ok(InternedString(Symbol::try_from_usize(index).unwrap()))
+    }
+}
+
+impl fmt::Display for InternedString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "InternedString({:?})", self.0)
+    }
+}
+
+/// Arena-based memory manager for strings and identifiers
+pub struct AstArena {
+    /// String interner for deduplicating string literals
+    string_interner: StringInterner<DefaultBackend>,
+    
+    /// Statistics for memory usage tracking
+    stats: ArenaStatistics,
+}
+
+impl fmt::Debug for AstArena {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AstArena")
+            .field("interned_strings", &self.string_interner.len())
+            .field("stats", &self.stats)
+            .finish()
+    }
+}
+
+impl AstArena {
+    /// Create a new AST arena with default capacity
+    pub fn new() -> Self {
+        Self {
+            string_interner: StringInterner::new(),
+            stats: ArenaStatistics::default(),
+        }
+    }
+    
+    /// Create a new AST arena with specified initial capacity
+    pub fn with_capacity(_nodes: usize, _strings: usize) -> Self {
+        Self {
+            string_interner: StringInterner::new(),
+            stats: ArenaStatistics::default(),
+        }
+    }
+    
+    /// Intern a string and return its symbol
+    pub fn intern_string(&mut self, string: impl AsRef<str>) -> InternedString {
+        let symbol = self.string_interner.get_or_intern(string.as_ref());
+        
+        // Update statistics
+        if self.string_interner.len() > self.stats.max_interned_strings.load(std::sync::atomic::Ordering::Relaxed) {
+            self.stats.max_interned_strings.store(
+                self.string_interner.len(),
+                std::sync::atomic::Ordering::Relaxed
+            );
+        }
+        
+        InternedString::new(symbol)
+    }
+    
+    /// Resolve an interned string back to its value
+    pub fn resolve_string(&self, interned: InternedString) -> Option<&str> {
+        self.string_interner.resolve(interned.symbol())
+    }
+    
+    /// Get statistics about arena usage
+    pub fn statistics(&self) -> &ArenaStatistics {
+        &self.stats
+    }
+    
+    /// Get the number of interned strings
+    pub fn interned_string_count(&self) -> usize {
+        self.string_interner.len()
+    }
+    
+    /// Clear statistics (arena cannot be cleared once allocated)
+    pub fn clear_stats(&mut self) {
+        // Note: We can't actually clear the typed_arena::Arena as it doesn't support it
+        // StringInterner also doesn't support clearing in this version
+        self.stats.reset();
+    }
+    
+    /// Estimate memory usage in bytes
+    pub fn estimated_memory_usage(&self) -> MemoryUsage {
+        let strings_size = self.string_interner.len() * 16; // Rough estimate
+        
+        MemoryUsage {
+            nodes_bytes: 0, // No longer storing nodes in arena
+            strings_bytes: strings_size,
+            total_bytes: strings_size,
+        }
+    }
+}
+
+impl Default for AstArena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Statistics about arena usage
+#[derive(Debug, Default)]
+pub struct ArenaStatistics {
+    /// Maximum number of interned strings seen
+    pub max_interned_strings: std::sync::atomic::AtomicUsize,
+    
+    /// Number of times strings were deduplicated
+    pub string_dedup_count: std::sync::atomic::AtomicUsize,
+}
+
+impl ArenaStatistics {
+    /// Reset all statistics
+    pub fn reset(&self) {
+        self.max_interned_strings.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.string_dedup_count.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+    
+    /// Get current statistics as a snapshot
+    pub fn snapshot(&self) -> ArenaStatsSnapshot {
+        ArenaStatsSnapshot {
+            max_interned_strings: self.max_interned_strings.load(std::sync::atomic::Ordering::Relaxed),
+            string_dedup_count: self.string_dedup_count.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
+/// Snapshot of arena statistics
+#[derive(Debug, Clone, Copy)]
+pub struct ArenaStatsSnapshot {
+    pub max_interned_strings: usize,
+    pub string_dedup_count: usize,
+}
+
+/// Memory usage information
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryUsage {
+    pub nodes_bytes: usize,
+    pub strings_bytes: usize,
+    pub total_bytes: usize,
+}
+
+impl fmt::Display for MemoryUsage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "MemoryUsage {{ nodes: {} bytes, strings: {} bytes, total: {} bytes }}", 
+               self.nodes_bytes, self.strings_bytes, self.total_bytes)
+    }
+}
+
+/// Thread-safe arena manager for multi-threaded environments
+pub struct ThreadSafeArenaManager {
+    arenas: std::sync::RwLock<HashMap<std::thread::ThreadId, AstArena>>,
+}
+
+impl ThreadSafeArenaManager {
+    /// Create a new thread-safe arena manager
+    pub fn new() -> Self {
+        Self {
+            arenas: std::sync::RwLock::new(HashMap::new()),
+        }
+    }
+    
+    /// Get or create an arena for the current thread
+    pub fn get_arena(&self) -> std::sync::RwLockWriteGuard<HashMap<std::thread::ThreadId, AstArena>> {
+        let thread_id = std::thread::current().id();
+        let mut arenas = self.arenas.write().unwrap();
+        
+        if !arenas.contains_key(&thread_id) {
+            arenas.insert(thread_id, AstArena::new());
+        }
+        
+        arenas
+    }
+    
+    /// Get global statistics across all threads
+    pub fn global_statistics(&self) -> ArenaStatsSnapshot {
+        let arenas = self.arenas.read().unwrap();
+        let mut total_strings = 0;
+        let mut total_dedup = 0;
+        
+        for arena in arenas.values() {
+            let stats = arena.statistics().snapshot();
+            total_strings += stats.max_interned_strings;
+            total_dedup += stats.string_dedup_count;
+        }
+        
+        ArenaStatsSnapshot {
+            max_interned_strings: total_strings,
+            string_dedup_count: total_dedup,
+        }
+    }
+    
+    /// Clean up arenas for dead threads
+    pub fn cleanup_dead_threads(&self) {
+        let mut arenas = self.arenas.write().unwrap();
+        let current_thread_id = std::thread::current().id();
+        
+        // Note: This is a simplified cleanup - in practice, you'd need a more
+        // sophisticated approach to track which threads are still alive
+        arenas.retain(|thread_id, _| *thread_id == current_thread_id);
+    }
+}
+
+impl Default for ThreadSafeArenaManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Utility functions for working with arenas
+pub mod utils {
+    use super::*;
+    
+    /// Calculate memory savings from string interning
+    pub fn calculate_string_savings(original_strings: &[String], interned_count: usize) -> usize {
+        let original_size: usize = original_strings.iter().map(|s| s.len()).sum();
+        let interned_size = interned_count * std::mem::size_of::<InternedString>();
+        
+        if original_size > interned_size {
+            original_size - interned_size
+        } else {
+            0
+        }
+    }
+    
+    /// Estimate optimal arena capacity based on expected usage
+    pub fn estimate_arena_capacity(estimated_nodes: usize, estimated_strings: usize) -> (usize, usize) {
+        // Add 20% buffer to avoid frequent reallocations
+        let node_capacity = (estimated_nodes as f64 * 1.2) as usize;
+        let string_capacity = (estimated_strings as f64 * 1.2) as usize;
+        
+        (node_capacity, string_capacity)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_string_interning() {
+        let mut arena = AstArena::new();
+        
+        let str1 = arena.intern_string("hello");
+        let str2 = arena.intern_string("hello");
+        let str3 = arena.intern_string("world");
+        
+        // Same strings should have same symbol
+        assert_eq!(str1, str2);
+        assert_ne!(str1, str3);
+        
+        // Should be able to resolve back
+        assert_eq!(arena.resolve_string(str1), Some("hello"));
+        assert_eq!(arena.resolve_string(str3), Some("world"));
+    }
+    
+    #[test]
+    fn test_memory_usage_estimation() {
+        let mut arena = AstArena::new();
+        
+        // Intern some strings
+        arena.intern_string("hello");
+        arena.intern_string("world");
+        arena.intern_string("foo");
+        
+        let usage = arena.estimated_memory_usage();
+        assert!(usage.strings_bytes > 0);
+        assert_eq!(usage.total_bytes, usage.strings_bytes);
+    }
+    
+    #[test]
+    fn test_capacity_estimation() {
+        let (nodes, strings) = utils::estimate_arena_capacity(100, 50);
+        
+        // Should add buffer
+        assert!(nodes > 100);
+        assert!(strings > 50);
+    }
+}

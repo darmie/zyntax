@@ -1,0 +1,521 @@
+// Integration tests for trait bound constraint system
+
+use zyntax_typed_ast::type_system::*;
+use zyntax_typed_ast::constraint_solver::{ConstraintSolver, Constraint, SolverError, Substitution};
+use zyntax_typed_ast::arena::AstArena;
+use zyntax_typed_ast::source::Span;
+
+#[test]
+fn test_basic_trait_implementation_setup() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    // Test that standard traits are properly registered
+    assert!(env.get_trait(arena.intern_string("Clone")).is_some());
+    assert!(env.get_trait(arena.intern_string("Display")).is_some());
+    assert!(env.get_trait(arena.intern_string("Send")).is_some());
+    assert!(env.get_trait(arena.intern_string("Sync")).is_some());
+}
+
+#[test]
+fn test_trait_definition_with_methods() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    // Test Clone trait has the expected clone method
+    let clone_trait = env.get_trait(arena.intern_string("Clone")).unwrap();
+    assert_eq!(clone_trait.name, arena.intern_string("Clone"));
+    assert_eq!(clone_trait.methods.len(), 1);
+    assert_eq!(clone_trait.methods[0].name, arena.intern_string("clone"));
+    assert!(clone_trait.is_object_safe);
+}
+
+#[test]
+fn test_trait_definition_with_associated_types() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    // Test Iterator trait has associated Item type
+    let iterator_trait = env.get_trait(env.standard_traits().iterator).unwrap();
+    assert_eq!(iterator_trait.associated_types.len(), 1);
+    assert_eq!(iterator_trait.associated_types[0].name, arena.intern_string("Item"));
+    assert!(!iterator_trait.is_object_safe); // Has associated types
+}
+
+#[test]
+fn test_trait_hierarchy_and_super_traits() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    // Create a trait with super-traits
+    let trait_def = TraitDef {
+        name: arena.intern_string("MyTrait"),
+        type_params: vec![],
+        super_traits: vec![
+            Type::Named {
+                name: arena.intern_string("Clone"),
+                type_args: vec![],
+            },
+            Type::Named {
+                name: arena.intern_string("Display"),
+                type_args: vec![],
+            },
+        ],
+        methods: vec![],
+        associated_types: vec![],
+        is_object_safe: true,
+        span: Span::new(0, 0),
+    };
+    
+    env.define_trait(trait_def);
+    
+    // Test super-trait resolution
+    let super_traits = env.get_super_traits(arena.intern_string("MyTrait"));
+    assert_eq!(super_traits.len(), 2);
+    assert!(super_traits.contains(&arena.intern_string("Clone")));
+    assert!(super_traits.contains(&arena.intern_string("Display")));
+}
+
+#[test]
+fn test_trait_implementation_registration() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    // Create a custom implementation
+    let impl_def = ImplDef {
+        trait_name: arena.intern_string("Display"),
+        for_type: Type::Named {
+            name: arena.intern_string("MyStruct"),
+            type_args: vec![],
+        },
+        type_args: vec![],
+        methods: vec![],
+        associated_types: std::collections::HashMap::new(),
+        where_clause: vec![],
+        span: Span::new(0, 0),
+    };
+    
+    env.define_impl(impl_def);
+    
+    // Test implementation lookup
+    let my_struct_type = Type::Named {
+        name: arena.intern_string("MyStruct"),
+        type_args: vec![],
+    };
+    
+    assert!(env.type_implements_trait(&my_struct_type, arena.intern_string("Display")));
+}
+
+#[test]
+fn test_constraint_solver_trait_bounds() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Test deferred constraint on type variable
+    let type_var = solver.fresh_type_var();
+    let display_trait = arena.intern_string("Display");
+    
+    solver.add_constraint(Constraint::TraitBound(type_var, display_trait, span));
+    
+    let result = solver.solve();
+    assert!(result.is_ok(), "Type variable trait bounds should be deferred successfully");
+}
+
+#[test]
+fn test_multiple_trait_bounds_on_same_type() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Test multiple trait bounds: T: Clone + Display + Send
+    let type_var = solver.fresh_type_var();
+    
+    solver.add_constraint(Constraint::TraitBound(
+        type_var.clone(),
+        arena.intern_string("Clone"),
+        span,
+    ));
+    solver.add_constraint(Constraint::TraitBound(
+        type_var.clone(),
+        arena.intern_string("Display"),
+        span,
+    ));
+    solver.add_constraint(Constraint::TraitBound(
+        type_var,
+        arena.intern_string("Send"),
+        span,
+    ));
+    
+    let result = solver.solve();
+    assert!(result.is_ok(), "Multiple trait bounds should be handled correctly");
+}
+
+#[test]
+fn test_trait_bound_error_reporting() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Test error when unknown trait is referenced
+    let unknown_trait = arena.intern_string("UnknownTrait");
+    solver.add_constraint(Constraint::TraitBound(
+        Type::Primitive(PrimitiveType::I32),
+        unknown_trait,
+        span,
+    ));
+    
+    let result = solver.solve();
+    assert!(result.is_err(), "Unknown trait should cause constraint solving to fail");
+    
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        // Should have either TraitNotImplemented or UnknownTrait error
+        assert!(errors.iter().any(|e| matches!(
+            e, 
+            SolverError::TraitNotImplemented { .. } | SolverError::UnknownTrait { .. }
+        )));
+    }
+}
+
+#[test]
+fn test_trait_bound_with_type_unification() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Create type variable, unify it with i32, then add trait bound
+    let type_var = solver.fresh_type_var();
+    
+    // First unify the type variable with i32
+    solver.add_constraint(Constraint::Equal(
+        type_var.clone(),
+        Type::Primitive(PrimitiveType::I32),
+        span,
+    ));
+    
+    // Then add a trait bound
+    solver.add_constraint(Constraint::TraitBound(
+        type_var,
+        arena.intern_string("Display"),
+        span,
+    ));
+    
+    let result = solver.solve();
+    // This exercises the unification + trait bound interaction
+    // Result depends on whether i32 is set up to implement Display
+    println!("Unification + trait bound result: {:?}", result);
+}
+
+#[test]
+fn test_constraint_application_with_substitution() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Test that trait bound constraints are properly transformed by substitution
+    let type_var = solver.fresh_type_var();
+    let display_trait = arena.intern_string("Display");
+    
+    let constraint = Constraint::TraitBound(type_var.clone(), display_trait, span);
+    
+    // Create a substitution
+    let mut subst = Substitution::new();
+    subst.bind(
+        if let Type::TypeVar(tv) = &type_var { tv.id } else { panic!("Expected type var") },
+        Type::Primitive(PrimitiveType::I32),
+    );
+    
+    // Apply substitution to constraint
+    let transformed = solver.apply_subst_to_constraint(&subst, constraint);
+    
+    if let Constraint::TraitBound(ty, trait_name, _) = transformed {
+        assert_eq!(ty, Type::Primitive(PrimitiveType::I32));
+        assert_eq!(trait_name, display_trait);
+    } else {
+        panic!("Expected trait bound constraint");
+    }
+}
+
+#[test]
+fn test_primitive_type_trait_checking() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let span = Span::new(0, 0);
+    
+    // Test different primitive types with different traits
+    let test_cases = vec![
+        (PrimitiveType::I32, "Display"),
+        (PrimitiveType::String, "Display"),
+        (PrimitiveType::Bool, "Display"),
+        (PrimitiveType::F64, "Display"),
+    ];
+    
+    for (prim_type, trait_name) in test_cases {
+        let mut solver = ConstraintSolver::with_type_env(env.clone());
+        
+        solver.add_constraint(Constraint::TraitBound(
+            Type::Primitive(prim_type),
+            arena.intern_string(trait_name),
+            span,
+        ));
+        
+        let result = solver.solve();
+        println!("{:?} implements {}: {:?}", prim_type, trait_name, result.is_ok());
+    }
+}
+
+#[test]
+fn test_multi_trait_bounds_verification() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Create a type variable with multiple trait bounds: T: Clone + Display + Send
+    let type_var = solver.fresh_type_var();
+    
+    solver.add_constraint(Constraint::TraitBound(
+        type_var.clone(),
+        arena.intern_string("Clone"),
+        span,
+    ));
+    solver.add_constraint(Constraint::TraitBound(
+        type_var.clone(),
+        arena.intern_string("Display"),
+        span,
+    ));
+    solver.add_constraint(Constraint::TraitBound(
+        type_var.clone(),
+        arena.intern_string("Send"),
+        span,
+    ));
+    
+    // Now unify with i32 - this should check all trait bounds
+    solver.add_constraint(Constraint::Equal(
+        type_var,
+        Type::Primitive(PrimitiveType::I32),
+        span,
+    ));
+    
+    let result = solver.solve();
+    // Result depends on whether i32 implements all three traits
+    println!("Multi-trait bound verification result: {:?}", result.is_ok());
+}
+
+#[test]
+fn test_type_var_unification_with_merged_bounds() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Create two type variables with different bounds
+    let type_var1 = solver.fresh_type_var();
+    let type_var2 = solver.fresh_type_var();
+    
+    // T1: Clone
+    solver.add_constraint(Constraint::TraitBound(
+        type_var1.clone(),
+        arena.intern_string("Clone"),
+        span,
+    ));
+    
+    // T2: Display
+    solver.add_constraint(Constraint::TraitBound(
+        type_var2.clone(),
+        arena.intern_string("Display"),
+        span,
+    ));
+    
+    // Unify T1 = T2 (should merge bounds: T: Clone + Display)
+    solver.add_constraint(Constraint::Equal(
+        type_var1.clone(),
+        type_var2.clone(),
+        span,
+    ));
+    
+    // Then unify with a concrete type
+    solver.add_constraint(Constraint::Equal(
+        type_var1,
+        Type::Primitive(PrimitiveType::I32),
+        span,
+    ));
+    
+    let result = solver.solve();
+    // Should verify both Clone and Display for i32
+    println!("Merged bounds verification result: {:?}", result.is_ok());
+}
+
+#[test]
+fn test_insufficient_trait_implementation_error() {
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    let mut solver = ConstraintSolver::with_type_env(env);
+    let span = Span::new(0, 0);
+    
+    // Create a custom type that doesn't implement Display
+    let custom_type = Type::Named {
+        name: arena.intern_string("CustomType"),
+        type_args: vec![],
+    };
+    
+    // Add trait bound: CustomType: Display
+    solver.add_constraint(Constraint::TraitBound(
+        custom_type,
+        arena.intern_string("Display"),
+        span,
+    ));
+    
+    let result = solver.solve();
+    assert!(result.is_err(), "Should fail when type doesn't implement required trait");
+    
+    if let Err(errors) = result {
+        assert!(!errors.is_empty());
+        // Should have trait not implemented error
+        assert!(errors.iter().any(|e| matches!(
+            e, 
+            SolverError::TraitNotImplemented { .. }
+        )));
+    }
+}
+
+#[test]
+fn test_comprehensive_multi_trait_bounds_with_method_calls() {
+    use zyntax_typed_ast::type_checker::TypeChecker;
+    use zyntax_typed_ast::typed_ast::*;
+    
+    let mut arena = AstArena::new();
+    let mut env = TypeEnvironment::new();
+    env.initialize_with_arena(&mut arena);
+    
+    // Create a type that implements both Display and Clone
+    let my_type = Type::Named {
+        name: arena.intern_string("MyType"),
+        type_args: vec![],
+    };
+    
+    // Register Display implementation for MyType
+    let display_impl = ImplDef {
+        trait_name: arena.intern_string("Display"),
+        for_type: my_type.clone(),
+        type_args: vec![],
+        methods: vec![],
+        associated_types: std::collections::HashMap::new(),
+        where_clause: vec![],
+        span: Span::new(0, 0),
+    };
+    env.define_impl(display_impl);
+    
+    // Register Clone implementation for MyType
+    let clone_impl = ImplDef {
+        trait_name: arena.intern_string("Clone"),
+        for_type: my_type.clone(),
+        type_args: vec![],
+        methods: vec![],
+        associated_types: std::collections::HashMap::new(),
+        where_clause: vec![],
+        span: Span::new(0, 0),
+    };
+    env.define_impl(clone_impl);
+    
+    let mut checker = TypeChecker::new(env);
+    let span = Span::new(0, 0);
+    
+    // Test case 1: Call to_string() method (from Display trait)
+    let obj_expr = typed_node(
+        TypedExpression::Variable(arena.intern_string("obj")),
+        my_type.clone(),
+        span
+    );
+    
+    let to_string_call = TypedMethodCall {
+        receiver: obj_expr.clone(),
+        method: arena.intern_string("to_string"),
+        positional_args: vec![],
+        named_args: vec![],
+        type_args: vec![],
+        span,
+    };
+    
+    let result1 = checker.check_method_call(&to_string_call);
+    assert!(result1.is_ok(), "to_string() should work for types implementing Display");
+    
+    if let Ok(return_type) = result1 {
+        assert_eq!(return_type, Type::Primitive(PrimitiveType::String));
+    }
+    
+    // Test case 2: Call clone() method (from Clone trait)
+    let clone_call = TypedMethodCall {
+        receiver: obj_expr.clone(),
+        method: arena.intern_string("clone"),
+        positional_args: vec![],
+        named_args: vec![],
+        type_args: vec![],
+        span,
+    };
+    
+    let result2 = checker.check_method_call(&clone_call);
+    assert!(result2.is_ok(), "clone() should work for types implementing Clone");
+    
+    if let Ok(return_type) = result2 {
+        assert_eq!(return_type, my_type);
+    }
+    
+    // Test case 3: Constraint solver with multi-trait bounds
+    let mut solver = ConstraintSolver::with_type_env(checker.inference.env.clone());
+    
+    // Create a type variable with multi-trait bounds: T: Display + Clone
+    let type_var = solver.fresh_type_var();
+    
+    solver.add_constraint(Constraint::TraitBound(
+        type_var.clone(),
+        arena.intern_string("Display"),
+        span,
+    ));
+    solver.add_constraint(Constraint::TraitBound(
+        type_var.clone(),
+        arena.intern_string("Clone"),
+        span,
+    ));
+    
+    // Unify with MyType (which implements both traits)
+    solver.add_constraint(Constraint::Equal(
+        type_var,
+        my_type,
+        span,
+    ));
+    
+    let solver_result = solver.solve();
+    assert!(solver_result.is_ok(), "Should successfully solve multi-trait bounds when type implements all required traits");
+    
+    println!("✅ Comprehensive multi-trait bounds test passed: Display + Clone traits verified successfully");
+}
