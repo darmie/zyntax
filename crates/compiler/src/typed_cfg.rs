@@ -10,8 +10,8 @@
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 use zyntax_typed_ast::{
-    InternedString,
-    typed_ast::{TypedBlock, TypedStatement, TypedNode, TypedExpression, typed_node},
+    InternedString, Span, Type,
+    typed_ast::{TypedBlock, TypedStatement, TypedNode, TypedExpression, typed_node, TypedPattern, TypedMatchArm},
 };
 use crate::hir::HirId;
 use crate::CompilerResult;
@@ -828,8 +828,6 @@ impl TypedCfgBuilder {
                         };
 
                         // Pattern check block
-                        // TODO: Actual pattern matching will be implemented in SSA layer
-                        // For now, we model guard conditions and unconditional jumps
                         if let Some(guard) = &arm.guard {
                             // With guard: conditional on guard expression
                             all_blocks.push(TypedBasicBlock {
@@ -843,14 +841,35 @@ impl TypedCfgBuilder {
                                 },
                             });
                         } else {
-                            // No guard: jump directly to body
-                            // (Pattern check will be handled by SSA builder)
-                            all_blocks.push(TypedBasicBlock {
-                                id: prev_pattern_id,
-                                label: None,
-                                statements: vec![],
-                                terminator: TypedTerminator::Jump(body_id),
-                            });
+                            // No guard: try to generate pattern check
+                            let pattern_check = self.generate_pattern_check(
+                                &match_stmt.scrutinee,
+                                &arm.pattern,
+                                arm.pattern.span,
+                            );
+
+                            if let Some(check_expr) = pattern_check {
+                                // Pattern requires runtime check (e.g., literal comparison)
+                                all_blocks.push(TypedBasicBlock {
+                                    id: prev_pattern_id,
+                                    label: None,
+                                    statements: vec![],
+                                    terminator: TypedTerminator::CondBranch {
+                                        condition: Box::new(check_expr),
+                                        true_target: body_id,
+                                        false_target: next_pattern_id,
+                                    },
+                                });
+                            } else {
+                                // Pattern always matches (wildcard, binding, or check handled by SSA)
+                                // Jump directly to body
+                                all_blocks.push(TypedBasicBlock {
+                                    id: prev_pattern_id,
+                                    label: None,
+                                    statements: vec![],
+                                    terminator: TypedTerminator::Jump(body_id),
+                                });
+                            }
                         }
 
                         // Body block - arm body is an expression
@@ -924,6 +943,75 @@ impl TypedCfgBuilder {
 
         eprintln!("[CFG] Returning: {} blocks, entry={:?}, exit={:?}", all_blocks.len(), entry_id, exit_id);
         Ok((all_blocks, entry_id, exit_id))
+    }
+
+    /// Generate a pattern check condition for simple patterns
+    /// Returns None if the pattern always matches (wildcard, simple binding)
+    fn generate_pattern_check(
+        &self,
+        scrutinee: &TypedNode<TypedExpression>,
+        pattern: &TypedNode<TypedPattern>,
+        span: Span,
+    ) -> Option<TypedNode<TypedExpression>> {
+        use zyntax_typed_ast::typed_ast::{TypedBinary, BinaryOp, TypedLiteral};
+
+        match &pattern.node {
+            // Wildcard always matches - no check needed
+            TypedPattern::Wildcard => None,
+
+            // Simple identifier binding on Optional type means "is Some" check
+            // For ?T types, we assume this is checking if the value exists
+            TypedPattern::Identifier { .. } => {
+                // Check if scrutinee is Optional type
+                match &scrutinee.ty {
+                    Type::Optional(_inner_ty) => {
+                        // For now, we can't easily check discriminant here at TypedAST level
+                        // The SSA builder will need to handle this
+                        // Return None to indicate unconditional match (value will be bound in SSA)
+                        None
+                    }
+                    _ => None, // Non-optional types: binding always succeeds
+                }
+            }
+
+            // Enum variant pattern: check discriminant
+            TypedPattern::Enum { variant, .. } => {
+                // For enum patterns like Some(x), we need to check the discriminant
+                // This requires extracting discriminant at runtime
+                // For now, return None and let SSA handle it
+                // TODO: Generate discriminant check expression
+                eprintln!("[CFG] TODO: Generate discriminant check for variant {:?}", variant);
+                None
+            }
+
+            // Literal pattern: check equality
+            TypedPattern::Literal(lit_pattern) => {
+                use zyntax_typed_ast::typed_ast::TypedLiteralPattern;
+                let lit_expr = match lit_pattern {
+                    TypedLiteralPattern::Integer(i) => TypedExpression::Literal(TypedLiteral::Integer(*i)),
+                    TypedLiteralPattern::Bool(b) => TypedExpression::Literal(TypedLiteral::Bool(*b)),
+                    _ => return None, // Other literals not yet supported
+                };
+
+                // Generate: scrutinee == literal
+                Some(typed_node(
+                    TypedExpression::Binary(TypedBinary {
+                        op: BinaryOp::Eq,
+                        left: Box::new(scrutinee.clone()),
+                        right: Box::new(typed_node(
+                            lit_expr,
+                            scrutinee.ty.clone(),
+                            span,
+                        )),
+                    }),
+                    Type::Primitive(zyntax_typed_ast::PrimitiveType::Bool),
+                    span,
+                ))
+            }
+
+            // Other patterns not yet implemented
+            _ => None,
+        }
     }
 }
 
