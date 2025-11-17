@@ -170,10 +170,13 @@ Zig provides an excellent foundation for testing Zyntax's compiler infrastructur
 - Nested expressions with proper precedence
 - Block expressions with implicit returns
 
-#### 🚧 Parsed But Needs Compiler Work
+#### ✅ All Core Features Working
 
-- **Logical Operators**: `and`/`or` parse correctly but need short-circuit evaluation
-- **Continue Statement**: Parses but causes infinite loop (CFG generation issue)
+All Zig language features are now fully functional including:
+
+- Logical operators with proper short-circuit evaluation
+- Continue statements in while loops
+- All control flow constructs
 
 ### Example: Zig to Native Compilation
 
