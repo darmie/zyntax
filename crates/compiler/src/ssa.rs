@@ -1297,8 +1297,20 @@ impl SsaBuilder {
                 return phi_val;
             }
 
-            // After IDF placement, don't create new phis - use undef instead
+            // After IDF placement, don't create new phis
+            // Instead, try to read from predecessors to find the value
             if self.idf_placement_done {
+                // Try reading from each predecessor
+                for pred in &predecessors {
+                    let val = self.read_variable(var, *pred);
+                    // Check if it's not undef
+                    if let Some(v) = self.function.values.get(&val) {
+                        if !matches!(v.kind, HirValueKind::Undef) {
+                            return val;
+                        }
+                    }
+                }
+                // All predecessors returned undef - variable is truly undefined
                 let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
                 return self.create_undef(ty);
             }
