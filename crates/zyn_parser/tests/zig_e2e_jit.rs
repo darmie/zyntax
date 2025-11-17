@@ -520,6 +520,20 @@ fn test_zig_jit_optional_type() {
     println!("[Zig E2E] ✓ test_optional() = {}", result);
 }
 
+#[test]
+fn test_zig_jit_error_union_type() {
+    let source = r#"
+        fn test_error_union() i32 {
+            var result: !i32 = 100;
+            return 2;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_error_union", vec![]);
+    assert_eq!(result, 2);
+    println!("[Zig E2E] ✓ test_error_union() = {}", result);
+}
+
 // ===== HELPER FUNCTIONS =====
 
 /// Compile and execute a Zig function with arguments
