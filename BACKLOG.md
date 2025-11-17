@@ -7,7 +7,9 @@
 - ✅ Fixed continue statement bug (SSA variable reads for unsealed blocks)
 - ✅ All Zig control flow features working (continue, break, while loops)
 - ✅ Logical operators with short-circuit evaluation
-- ✅ All 13 Zig E2E JIT tests passing
+- ✅ **Array literals and sized array types** (`[_]i32{10, 20, 30}`, `[N]T`)
+- ✅ Array indexing with proper type inference
+- ✅ 17/18 Zig E2E JIT tests passing (94.4%)
 
 ---
 
@@ -38,10 +40,16 @@
 ✅ 5 TypedAST validation tests
 ```
 
-**Phase 2: Zig Subset** 📋 **PLANNED** (Est. 4-6 weeks)
-- [ ] Implement Zig.zyn grammar (250-300 lines)
-- [ ] Support: structs, functions, control flow, generics
-- [ ] 50+ integration tests
+**Phase 2: Zig Subset** 🚧 **IN PROGRESS** (Est. 4-6 weeks)
+- [x] Implement zig.pest grammar (250+ lines) ✅
+- [x] Support: structs, functions, control flow ✅
+- [x] Variables, operators, type system ✅
+- [x] Logical operators with short-circuit evaluation ✅
+- [x] Continue/break statements ✅
+- [x] **Array literals and array types** ✅
+- [ ] String operations (grammar exists, needs implementation)
+- [ ] Generics and advanced type features
+- [x] 17/18 E2E JIT tests passing (94.4%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:
