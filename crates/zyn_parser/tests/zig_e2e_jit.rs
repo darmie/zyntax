@@ -5,8 +5,7 @@
 use zyn_parser::{ZigParser, ZigBuilder, zig_parser::Rule};
 use pest::Parser;
 use zyntax_typed_ast::{
-    TypedProgram, Type, PrimitiveType,
-    CallingConvention, Visibility,
+    TypedProgram,
     arena::AstArena,
 };
 use zyntax_compiler::{
@@ -151,7 +150,8 @@ fn test_zig_jit_factorial() {
 }
 
 #[test]
-#[ignore] // Logical operators need short-circuit evaluation in compiler
+// NOTE: Currently using bitwise AND/OR (not true short-circuit evaluation)
+// Both operands are always evaluated
 fn test_zig_jit_logical_operators() {
     let source = r#"
         fn test_and(a: i32, b: i32) i32 {
@@ -251,7 +251,10 @@ fn test_zig_jit_modulo() {
 }
 
 #[test]
-#[ignore] // Continue statement causes infinite loop - needs compiler debugging
+#[ignore] // Continue bug: SSA generates correct phis, but JIT execution hangs
+          // SSA investigation shows self-referencing phis are created correctly
+          // HIR test (continue_debug_test.rs) works, so issue is in TypedAST→HIR lowering
+          // TODO: Compare Cranelift IR from working HIR test vs. failing Zig test
 fn test_zig_jit_continue() {
     let source = r#"
         fn sum_odd_numbers(n: i32) i32 {

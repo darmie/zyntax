@@ -623,7 +623,7 @@ impl SsaBuilder {
             TypedStatement::If(if_stmt) => {
                 let condition = &if_stmt.condition;
                 let cond_value = self.translate_expression(block_id, condition)?;
-                
+
                 // The CFG builder already created the branches
                 let block = self.function.blocks.get_mut(&block_id).unwrap();
                 if block.successors.len() == 2 {
@@ -684,6 +684,36 @@ impl SsaBuilder {
                 // Special handling for assignment
                 if matches!(op, FrontendOp::Assign) {
                     return self.translate_assignment(block_id, left, right);
+                }
+
+                // Logical AND/OR operators - use bitwise operations for now
+                // TODO: Implement proper short-circuit evaluation
+                // For now, both sides are evaluated (no short-circuiting)
+                if matches!(op, FrontendOp::And | FrontendOp::Or) {
+                    let left_val = self.translate_expression(block_id, left)?;
+                    let right_val = self.translate_expression(block_id, right)?;
+                    let result_type = self.convert_type(&expr.ty);
+
+                    let hir_op = match op {
+                        FrontendOp::And => crate::hir::BinaryOp::And,  // Bitwise AND for now
+                        FrontendOp::Or => crate::hir::BinaryOp::Or,    // Bitwise OR for now
+                        _ => unreachable!(),
+                    };
+
+                    let result = self.create_value(result_type.clone(), HirValueKind::Instruction);
+                    let inst = HirInstruction::Binary {
+                        op: hir_op,
+                        result,
+                        ty: result_type,
+                        left: left_val,
+                        right: right_val,
+                    };
+
+                    self.add_instruction(block_id, inst);
+                    self.add_use(left_val, result);
+                    self.add_use(right_val, result);
+
+                    return Ok(result);
                 }
 
                 // Regular binary operations
@@ -1701,7 +1731,7 @@ impl SsaBuilder {
     fn create_value(&mut self, ty: HirType, kind: HirValueKind) -> HirId {
         self.function.create_value(ty, kind)
     }
-    
+
     /// Create an undefined value
     fn create_undef(&mut self, ty: HirType) -> HirId {
         self.create_value(ty, HirValueKind::Undef)
