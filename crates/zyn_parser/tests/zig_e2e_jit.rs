@@ -251,7 +251,6 @@ fn test_zig_jit_modulo() {
 }
 
 #[test]
-#[ignore] // Continue bug: investigating HIR structure differences
 fn test_zig_jit_continue() {
     let source = r#"
         fn sum_odd_numbers(n: i32) i32 {
@@ -288,9 +287,53 @@ fn test_zig_jit_continue() {
     // Print HIR structure
     println!("\n=== HIR Function Structure (Zig source - FAILING) ===");
     println!("Function: {:?}", func.name);
-    println!("Blocks:");
+    println!("Entry block: {:?}", func.entry_block);
+    println!("Values: {}", func.values.len());
+    println!("Blocks: {}", func.blocks.len());
+
+    // Print all defined values
+    println!("\nDefined values:");
+    for (val_id, val) in &func.values {
+        println!("  {:?} -> {:?}", val_id, val.kind);
+    }
+
+    // Check for undefined value references
+    use std::collections::HashSet;
+    let mut defined_values: HashSet<zyntax_compiler::hir::HirId> = func.values.keys().copied().collect();
+    let mut used_but_undefined = Vec::new();
+
     for (block_id, block) in &func.blocks {
-        println!("  Block {:?}:", block_id);
+        for phi in &block.phis {
+            for (val_id, _) in &phi.incoming {
+                if !defined_values.contains(val_id) {
+                    used_but_undefined.push((*val_id, format!("phi {:?} in block {:?}", phi.result, block_id)));
+                }
+            }
+        }
+        for inst in &block.instructions {
+            match inst {
+                zyntax_compiler::hir::HirInstruction::Binary { left, right, .. } => {
+                    if !defined_values.contains(left) {
+                        used_but_undefined.push((*left, format!("binary left in block {:?}", block_id)));
+                    }
+                    if !defined_values.contains(right) {
+                        used_but_undefined.push((*right, format!("binary right in block {:?}", block_id)));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if !used_but_undefined.is_empty() {
+        println!("\n⚠️  UNDEFINED VALUES DETECTED:");
+        for (val_id, location) in &used_but_undefined {
+            println!("  {:?} used in {}", val_id, location);
+        }
+    }
+
+    for (block_id, block) in &func.blocks {
+        println!("\n  Block {:?}:", block_id);
         println!("    Phis: {}", block.phis.len());
         for phi in &block.phis {
             println!("      {:?} = phi({:?})", phi.result, phi.incoming);
@@ -302,9 +345,24 @@ fn test_zig_jit_continue() {
         println!("    Terminator: {:?}", block.terminator);
     }
 
-    // Compile (this will hang, but we'll see the HIR structure first)
+    // Compile and dump Cranelift IR
     let mut backend = CraneliftBackend::new().expect("Failed to create backend");
-    backend.compile_module(&hir_module).expect("Failed to compile module");
+    match backend.compile_function(func.id, &func) {
+        Ok(_) => println!("\n✓ Compilation succeeded"),
+        Err(e) => {
+            println!("\n✗ Compilation failed: {:?}", e);
+            panic!("Compilation error: {:?}", e);
+        }
+    }
+
+    // Print Cranelift IR BEFORE finalization (after, it gets cleared!)
+    println!("\n=== Cranelift IR (Zig source - BEFORE finalize) ===");
+    println!("{}", backend.get_ir_string());
+
+    backend.finalize_definitions().expect("Failed to finalize");
+
+    println!("\n=== Cranelift IR (Zig source - AFTER finalize) ===");
+    println!("{}", backend.get_ir_string());
 
     let func_ptr = backend.get_function_ptr(func.id).expect("Function not found");
     let exec_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(func_ptr) };

@@ -200,9 +200,14 @@ impl CraneliftBackend {
     
     /// Compile a single function with hot-reload support (legacy, calls declare + compile_body)
     pub fn compile_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
+        eprintln!("[Backend] compile_function called for {:?}", id);
         self.declare_function(id, function)?;
+        eprintln!("[Backend] After declare_function, IR:");
+        eprintln!("{}", self.codegen_context.func);
         if !function.is_external {
             self.compile_function_body(id, function)?;
+            eprintln!("[Backend] After compile_function_body, IR:");
+            eprintln!("{}", self.codegen_context.func);
         }
         Ok(())
     }
@@ -359,6 +364,12 @@ impl CraneliftBackend {
 
             // Phase 1: Analyze function structure
             let block_order = self.compute_block_order(function);
+            eprintln!("[Cranelift] Block order: {:?} blocks", block_order.len());
+            eprintln!("[Cranelift] Entry block: {:?}", function.entry_block);
+            eprintln!("[Cranelift] Total blocks in function: {:?}", function.blocks.len());
+            for (i, block_id) in block_order.iter().enumerate() {
+                eprintln!("[Cranelift]   [{}] {:?}", i, block_id);
+            }
             let predecessor_map = self.build_predecessor_map(function);
 
             // Pre-compute type mappings for global references to avoid borrow checker issues
@@ -504,10 +515,14 @@ impl CraneliftBackend {
 
             // Phase 4: Process each block in order
             for hir_block_id in &block_order {
+                eprintln!("[Cranelift] Processing block {:?}", hir_block_id);
                 let cranelift_block = block_map[hir_block_id];
                 let hir_block = match function.blocks.get(hir_block_id) {
                     Some(b) => b,
-                    None => continue,
+                    None => {
+                        eprintln!("[Cranelift]   Block not found in function.blocks!");
+                        continue;
+                    }
                 };
 
                 // Switch to this block (entry block is already active from Phase 3)
@@ -1620,6 +1635,10 @@ impl CraneliftBackend {
             // Finalize builder
             builder.finalize();
         }
+
+        // Debug: Print IR after finalize
+        eprintln!("[Cranelift] IR after finalize (inside compile_function_body):");
+        eprintln!("{}", self.codegen_context.func);
 
         // Debug: Uncomment to dump IR for all functions
         // self.dump_cranelift_ir(&function.name.to_string());

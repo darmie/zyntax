@@ -1256,6 +1256,7 @@ impl SsaBuilder {
     
     /// Write a variable in SSA form
     fn write_variable(&mut self, var: InternedString, block: HirId, value: HirId) {
+        eprintln!("[SSA] write_variable({:?}, {:?}, {:?})", var, block, value);
         self.definitions
             .get_mut(&block)
             .unwrap()
@@ -1271,9 +1272,11 @@ impl SsaBuilder {
     /// Read a variable in SSA form
     fn read_variable(&mut self, var: InternedString, block: HirId) -> HirId {
         if let Some(&value) = self.definitions.get(&block).and_then(|defs| defs.get(&var)) {
+            eprintln!("[SSA] read_variable({:?}, {:?}) = {:?} (found in definitions)", var, block, value);
             return value;
         }
 
+        eprintln!("[SSA] read_variable({:?}, {:?}) - not in definitions, recursing", var, block);
         // Not defined in this block - need phi or recursive lookup
         self.read_variable_recursive(var, block)
     }
@@ -1356,10 +1359,13 @@ impl SsaBuilder {
             // Collect values from predecessors
             let mut incoming = Vec::new();
 
+            eprintln!("[SSA] Filling phi for var {:?} in block {:?} with {} predecessors", var, block, predecessors.len());
             for pred in predecessors {
                 let pred_val = self.read_variable(var, pred);
+                eprintln!("[SSA]   Phi incoming: ({:?}, {:?})", pred_val, pred);
                 incoming.push((pred_val, pred));
             }
+            eprintln!("[SSA] Phi filled with {} incoming values", incoming.len());
 
             // Check if phi is trivial
             let non_phi_vals: HashSet<_> = incoming.iter()
@@ -1420,11 +1426,16 @@ impl SsaBuilder {
             let preds = self.function.blocks[&block].predecessors.clone();
             let mut incoming = Vec::new();
 
+            eprintln!("[SSA] fill_incomplete_phi: var={:?}, block={:?}, phi_val={:?}, predecessors={}",
+                     var, block, phi_val, preds.len());
             for pred in preds {
                 // Use read_variable to get the value - this will traverse phis if needed
                 let pred_val = self.read_variable(var, pred);
+                eprintln!("[SSA]   from pred {:?} → value {:?}", pred, pred_val);
                 incoming.push((pred_val, pred));
             }
+
+            eprintln!("[SSA] Phi complete with {} incoming values", incoming.len());
 
             // Update the phi
             if let Some(phi) = self.function.blocks.get_mut(&block)

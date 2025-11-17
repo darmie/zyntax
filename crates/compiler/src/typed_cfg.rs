@@ -191,12 +191,15 @@ impl TypedCfgBuilder {
         block: &TypedBlock,
         entry_id: HirId,
     ) -> CompilerResult<(Vec<TypedBasicBlock>, HirId, HirId)> {
+        eprintln!("[CFG] split_at_control_flow: entry_id={:?}, statements={}", entry_id, block.statements.len());
         let mut all_blocks = Vec::new();
         let mut current_statements = Vec::new();
         let mut current_block_id = entry_id;
         let mut exit_id = entry_id;
 
-        for stmt in &block.statements {
+        for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+            eprintln!("[CFG]   stmt[{}]: {:?}, current_block={:?}", stmt_idx,
+                     std::mem::discriminant(&stmt.node), current_block_id);
             match &stmt.node {
                 TypedStatement::If(if_stmt) => {
                     // Create block for statements before If
@@ -281,10 +284,12 @@ impl TypedCfgBuilder {
                 }
 
                 TypedStatement::While(while_stmt) => {
+                    eprintln!("[CFG] While: closing current_block={:?} with {} stmts", current_block_id, current_statements.len());
                     // Create blocks for while loop
                     let header_id = self.new_block_id();
                     let body_id = self.new_block_id();
                     let after_id = self.new_block_id();
+                    eprintln!("[CFG] While: created header={:?}, body={:?}, after={:?}", header_id, body_id, after_id);
 
                     // Current block ends with jump to header
                     all_blocks.push(TypedBasicBlock {
@@ -310,7 +315,9 @@ impl TypedCfgBuilder {
                     self.loop_stack.push((header_id, after_id));
 
                     // Process body block
+                    eprintln!("[CFG] While: processing body with entry={:?}", body_id);
                     let (body_blocks, _, body_exit) = self.split_at_control_flow(&while_stmt.body, body_id)?;
+                    eprintln!("[CFG] While: body returned {} blocks, body_exit={:?}", body_blocks.len(), body_exit);
                     all_blocks.extend(body_blocks);
 
                     // Pop loop context
@@ -318,7 +325,9 @@ impl TypedCfgBuilder {
 
                     // Make body block jump back to header
                     if let Some(last_block) = all_blocks.iter_mut().rev().find(|b| b.id == body_exit) {
+                        eprintln!("[CFG] While: body_exit block has terminator: {:?}", last_block.terminator);
                         if matches!(last_block.terminator, TypedTerminator::Unreachable) {
+                            eprintln!("[CFG] While: setting body_exit to Jump(header)");
                             last_block.terminator = TypedTerminator::Jump(header_id);
                         }
                     }
@@ -327,6 +336,7 @@ impl TypedCfgBuilder {
                     current_statements = Vec::new();
                     current_block_id = after_id;
                     exit_id = after_id;
+                    eprintln!("[CFG] While: continuing with current_block={:?}", current_block_id);
                 }
 
                 TypedStatement::Loop(loop_stmt) => {
@@ -757,8 +767,10 @@ impl TypedCfgBuilder {
                 }
 
                 TypedStatement::Continue => {
+                    eprintln!("[CFG] Continue: current_block={:?} with {} stmts", current_block_id, current_statements.len());
                     // Continue jumps to loop header
                     if let Some(&(header_id, _exit_id)) = self.loop_stack.last() {
+                        eprintln!("[CFG] Continue: jumping to header={:?}", header_id);
                         all_blocks.push(TypedBasicBlock {
                             id: current_block_id,
                             label: None,
@@ -768,6 +780,7 @@ impl TypedCfgBuilder {
 
                         // Create a new unreachable block for any statements after continue
                         let unreachable_id = self.new_block_id();
+                        eprintln!("[CFG] Continue: created unreachable block={:?}", unreachable_id);
                         current_statements = Vec::new();
                         current_block_id = unreachable_id;
                     } else {
@@ -894,7 +907,10 @@ impl TypedCfgBuilder {
 
         // Always create a final block if we have a current_block_id that hasn't been added yet
         // This handles the case where control flow statements leave us with an empty continuation block
+        eprintln!("[CFG] End: current_block={:?}, current_statements={}, exit={:?}",
+                 current_block_id, current_statements.len(), exit_id);
         if !all_blocks.iter().any(|b| b.id == current_block_id) {
+            eprintln!("[CFG] End: creating final block with {} statements", current_statements.len());
             all_blocks.push(TypedBasicBlock {
                 id: current_block_id,
                 label: None,
@@ -902,8 +918,11 @@ impl TypedCfgBuilder {
                 terminator: TypedTerminator::Unreachable,
             });
             exit_id = current_block_id;
+        } else {
+            eprintln!("[CFG] End: current_block already exists, not creating");
         }
 
+        eprintln!("[CFG] Returning: {} blocks, entry={:?}, exit={:?}", all_blocks.len(), entry_id, exit_id);
         Ok((all_blocks, entry_id, exit_id))
     }
 }
