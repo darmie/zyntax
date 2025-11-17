@@ -225,7 +225,7 @@ cargo test --package zyn_parser
 # Run E2E JIT compilation tests
 cargo test --package zyn_parser --test zig_e2e_jit
 
-# Current status: 18/19 tests passing (94.7%)
+# Current status: 19/20 tests passing (95%)
 # One test ignored: array indexing in loops (known SSA issue)
 ```
 
@@ -240,10 +240,13 @@ cargo test --package zyn_parser --test zig_e2e_jit
   - Basic string literals: `"Hello, World!"`
   - Lowered to global constants (`*i8`)
   - String operations require stdlib integration (planned)
+- [x] **Optional types** ✅ (Nov 2025)
+  - Optional type syntax: `?T`
+  - Maps to TypedAST Optional type and HIR Option<T>
+  - Full Option operations require method call support (planned)
 - [ ] Function overloading
 - [ ] Generic functions with type parameters
 - [ ] Error unions (`!T` types)
-- [ ] Optional types (`?T`)
 - [ ] Slice types (`[]T` - grammar exists, needs runtime support)
 - [ ] Switch expressions
 - [ ] Comptime evaluation

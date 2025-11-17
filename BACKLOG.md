@@ -10,7 +10,8 @@
 - ✅ **Array literals and sized array types** (`[_]i32{10, 20, 30}`, `[N]T`)
 - ✅ Array indexing with proper type inference
 - ✅ **String literals** (`"Hello, World!"` lowered to global `*i8`)
-- ✅ 18/19 Zig E2E JIT tests passing (94.7%)
+- ✅ **Optional types** (`?T` syntax, maps to Option<T>)
+- ✅ 19/20 Zig E2E JIT tests passing (95%)
 
 ---
 
@@ -49,9 +50,11 @@
 - [x] Continue/break statements ✅
 - [x] **Array literals and array types** ✅
 - [x] **String literals** (basic support, lowered to `*i8` globals) ✅
+- [x] **Optional types** (`?T` syntax) ✅
 - [ ] String operations (needs stdlib integration via plugin system)
+- [ ] Error unions (`!T` types)
 - [ ] Generics and advanced type features
-- [x] 18/19 E2E JIT tests passing (94.7%) ✅
+- [x] 19/20 E2E JIT tests passing (95%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:
