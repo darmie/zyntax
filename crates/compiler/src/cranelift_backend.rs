@@ -3473,6 +3473,11 @@ impl CraneliftBackend {
                 ))
         }).collect()
     }
+
+    /// Get the Cranelift IR as a string (for debugging)
+    pub fn get_ir_string(&self) -> String {
+        format!("{}", self.codegen_context.func)
+    }
 }
 
 /// Helper function to get successors from a terminator

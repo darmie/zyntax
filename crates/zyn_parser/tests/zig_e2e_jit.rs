@@ -251,10 +251,7 @@ fn test_zig_jit_modulo() {
 }
 
 #[test]
-#[ignore] // Continue bug: SSA generates correct phis, but JIT execution hangs
-          // SSA investigation shows self-referencing phis are created correctly
-          // HIR test (continue_debug_test.rs) works, so issue is in TypedAST→HIR lowering
-          // TODO: Compare Cranelift IR from working HIR test vs. failing Zig test
+#[ignore] // Continue bug: investigating HIR structure differences
 fn test_zig_jit_continue() {
     let source = r#"
         fn sum_odd_numbers(n: i32) i32 {
@@ -272,7 +269,47 @@ fn test_zig_jit_continue() {
         }
     "#;
 
-    let result = compile_and_execute_zig(source, "sum_odd_numbers", vec![10]);
+    // Parse to TypedAST
+    let pairs = ZigParser::parse(Rule::program, source)
+        .expect("Failed to parse Zig source");
+    let mut builder = ZigBuilder::new();
+    let program = builder.build_program(pairs)
+        .expect("Failed to build TypedAST");
+
+    // Lower to HIR
+    let hir_module = lower_zig_program_to_hir(program, &builder);
+
+    // Find the function
+    let func_name_interned = builder.intern("sum_odd_numbers");
+    let func = hir_module.functions.values()
+        .find(|f| f.name == func_name_interned)
+        .expect("Function 'sum_odd_numbers' not found");
+
+    // Print HIR structure
+    println!("\n=== HIR Function Structure (Zig source - FAILING) ===");
+    println!("Function: {:?}", func.name);
+    println!("Blocks:");
+    for (block_id, block) in &func.blocks {
+        println!("  Block {:?}:", block_id);
+        println!("    Phis: {}", block.phis.len());
+        for phi in &block.phis {
+            println!("      {:?} = phi({:?})", phi.result, phi.incoming);
+        }
+        println!("    Instructions: {}", block.instructions.len());
+        for (idx, inst) in block.instructions.iter().enumerate() {
+            println!("      [{}] {:?}", idx, inst);
+        }
+        println!("    Terminator: {:?}", block.terminator);
+    }
+
+    // Compile (this will hang, but we'll see the HIR structure first)
+    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
+    backend.compile_module(&hir_module).expect("Failed to compile module");
+
+    let func_ptr = backend.get_function_ptr(func.id).expect("Function not found");
+    let exec_fn: extern "C" fn(i32) -> i32 = unsafe { std::mem::transmute(func_ptr) };
+
+    let result = exec_fn(10);
     assert_eq!(result, 25); // 1+3+5+7+9 = 25
     println!("[Zig E2E] ✓ sum_odd_numbers(10) = {}", result);
 }

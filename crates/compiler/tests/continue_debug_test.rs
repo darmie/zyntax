@@ -53,8 +53,13 @@ fn test_while_with_continue() {
     let mut backend = CraneliftBackend::new()
         .expect("Failed to create Cranelift backend");
 
+    println!("\n=== Compiling HIR to Cranelift IR ===");
     backend.compile_function(func_id, &func)
         .expect("Failed to compile function");
+
+    // Print the Cranelift IR
+    println!("\n=== Cranelift IR (HIR test - WORKING) ===");
+    println!("{}", backend.get_ir_string());
 
     backend.finalize_definitions()
         .expect("Failed to finalize definitions");
