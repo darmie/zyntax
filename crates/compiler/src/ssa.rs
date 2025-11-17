@@ -33,6 +33,8 @@ pub struct SsaBuilder {
     filled_blocks: HashSet<HirId>,
     /// Type registry for field lookups and type information
     type_registry: Arc<zyntax_typed_ast::TypeRegistry>,
+    /// Arena for interning strings
+    arena: Arc<std::sync::Mutex<zyntax_typed_ast::AstArena>>,
     /// Generated closure functions (collected during translation)
     closure_functions: Vec<HirFunction>,
     /// Function symbol table for resolving function references
@@ -239,6 +241,7 @@ impl SsaBuilder {
     pub fn new(
         function: HirFunction,
         type_registry: Arc<zyntax_typed_ast::TypeRegistry>,
+        arena: Arc<std::sync::Mutex<zyntax_typed_ast::AstArena>>,
         function_symbols: HashMap<InternedString, HirId>,
     ) -> Self {
         Self {
@@ -250,6 +253,7 @@ impl SsaBuilder {
             sealed_blocks: HashSet::new(),
             filled_blocks: HashSet::new(),
             type_registry,
+            arena,
             closure_functions: Vec::new(),
             function_symbols,
             string_globals: Vec::new(),
@@ -1890,6 +1894,60 @@ impl SsaBuilder {
                     Box::new(self.convert_type(element_type)),
                     size
                 )
+            },
+            Type::Optional(inner_ty) => {
+                // Convert Optional<T> to a tagged union: enum { None, Some(T) }
+                use crate::hir::{HirUnionType, HirUnionVariant};
+
+                let mut arena = self.arena.lock().unwrap();
+                let none_name = arena.intern_string("None");
+                let some_name = arena.intern_string("Some");
+                drop(arena);
+
+                HirType::Union(Box::new(HirUnionType {
+                    name: None,
+                    variants: vec![
+                        HirUnionVariant {
+                            name: none_name,
+                            ty: HirType::Void,
+                            discriminant: 0,
+                        },
+                        HirUnionVariant {
+                            name: some_name,
+                            ty: self.convert_type(inner_ty),
+                            discriminant: 1,
+                        },
+                    ],
+                    discriminant_type: Box::new(HirType::U32),
+                    is_c_union: false,
+                }))
+            },
+            Type::Result { ok_type, err_type } => {
+                // Convert Result<T, E> to a tagged union: enum { Ok(T), Err(E) }
+                use crate::hir::{HirUnionType, HirUnionVariant};
+
+                let mut arena = self.arena.lock().unwrap();
+                let ok_name = arena.intern_string("Ok");
+                let err_name = arena.intern_string("Err");
+                drop(arena);
+
+                HirType::Union(Box::new(HirUnionType {
+                    name: None,
+                    variants: vec![
+                        HirUnionVariant {
+                            name: ok_name,
+                            ty: self.convert_type(ok_type),
+                            discriminant: 0,
+                        },
+                        HirUnionVariant {
+                            name: err_name,
+                            ty: self.convert_type(err_type),
+                            discriminant: 1,
+                        },
+                    ],
+                    discriminant_type: Box::new(HirType::U32),
+                    is_c_union: false,
+                }))
             },
             _ => HirType::I64, // Default for complex types
         }

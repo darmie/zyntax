@@ -598,7 +598,12 @@ impl LoweringContext {
         let typed_cfg = typed_cfg_builder.build_from_block(body, hir_func.entry_block)?;
 
         // Convert to SSA form, processing TypedStatements to emit HIR instructions
-        let ssa_builder = SsaBuilder::new(hir_func, self.type_registry.clone(), self.symbols.functions.clone());
+        let ssa_builder = SsaBuilder::new(
+            hir_func,
+            self.type_registry.clone(),
+            self.arena.clone(),
+            self.symbols.functions.clone()
+        );
         let ssa = ssa_builder.build_from_typed_cfg(&typed_cfg)?;
 
         // Verify SSA properties
