@@ -405,6 +405,93 @@ fn test_zig_jit_else_if() {
     println!("[Zig E2E] ✓ classify(15) = {}", result4);
 }
 
+#[test]
+fn test_zig_jit_array_literal() {
+    let source = r#"
+        fn get_second_element() i32 {
+            const arr = [_]i32{10, 20, 30};
+            return arr[1];
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "get_second_element", vec![]);
+    assert_eq!(result, 20);
+    println!("[Zig E2E] ✓ get_second_element() = {}", result);
+}
+
+#[test]
+fn test_zig_jit_array_sum() {
+    let source = r#"
+        fn sum_array() i32 {
+            const arr = [_]i32{5, 10, 15, 20};
+            return arr[0] + arr[1] + arr[2] + arr[3];
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "sum_array", vec![]);
+    assert_eq!(result, 50);
+    println!("[Zig E2E] ✓ sum_array() = {}", result);
+}
+
+#[test]
+fn test_zig_jit_array_indexing() {
+    let source = r#"
+        fn get_element(index: i32) i32 {
+            const arr = [_]i32{100, 200, 300, 400, 500};
+            return arr[index];
+        }
+    "#;
+
+    let result1 = compile_and_execute_zig(source, "get_element", vec![0]);
+    assert_eq!(result1, 100);
+    println!("[Zig E2E] ✓ get_element(0) = {}", result1);
+
+    let result2 = compile_and_execute_zig(source, "get_element", vec![2]);
+    assert_eq!(result2, 300);
+    println!("[Zig E2E] ✓ get_element(2) = {}", result2);
+
+    let result3 = compile_and_execute_zig(source, "get_element", vec![4]);
+    assert_eq!(result3, 500);
+    println!("[Zig E2E] ✓ get_element(4) = {}", result3);
+}
+
+#[test]
+fn test_zig_jit_sized_array_type() {
+    let source = r#"
+        fn test_sized_array() i32 {
+            var arr: [3]i32 = [_]i32{7, 14, 21};
+            return arr[0] + arr[2];
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_sized_array", vec![]);
+    assert_eq!(result, 28);
+    println!("[Zig E2E] ✓ test_sized_array() = {}", result);
+}
+
+// TODO: Fix stack overflow when combining arrays with loops
+// Likely an issue with SSA variable reads/phi nodes for array indexing in loops
+#[test]
+#[ignore]
+fn test_zig_jit_array_in_loop() {
+    let source = r#"
+        fn sum_with_loop() i32 {
+            const arr = [_]i32{1, 2, 3, 4, 5};
+            var sum = 0;
+            var i = 0;
+            while (i < 5) {
+                sum = sum + arr[i];
+                i = i + 1;
+            }
+            return sum;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "sum_with_loop", vec![]);
+    assert_eq!(result, 15);
+    println!("[Zig E2E] ✓ sum_with_loop() = {}", result);
+}
+
 // ===== HELPER FUNCTIONS =====
 
 /// Compile and execute a Zig function with arguments

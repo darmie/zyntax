@@ -60,7 +60,7 @@ primitive_type = {
   | "void"
 }
 
-array_type   = { "[" ~ "]" ~ type_expr }
+array_type   = { "[" ~ integer_literal? ~ "]" ~ type_expr }
 pointer_type = { "*" ~ type_expr }
 
 // ===== Statements =====
@@ -153,6 +153,7 @@ literal = {
   | integer_literal
   | float_literal
   | string_literal
+  | array_literal
 }
 
 bool_literal    = { "true" | "false" }
@@ -160,6 +161,8 @@ integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
 float_literal   = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 string_literal  = { "\"" ~ string_inner ~ "\"" }
 string_inner    = @{ (!("\"" | "\\") ~ ANY)* }
+
+array_literal = { "[" ~ "_" ~ "]" ~ type_expr ~ "{" ~ (expr ~ ("," ~ expr)*)? ~ "}" }
 
 struct_literal = {
     identifier ~ "{" ~ struct_field_init? ~ ("," ~ struct_field_init)* ~ ","? ~ "}"

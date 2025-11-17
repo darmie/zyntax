@@ -488,11 +488,26 @@ impl ZigBuilder {
                 }
             }
             Rule::array_type => {
+                // Grammar: "[" ~ integer_literal? ~ "]" ~ type_expr
                 let mut inner_pairs = inner.into_inner();
-                let element_type = self.build_type_expr(inner_pairs.next().unwrap())?;
+
+                // First pair is either integer_literal (size) or type_expr
+                let first = inner_pairs.next().unwrap();
+                let (size, element_type) = if first.as_rule() == Rule::integer_literal {
+                    // Sized array: [N]T
+                    let size_value = first.as_str().parse::<u64>()
+                        .map_err(|_| BuildError::ParseNumber(first.as_str().to_string()))?;
+                    let elem_ty = self.build_type_expr(inner_pairs.next().unwrap())?;
+                    (Some(zyntax_typed_ast::ConstValue::UInt(size_value)), elem_ty)
+                } else {
+                    // Dynamic array: []T
+                    let elem_ty = self.build_type_expr(first)?;
+                    (None, elem_ty)
+                };
+
                 Ok(Type::Array {
                     element_type: Box::new(element_type),
-                    size: None, // Dynamic array []T
+                    size,
                     nullability: zyntax_typed_ast::NullabilityKind::NonNull,
                 })
             }
@@ -1032,9 +1047,14 @@ impl ZigBuilder {
                         // Array indexing: base[expr]
                         let index_expr = self.build_expression(first)?;
 
-                        // Determine element type (simplified - use i32 for now)
-                        // TODO: Proper element type lookup from array type
-                        let element_type = Type::Primitive(zyntax_typed_ast::PrimitiveType::I32);
+                        // Extract element type from array type
+                        let element_type = match &base.ty {
+                            Type::Array { element_type, .. } => (**element_type).clone(),
+                            _ => {
+                                // Not an array type - default to i32 for robustness
+                                Type::Primitive(zyntax_typed_ast::PrimitiveType::I32)
+                            }
+                        };
 
                         let index = TypedIndex {
                             object: Box::new(base),
@@ -1283,6 +1303,7 @@ impl ZigBuilder {
             Rule::integer_literal => self.build_integer_literal(inner, span),
             Rule::float_literal => self.build_float_literal(inner, span),
             Rule::string_literal => self.build_string_literal(inner, span),
+            Rule::array_literal => self.build_array_literal(inner, span),
             _ => Err(BuildError::UnexpectedRule {
                 expected: "literal".to_string(),
                 got: format!("{:?}", inner.as_rule()),
@@ -1321,6 +1342,36 @@ impl ZigBuilder {
 
         let text = inner.as_str();
         Ok(self.builder.string_literal(text, span))
+    }
+
+    fn build_array_literal(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedExpression>> {
+        // Grammar: "[" ~ "_" ~ "]" ~ type_expr ~ "{" ~ (expr ~ ("," ~ expr)*)? ~ "}"
+        // Note: Pest only returns parsed sub-rules, not literal tokens like "[", "_", "]", "{"
+        // So inner will be: [type_expr, expr, expr, ...]
+        let mut inner = pair.into_inner();
+
+        // First inner pair is the type_expr
+        let type_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing type in array literal".to_string())
+        })?;
+        let element_type = self.build_type_expr(type_pair)?;
+
+        // Remaining inner pairs are the array element expressions
+        let mut elements = Vec::new();
+        for expr_pair in inner {
+            let expr = self.build_expression(expr_pair)?;
+            elements.push(expr);
+        }
+
+        // Build the full array type with inferred size
+        let array_size = elements.len() as u64;
+        let array_type = Type::Array {
+            element_type: Box::new(element_type),
+            size: Some(zyntax_typed_ast::ConstValue::UInt(array_size)),
+            nullability: zyntax_typed_ast::NullabilityKind::NonNull,
+        };
+
+        Ok(self.builder.array_literal(elements, array_type, span))
     }
 
     // ===== Scope Management =====
