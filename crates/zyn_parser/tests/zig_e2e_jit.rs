@@ -506,6 +506,20 @@ fn test_zig_jit_string_literal() {
     println!("[Zig E2E] ✓ test_string() = {}", result);
 }
 
+#[test]
+fn test_zig_jit_optional_type() {
+    let source = r#"
+        fn test_optional() i32 {
+            var maybe_value: ?i32 = 42;
+            return 1;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_optional", vec![]);
+    assert_eq!(result, 1);
+    println!("[Zig E2E] ✓ test_optional() = {}", result);
+}
+
 // ===== HELPER FUNCTIONS =====
 
 /// Compile and execute a Zig function with arguments

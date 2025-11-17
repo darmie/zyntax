@@ -520,6 +520,14 @@ impl ZigBuilder {
                     nullability: zyntax_typed_ast::NullabilityKind::NonNull,
                 })
             }
+            Rule::optional_type => {
+                // Grammar: "?" ~ type_expr
+                let inner_type = self.build_type_expr(inner.into_inner().next().unwrap())?;
+
+                // In Zig, ?T is represented as Option<T>
+                // Using TypedAST's Optional type which maps to Option<T> in HIR
+                Ok(Type::Optional(Box::new(inner_type)))
+            }
             _ => Err(BuildError::UnexpectedRule {
                 expected: "type_expr".to_string(),
                 got: format!("{:?}", inner.as_rule()),

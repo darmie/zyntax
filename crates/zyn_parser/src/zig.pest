@@ -48,8 +48,9 @@ field_decl = { identifier ~ ":" ~ type_expr ~ "," }
 type_expr = {
     primitive_type
   | identifier              // Named type (struct name, type alias)
-  | array_type              // []T
+  | array_type              // []T or [N]T
   | pointer_type            // *T
+  | optional_type           // ?T
 }
 
 primitive_type = {
@@ -62,6 +63,7 @@ primitive_type = {
 
 array_type   = { "[" ~ integer_literal? ~ "]" ~ type_expr }
 pointer_type = { "*" ~ type_expr }
+optional_type = { "?" ~ type_expr }
 
 // ===== Statements =====
 
