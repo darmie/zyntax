@@ -225,7 +225,7 @@ cargo test --package zyn_parser
 # Run E2E JIT compilation tests
 cargo test --package zyn_parser --test zig_e2e_jit
 
-# Current status: 17/18 tests passing (94.4%)
+# Current status: 18/19 tests passing (94.7%)
 # One test ignored: array indexing in loops (known SSA issue)
 ```
 
@@ -236,7 +236,10 @@ cargo test --package zyn_parser --test zig_e2e_jit
   - Sized arrays: `[N]T`
   - Dynamic indexing: `arr[i]`
   - Known issue: Stack overflow when indexing arrays inside while loops
-- [ ] String literals and string type (grammar exists, needs full implementation)
+- [x] **String literals** ✅ (Nov 2025)
+  - Basic string literals: `"Hello, World!"`
+  - Lowered to global constants (`*i8`)
+  - String operations require stdlib integration (planned)
 - [ ] Function overloading
 - [ ] Generic functions with type parameters
 - [ ] Error unions (`!T` types)

@@ -9,7 +9,8 @@
 - ✅ Logical operators with short-circuit evaluation
 - ✅ **Array literals and sized array types** (`[_]i32{10, 20, 30}`, `[N]T`)
 - ✅ Array indexing with proper type inference
-- ✅ 17/18 Zig E2E JIT tests passing (94.4%)
+- ✅ **String literals** (`"Hello, World!"` lowered to global `*i8`)
+- ✅ 18/19 Zig E2E JIT tests passing (94.7%)
 
 ---
 
@@ -47,9 +48,10 @@
 - [x] Logical operators with short-circuit evaluation ✅
 - [x] Continue/break statements ✅
 - [x] **Array literals and array types** ✅
-- [ ] String operations (grammar exists, needs implementation)
+- [x] **String literals** (basic support, lowered to `*i8` globals) ✅
+- [ ] String operations (needs stdlib integration via plugin system)
 - [ ] Generics and advanced type features
-- [x] 17/18 E2E JIT tests passing (94.4%) ✅
+- [x] 18/19 E2E JIT tests passing (94.7%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:
