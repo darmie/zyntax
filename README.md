@@ -494,19 +494,32 @@ Experiment with advanced type system features:
 
 See [BACKLOG.md](BACKLOG.md) for detailed tasks.
 
-### Q1 2025: Reflaxe/Haxe Integration
-- ✅ Complete core compiler infrastructure
-- 🔄 Implement Reflaxe backend for Haxe language
+### Q4 2025 (Current): Core Stabilization & Bug Fixes
+
+- ✅ Zig parser with full control flow support (continue, break, while loops)
+- ✅ Fix SSA variable reads for unsealed blocks (continue statement bug)
+- ✅ Logical operators with short-circuit evaluation
+- 🔄 Complete array types and indexing
+- 🔄 String literals and string operations
+- 🔄 Fix remaining 4 test failures (280/284 passing)
+
+### Q1 2026: Production Features
+
+- 🔄 LLVM AOT backend completion
+- 🔄 Exception handling support (try/catch/finally)
+- 🔄 Complete I/O and networking standard library
+- 🔄 Advanced pattern matching features
+- 🔄 Generic functions with type parameters
+
+### Q2 2026: Ecosystem & Integration
+
+- 🔄 Complete Reflaxe/Haxe integration
 - 🔄 Run Haxe standard library through Zyntax
 - 🔄 Performance benchmarking vs existing targets
-
-### Q2 2025: Production Stability
 - 🔄 100% test pass rate
-- 🔄 Complete I/O and networking standard library
-- 🔄 LLVM AOT backend completion
-- 🔄 Exception handling support
 
-### Q3 2025: Developer Experience
+### Q3 2026: Developer Experience
+
 - 🔄 Language Server Protocol (LSP) implementation
 - 🔄 Package manager
 - 🔄 Comprehensive documentation and tutorials

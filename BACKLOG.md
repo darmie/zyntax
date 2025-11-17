@@ -1,7 +1,13 @@
 # Zyntax Compiler - Development Backlog
 
-**Last Updated**: January 15, 2025
+**Last Updated**: November 17, 2025
 **Current Status**: Production-Ready Core (98.6% tests passing, 280/284)
+
+**Recent Progress**:
+- ✅ Fixed continue statement bug (SSA variable reads for unsealed blocks)
+- ✅ All Zig control flow features working (continue, break, while loops)
+- ✅ Logical operators with short-circuit evaluation
+- ✅ All 13 Zig E2E JIT tests passing
 
 ---
 
@@ -330,20 +336,35 @@
 
 ## Next Milestones
 
-### Milestone 1: Reflaxe Integration (Q1 2025)
-- Complete Haxe backend
+### Milestone 1: Core Stabilization (Q4 2025 - Current)
+
+- ✅ Fix continue statement bug
+- ✅ Complete Zig control flow support
+- 🔄 Array types and indexing
+- 🔄 String literals and operations
+- 🔄 Fix remaining 4 test failures (280/284 → 284/284)
+
+### Milestone 2: Production Features (Q1 2026)
+
+- LLVM AOT backend completion
+- Exception handling (try/catch/finally)
+- Complete I/O and networking stdlib
+- Advanced pattern matching
+- Generic functions with type parameters
+
+### Milestone 3: Ecosystem Integration (Q2 2026)
+
+- Complete Reflaxe/Haxe integration
 - Run 100+ Haxe projects through Zyntax
 - Performance benchmarks vs other targets
-
-### Milestone 2: Production Stability (Q2 2025)
 - 100% test pass rate
-- Complete I/O and networking stdlib
-- LLVM AOT backend complete
 
-### Milestone 3: Developer Experience (Q3 2025)
+### Milestone 4: Developer Experience (Q3 2026)
+
 - LSP implementation
 - Package manager
 - Comprehensive documentation
+- VSCode/IntelliJ integration
 
 ---
 
