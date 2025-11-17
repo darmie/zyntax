@@ -586,6 +586,16 @@ impl SsaBuilder {
                 self.translate_expression(block_id, expr)?;
             }
 
+            TypedStatement::Match(match_stmt) => {
+                // Handle match statement: evaluate scrutinee
+                // The actual pattern checking is done in the CFG branching
+                // Here we just evaluate the scrutinee and make it available
+                let _scrutinee_val = self.translate_expression(block_id, &match_stmt.scrutinee)?;
+
+                // Pattern binding variables will be handled when the pattern arm body is processed
+                // TODO: Full pattern matching compilation - for now CFG handles simple cases
+            }
+
             // Note: Control flow statements (While, If, etc.) are now handled at the
             // TypedCFG level by TypedCfgBuilder.split_at_control_flow()
             // This is the solution to Gap 2 - multi-block CFG construction
@@ -596,7 +606,7 @@ impl SsaBuilder {
                 // Other statements handled by terminator processing
             }
         }
-        
+
         Ok(())
     }
     
