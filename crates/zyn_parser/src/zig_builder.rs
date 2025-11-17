@@ -532,13 +532,14 @@ impl ZigBuilder {
                 // Grammar: "!" ~ type_expr
                 let value_type = self.build_type_expr(inner.into_inner().next().unwrap())?;
 
-                // In Zig, !T is an error union type (Result<T, Error>)
-                // We'll represent it using a Union type with two variants:
-                // - Error variant (generic error)
-                // - Ok variant (the success type T)
-                // This maps to Result<T, E> in HIR
-                let error_ty = Type::Primitive(zyntax_typed_ast::PrimitiveType::I32); // Error codes as i32
-                Ok(Type::Union(vec![error_ty, value_type]))
+                // In Zig, !T is an error union type representing Result<T, Error>
+                // Using TypedAST's Result type which maps to Result<T, E> in HIR
+                // Error type defaults to i32 (error codes)
+                let error_ty = Type::Primitive(zyntax_typed_ast::PrimitiveType::I32);
+                Ok(Type::Result {
+                    ok_type: Box::new(value_type),
+                    err_type: Box::new(error_ty),
+                })
             }
             _ => Err(BuildError::UnexpectedRule {
                 expected: "type_expr".to_string(),

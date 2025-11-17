@@ -225,7 +225,7 @@ cargo test --package zyn_parser
 # Run E2E JIT compilation tests
 cargo test --package zyn_parser --test zig_e2e_jit
 
-# Current status: 19/20 tests passing (95%)
+# Current status: 20/21 tests passing (95.2%)
 # One test ignored: array indexing in loops (known SSA issue)
 ```
 
@@ -244,9 +244,12 @@ cargo test --package zyn_parser --test zig_e2e_jit
   - Optional type syntax: `?T`
   - Maps to TypedAST Optional type and HIR Option<T>
   - Full Option operations require method call support (planned)
+- [x] **Error unions** ✅ (Nov 2025)
+  - Error union syntax: `!T`
+  - Maps to Union type (error code + value)
+  - Full error handling requires try/catch support (planned)
 - [ ] Function overloading
 - [ ] Generic functions with type parameters
-- [ ] Error unions (`!T` types)
 - [ ] Slice types (`[]T` - grammar exists, needs runtime support)
 - [ ] Switch expressions
 - [ ] Comptime evaluation

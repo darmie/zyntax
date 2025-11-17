@@ -327,7 +327,13 @@ pub enum Type {
     
     /// Optional/Nullable type: T? or Option<T>
     Optional(Box<Type>),
-    
+
+    /// Result/Error union type: Result<T, E> or !T (Zig)
+    Result {
+        ok_type: Box<Type>,
+        err_type: Box<Type>,
+    },
+
     /// Union type: T1 | T2 | ... | Tn
     Union(Vec<Type>),
     

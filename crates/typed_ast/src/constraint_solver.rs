@@ -205,6 +205,10 @@ impl Substitution {
                 nullability: *nullability,
             },
             Type::Optional(ty) => Type::Optional(Box::new(self.apply(ty))),
+            Type::Result { ok_type, err_type } => Type::Result {
+                ok_type: Box::new(self.apply(ok_type)),
+                err_type: Box::new(self.apply(err_type)),
+            },
             Type::Union(types) => Type::Union(types.iter().map(|t| self.apply(t)).collect()),
             Type::Intersection(types) => {
                 Type::Intersection(types.iter().map(|t| self.apply(t)).collect())
@@ -2560,6 +2564,9 @@ impl ConstraintSolver {
             Type::Optional(ty) => {
                 format!("{}?", self.format_type(ty))
             }
+            Type::Result { ok_type, err_type } => {
+                format!("Result<{}, {}>", self.format_type(ok_type), self.format_type(err_type))
+            }
             Type::Union(types) => {
                 let type_strs: Vec<String> = types.iter().map(|t| self.format_type(t)).collect();
                 format!("{}", type_strs.join(" | "))
@@ -3353,6 +3360,10 @@ impl ConstraintSolver {
             Type::Optional(ty) => {
                 Type::Optional(Box::new(self.resolve_associated_types(ty, receiver_type)))
             }
+            Type::Result { ok_type, err_type } => Type::Result {
+                ok_type: Box::new(self.resolve_associated_types(ok_type, receiver_type)),
+                err_type: Box::new(self.resolve_associated_types(err_type, receiver_type)),
+            },
             Type::Union(types) => Type::Union(
                 types
                     .iter()
@@ -3518,6 +3529,10 @@ impl ConstraintSolver {
             Type::Optional(ty) => {
                 Type::Optional(Box::new(self.substitute_self_type(ty, receiver_type)))
             }
+            Type::Result { ok_type, err_type } => Type::Result {
+                ok_type: Box::new(self.substitute_self_type(ok_type, receiver_type)),
+                err_type: Box::new(self.substitute_self_type(err_type, receiver_type)),
+            },
             Type::Union(types) => Type::Union(
                 types
                     .iter()
