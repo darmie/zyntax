@@ -87,6 +87,18 @@ return_stmt = { "return" ~ expr? ~ ";" }
 expr_stmt = { expr ~ ";" }
 
 if_stmt = {
+    if_let_stmt
+  | if_regular_stmt
+}
+
+// if let pattern unwrapping: if (let pattern = expr) { ... }
+if_let_stmt = {
+    "if" ~ "(" ~ "let" ~ pattern ~ "=" ~ expr ~ ")" ~ block ~
+    ("else" ~ (if_stmt | block))?
+}
+
+// Regular if statement: if (condition) { ... }
+if_regular_stmt = {
     "if" ~ "(" ~ expr ~ ")" ~ block ~
     ("else" ~ (if_stmt | block))?
 }
@@ -173,6 +185,29 @@ struct_literal = {
 }
 
 struct_field_init = { "." ~ identifier ~ "=" ~ expr }
+
+// ===== Patterns =====
+
+pattern = {
+    wildcard_pattern
+  | identifier_pattern
+  | literal_pattern
+  | enum_pattern
+}
+
+// Wildcard pattern: _
+wildcard_pattern = { "_" }
+
+// Identifier binding pattern: x, mut x
+identifier_pattern = { ("mut" ~ identifier) | identifier }
+
+// Literal pattern: 42, true, "hello"
+literal_pattern = { literal }
+
+// Enum/Optional pattern: Some(x), None, Ok(value), Err(e)
+enum_pattern = {
+    identifier ~ "(" ~ pattern ~ ")"
+}
 
 // ===== Identifiers =====
 

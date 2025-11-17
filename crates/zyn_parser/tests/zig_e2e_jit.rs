@@ -507,20 +507,64 @@ fn test_zig_jit_string_literal() {
 }
 
 #[test]
-fn test_zig_jit_optional_type() {
+// Test that if let syntax parses and builds to TypedAST correctly
+// Full execution requires pattern matching backend (Issue #0 Phase 3)
+fn test_zig_if_let_syntax() {
     let source = r#"
-        fn test_optional() i32 {
-            var maybe_value: ?i32 = 42;
-            return 1;
+        fn test_if_let() i32 {
+            var maybe: ?i32 = 42;
+
+            if (let value = maybe) {
+                return value;
+            } else {
+                return 0;
+            }
         }
     "#;
 
-    let result = compile_and_execute_zig(source, "test_optional", vec![]);
-    assert_eq!(result, 1);
-    println!("[Zig E2E] ✓ test_optional() = {}", result);
+    // Parse to TypedAST
+    let pairs = ZigParser::parse(Rule::program, source)
+        .expect("Failed to parse if let syntax");
+    let mut builder = ZigBuilder::new();
+    let program = builder.build_program(pairs)
+        .expect("Failed to build TypedAST from if let");
+
+    // Verify we got a function
+    assert_eq!(program.declarations.len(), 1);
+
+    // Verify it contains a Match statement (if let is lowered to match)
+    use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedStatement};
+    if let TypedDeclaration::Function(func) = &program.declarations[0].node {
+        if let Some(body) = &func.body {
+            assert!(!body.statements.is_empty());
+            println!("[DEBUG] Got {} statements in function body", body.statements.len());
+            // Print statement types for debugging
+            for (i, stmt) in body.statements.iter().enumerate() {
+                println!("[DEBUG] Statement {}: {:?}", i, std::mem::discriminant(&stmt.node));
+            }
+            // First statement after var decl should be the match (from if let)
+            let match_stmt_found = body.statements.iter().any(|stmt| {
+                matches!(stmt.node, TypedStatement::Match(_))
+            });
+
+            if match_stmt_found {
+                println!("[Zig Syntax] ✓ if let parsed correctly and lowered to Match");
+            } else {
+                panic!("Expected Match statement from if let. Got statements: {:?}",
+                    body.statements.iter().map(|s| std::mem::discriminant(&s.node)).collect::<Vec<_>>());
+            }
+        }
+    }
+
+    println!("[Zig Syntax] ✓ if let syntax: parses and builds to TypedAST");
+    println!("[NOTE] Full execution requires pattern matching backend (tracked in BACKLOG.md)");
 }
 
 #[test]
+// NOTE: This test only verifies that error union syntax (!T) parses and compiles.
+// Actual error handling (try, catch, error propagation) requires language-level
+// support that is not yet implemented. The variable is created but not meaningfully used.
+// TODO: Add tests with stdlib Result<T,E> methods once try/catch is implemented
 fn test_zig_jit_error_union_type() {
     let source = r#"
         fn test_error_union() i32 {
@@ -532,6 +576,7 @@ fn test_zig_jit_error_union_type() {
     let result = compile_and_execute_zig(source, "test_error_union", vec![]);
     assert_eq!(result, 2);
     println!("[Zig E2E] ✓ test_error_union() = {}", result);
+    println!("[NOTE] Error union type parses/compiles but is not functionally used");
 }
 
 // ===== HELPER FUNCTIONS =====

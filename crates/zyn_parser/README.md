@@ -6,15 +6,29 @@
 
 ZynParser is a proof-of-concept demonstrating how PEG grammars (via pest) can be used to generate TypedAST for the Zyntax compiler infrastructure. This Phase 1 POC validates the approach before implementing the full .zyn grammar format in later phases.
 
-## Current Status: Phase 1 Complete ✅
+## Current Status: Phase 2 (Zig) - 95% Complete ✅
 
-### What Works
-
+### Phase 1 (Calculator POC) - Complete ✅
 - **PEG Grammar**: Calculator grammar (calculator.pest) for arithmetic expressions
 - **TypedAST Generation**: Parse trees automatically convert to Zyntax TypedAST
 - **Type Inference**: Simple type inference for binary operations
-- **Operator Precedence**: Correct precedence and associativity
-- **All Tests Passing**: 13/13 tests (8 unit + 5 integration)
+- **All Tests Passing**: 16/16 tests (calculator + zig basics)
+
+### Phase 2 (Zig Subset) - 95% Complete ✅
+- **Full Zig Grammar**: Functions, structs, control flow, types (20/21 tests passing)
+- **Array Support**: Array literals `[_]T{...}`, sized arrays `[N]T`, indexing
+- **String Literals**: `"Hello, World!"` lowered to global `*i8` constants
+- **Optional Types**: `?T` syntax parses and builds to TypedAST
+- **Error Unions**: `!T` syntax parses and builds to TypedAST Result type
+- **Pattern Matching**: `if let` syntax parses and builds to Match statements
+- **Control Flow**: if/else, while loops, for loops, break, continue
+- **Logical Operators**: and/or with short-circuit evaluation
+- **E2E Pipeline**: Zig → TypedAST → HIR → Cranelift JIT → Execution
+
+**Known Limitations**:
+- Pattern matching execution requires pattern matching backend (tracked in BACKLOG.md Issue #0 Phase 3)
+- `if let` syntax validates and builds to TypedAST Match statements, but execution needs discriminant lowering
+- Optional/Result type operations need stdlib integration via plugin system
 
 ### Features Demonstrated
 

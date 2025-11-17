@@ -241,13 +241,15 @@ cargo test --package zyn_parser --test zig_e2e_jit
   - Lowered to global constants (`*i8`)
   - String operations require stdlib integration (planned)
 - [x] **Optional types** ✅ (Nov 2025)
-  - Optional type syntax: `?T`
+  - Optional type syntax: `?T` - **parses and compiles**
   - Maps to TypedAST Optional type and HIR Option<T>
-  - Full Option operations require method call support (planned)
+  - ⚠️ Operations (unwrap, pattern matching) require language-level support (not yet implemented)
+  - Tests verify syntax only, not functional usage
 - [x] **Error unions** ✅ (Nov 2025)
-  - Error union syntax: `!T`
-  - Maps to Union type (error code + value)
-  - Full error handling requires try/catch support (planned)
+  - Error union syntax: `!T` - **parses and compiles**
+  - Maps to TypedAST Result type (ok_type + err_type)
+  - ⚠️ Error handling (try, catch) requires language-level support (not yet implemented)
+  - Tests verify syntax only, not functional usage
 - [ ] Function overloading
 - [ ] Generic functions with type parameters
 - [ ] Slice types (`[]T` - grammar exists, needs runtime support)

@@ -13,7 +13,8 @@ use zyntax_typed_ast::{
         TypedDeclaration, TypedStatement, TypedBlock, TypedFunction,
         TypedParameter, TypedClass, TypedField, TypedStructLiteral,
         TypedFieldInit, TypedFieldAccess, TypedFor, TypedPattern,
-        TypedIndex,
+        TypedIndex, TypedMatch, TypedMatchArm, TypedLiteralPattern,
+        TypedLiteral,
     },
 };
 use std::collections::HashMap;
@@ -732,6 +733,24 @@ impl ZigBuilder {
     fn build_if_stmt(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedStatement>> {
         let mut inner = pair.into_inner();
 
+        // if_stmt can be either if_let_stmt or if_regular_stmt
+        let first = inner.next().ok_or_else(|| {
+            BuildError::Internal("Empty if statement".to_string())
+        })?;
+
+        match first.as_rule() {
+            Rule::if_let_stmt => self.build_if_let_stmt(first, span),
+            Rule::if_regular_stmt => self.build_if_regular_stmt(first, span),
+            _ => Err(BuildError::UnexpectedRule {
+                expected: "if_let_stmt or if_regular_stmt".to_string(),
+                got: format!("{:?}", first.as_rule()),
+            }),
+        }
+    }
+
+    fn build_if_regular_stmt(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedStatement>> {
+        let mut inner = pair.into_inner();
+
         // if ( condition ) block (else (if_stmt | block))?
         let condition_pair = inner.next().ok_or_else(|| {
             BuildError::Internal("Missing condition in if statement".to_string())
@@ -773,6 +792,124 @@ impl ZigBuilder {
 
         Ok(TypedNode {
             node: if_stmt,
+            ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
+            span,
+        })
+    }
+
+    fn build_if_let_stmt(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedStatement>> {
+        let mut inner = pair.into_inner();
+
+        // if ( let pattern = expr ) block (else (if_stmt | block))?
+        let pattern_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing pattern in if let statement".to_string())
+        })?;
+        let pattern = self.build_pattern(pattern_pair)?;
+
+        let scrutinee_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing expression in if let statement".to_string())
+        })?;
+        let scrutinee = self.build_expression(scrutinee_pair)?;
+
+        // Enter new scope for pattern bindings
+        self.enter_scope();
+
+        // Add pattern bindings to scope
+        self.add_pattern_bindings(&pattern.node, &scrutinee.ty);
+
+        let then_block_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing then block in if let statement".to_string())
+        })?;
+        let then_block = self.build_block(then_block_pair)?;
+
+        // Exit scope after then block
+        self.exit_scope();
+
+        // Check for else clause
+        let else_block = if let Some(else_pair) = inner.next() {
+            match else_pair.as_rule() {
+                Rule::if_stmt => {
+                    // else if - convert to nested if in a block
+                    let nested_if = self.build_if_stmt(else_pair, span)?;
+                    Some(TypedBlock {
+                        statements: vec![nested_if],
+                        span,
+                    })
+                }
+                Rule::block => {
+                    // else block
+                    Some(self.build_block(else_pair)?)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        // Convert if let to match expression wrapped in a statement
+        // match scrutinee { pattern => then_block, _ => else_block }
+        let match_arms = if let Some(else_blk) = else_block {
+            vec![
+                TypedMatchArm {
+                    pattern: Box::new(pattern),
+                    guard: None,
+                    body: Box::new(TypedNode {
+                        node: TypedExpression::Block(then_block),
+                        ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
+                        span,
+                    }),
+                },
+                TypedMatchArm {
+                    pattern: Box::new(TypedNode {
+                        node: TypedPattern::Wildcard,
+                        ty: scrutinee.ty.clone(),
+                        span,
+                    }),
+                    guard: None,
+                    body: Box::new(TypedNode {
+                        node: TypedExpression::Block(else_blk),
+                        ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
+                        span,
+                    }),
+                },
+            ]
+        } else {
+            vec![
+                TypedMatchArm {
+                    pattern: Box::new(pattern),
+                    guard: None,
+                    body: Box::new(TypedNode {
+                        node: TypedExpression::Block(then_block),
+                        ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
+                        span,
+                    }),
+                },
+                TypedMatchArm {
+                    pattern: Box::new(TypedNode {
+                        node: TypedPattern::Wildcard,
+                        ty: scrutinee.ty.clone(),
+                        span,
+                    }),
+                    guard: None,
+                    body: Box::new(TypedNode {
+                        node: TypedExpression::Block(TypedBlock {
+                            statements: vec![],
+                            span,
+                        }),
+                        ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
+                        span,
+                    }),
+                },
+            ]
+        };
+
+        let match_stmt = TypedStatement::Match(TypedMatch {
+            scrutinee: Box::new(scrutinee),
+            arms: match_arms,
+        });
+
+        Ok(TypedNode {
+            node: match_stmt,
             ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
             span,
         })
@@ -1393,6 +1530,148 @@ impl ZigBuilder {
         };
 
         Ok(self.builder.array_literal(elements, array_type, span))
+    }
+
+    // ===== Pattern Matching =====
+
+    fn build_pattern(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedPattern>> {
+        let span_range = pair.as_span();
+        let span = Span::new(span_range.start(), span_range.end());
+
+        let inner = pair.into_inner().next().ok_or_else(|| {
+            BuildError::Internal("Empty pattern".to_string())
+        })?;
+
+        match inner.as_rule() {
+            Rule::wildcard_pattern => {
+                Ok(TypedNode {
+                    node: TypedPattern::Wildcard,
+                    ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit), // Will be refined
+                    span,
+                })
+            }
+            Rule::identifier_pattern => {
+                let mut parts = inner.into_inner();
+                let first = parts.next().ok_or_else(|| {
+                    BuildError::Internal("Empty identifier pattern".to_string())
+                })?;
+
+                // Check if it's "mut identifier" or just "identifier"
+                let (mutability, name_str) = if first.as_str() == "mut" {
+                    let name_pair = parts.next().ok_or_else(|| {
+                        BuildError::Internal("Missing identifier after mut".to_string())
+                    })?;
+                    (Mutability::Mutable, name_pair.as_str())
+                } else {
+                    (Mutability::Immutable, first.as_str())
+                };
+
+                let name = self.intern(name_str);
+
+                Ok(TypedNode {
+                    node: TypedPattern::Identifier { name, mutability },
+                    ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit), // Will be refined
+                    span,
+                })
+            }
+            Rule::literal_pattern => {
+                // Build the literal inside
+                let lit_pair = inner.into_inner().next().ok_or_else(|| {
+                    BuildError::Internal("Empty literal pattern".to_string())
+                })?;
+
+                let lit_expr = self.build_literal(lit_pair)?;
+
+                // Convert TypedExpression::Literal to TypedPattern::Literal
+                let pattern_lit = match &lit_expr.node {
+                    TypedExpression::Literal(TypedLiteral::Integer(i)) => {
+                        TypedLiteralPattern::Integer(*i)
+                    }
+                    TypedExpression::Literal(TypedLiteral::Bool(b)) => {
+                        TypedLiteralPattern::Bool(*b)
+                    }
+                    TypedExpression::Literal(TypedLiteral::String(s)) => {
+                        TypedLiteralPattern::String(*s)
+                    }
+                    TypedExpression::Literal(TypedLiteral::Float(f)) => {
+                        TypedLiteralPattern::Float(*f)
+                    }
+                    TypedExpression::Literal(TypedLiteral::Char(c)) => {
+                        TypedLiteralPattern::Char(*c)
+                    }
+                    TypedExpression::Literal(TypedLiteral::Unit) => {
+                        TypedLiteralPattern::Unit
+                    }
+                    _ => return Err(BuildError::Internal("Invalid literal in pattern".to_string())),
+                };
+
+                Ok(TypedNode {
+                    node: TypedPattern::Literal(pattern_lit),
+                    ty: lit_expr.ty,
+                    span,
+                })
+            }
+            Rule::enum_pattern => {
+                // identifier ( pattern )
+                let mut parts = inner.into_inner();
+
+                let variant_name_pair = parts.next().ok_or_else(|| {
+                    BuildError::Internal("Missing variant name in enum pattern".to_string())
+                })?;
+                let variant_name = self.intern(variant_name_pair.as_str());
+
+                let inner_pattern_pair = parts.next().ok_or_else(|| {
+                    BuildError::Internal("Missing inner pattern in enum pattern".to_string())
+                })?;
+                let inner_pattern = self.build_pattern(inner_pattern_pair)?;
+
+                Ok(TypedNode {
+                    node: TypedPattern::Enum {
+                        name: variant_name, // Use variant name as both enum and variant for now
+                        variant: variant_name,
+                        fields: vec![inner_pattern],
+                    },
+                    ty: Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit), // Will be refined
+                    span,
+                })
+            }
+            _ => Err(BuildError::UnexpectedRule {
+                expected: "pattern variant".to_string(),
+                got: format!("{:?}", inner.as_rule()),
+            }),
+        }
+    }
+
+    fn add_pattern_bindings(&mut self, pattern: &TypedPattern, scrutinee_ty: &Type) {
+        match pattern {
+            TypedPattern::Identifier { name, .. } => {
+                // For optional types, extract the inner type
+                let binding_type = match scrutinee_ty {
+                    Type::Optional(inner_ty) => (**inner_ty).clone(),
+                    Type::Result { ok_type, .. } => (**ok_type).clone(),
+                    _ => scrutinee_ty.clone(),
+                };
+                self.current_scope().variables.insert(*name, binding_type);
+            }
+            TypedPattern::Enum { fields, .. } => {
+                // Recursively add bindings from nested patterns
+                for field_pattern in fields {
+                    self.add_pattern_bindings(&field_pattern.node, scrutinee_ty);
+                }
+            }
+            TypedPattern::Tuple(patterns) => {
+                for pattern_node in patterns {
+                    self.add_pattern_bindings(&pattern_node.node, scrutinee_ty);
+                }
+            }
+            TypedPattern::Array(patterns) => {
+                for pattern_node in patterns {
+                    self.add_pattern_bindings(&pattern_node.node, scrutinee_ty);
+                }
+            }
+            // Other patterns don't bind variables
+            _ => {}
+        }
     }
 
     // ===== Scope Management =====
