@@ -12,6 +12,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
+use log::{warn, error, info, debug};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -766,7 +767,7 @@ impl CraneliftBackend {
                                             }
                                         }
                                     } else {
-                                        eprintln!("WARNING: Function {:?} not in function_map", func_id);
+                                        warn!(" Function {:?} not in function_map", func_id);
                                         // Create a dummy value to avoid unmapped error
                                         if let Some(result_id) = result {
                                             self.value_map.insert(*result_id, builder.ins().iconst(types::I32, 0));
@@ -775,7 +776,7 @@ impl CraneliftBackend {
                                 }
                                 _ => {
                                     // Other callable types (closures, etc.) not implemented yet
-                                    eprintln!("WARNING: Unsupported callable type");
+                                    warn!(" Unsupported callable type");
                                 }
                             }
                         }
@@ -834,7 +835,7 @@ impl CraneliftBackend {
                                 // Cranelift stack_store/load work with fixed slots
                                 // For dynamic count, we need to calculate size and use stack_alloc
                                 // For now, create a fixed-size slot and warn
-                                eprintln!("WARNING: Dynamic alloca not fully supported, using fixed size");
+                                warn!(" Dynamic alloca not fully supported, using fixed size");
                                 builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                                     cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                                     64, // Fixed size for now
@@ -927,12 +928,12 @@ impl CraneliftBackend {
                                             if const_val >= 0 && (const_val as usize) < struct_ty.fields.len() {
                                                 const_val as usize
                                             } else {
-                                                eprintln!("WARNING: GEP struct field index {} out of bounds (struct has {} fields)",
+                                                warn!(" GEP struct field index {} out of bounds (struct has {} fields)",
                                                     const_val, struct_ty.fields.len());
                                                 0 // Fallback to first field
                                             }
                                         } else {
-                                            eprintln!("WARNING: GEP for struct requires constant index, got non-constant value");
+                                            warn!(" GEP for struct requires constant index, got non-constant value");
                                             0 // Fallback to first field
                                         };
 
@@ -945,11 +946,11 @@ impl CraneliftBackend {
                                                 }
                                             }
                                         } else {
-                                            eprintln!("WARNING: No struct layout found for GEP");
+                                            warn!(" No struct layout found for GEP");
                                         }
                                     }
                                     _ => {
-                                        eprintln!("WARNING: GEP on unsupported type");
+                                        warn!(" GEP on unsupported type");
                                         break;
                                     }
                                 }
@@ -962,7 +963,7 @@ impl CraneliftBackend {
                             // Simplified union creation: allocate space and store discriminant + value
                             // For now, create a dummy pointer value
                             // TODO: Implement proper union layout with malloc + field storage
-                            eprintln!("WARNING: CreateUnion called - returning null pointer (not implemented)");
+                            warn!(" CreateUnion called - returning null pointer (not implemented)");
                             let dummy_ptr = builder.ins().iconst(types::I64, 0);
                             self.value_map.insert(*result, dummy_ptr);
                         }
@@ -1166,7 +1167,7 @@ impl CraneliftBackend {
                             // Simplified closure creation: allocate environment and create function pointer
                             // For now, create a dummy pointer value
                             // TODO: Implement proper closure environment allocation and capture
-                            eprintln!("WARNING: CreateClosure called - returning null pointer (not implemented)");
+                            warn!(" CreateClosure called - returning null pointer (not implemented)");
                             let dummy_ptr = builder.ins().iconst(types::I64, 0);
                             self.value_map.insert(*result, dummy_ptr);
                         }
@@ -1250,7 +1251,7 @@ impl CraneliftBackend {
                                         }
                                         _ => {
                                             // Unsupported type - just return a dummy value
-                                            eprintln!("WARNING: ExtractValue on unsupported type");
+                                            warn!(" ExtractValue on unsupported type");
                                             let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
                                             let dummy = builder.ins().iconst(cranelift_ty, 0);
                                             self.value_map.insert(*result, dummy);
@@ -1338,7 +1339,7 @@ impl CraneliftBackend {
                                         }
                                         _ => {
                                             // Unsupported type
-                                            eprintln!("WARNING: InsertValue on unsupported type");
+                                            warn!(" InsertValue on unsupported type");
                                             self.value_map.insert(*result, base_ptr);
                                             break;
                                         }
@@ -1350,7 +1351,7 @@ impl CraneliftBackend {
                         _ => {
                             // Other instructions not yet implemented
                             // This will cause values to be unmapped, leading to verifier errors
-                            eprintln!("WARNING: Unimplemented instruction type");
+                            warn!(" Unimplemented instruction type");
                         }
                     }
                 }
@@ -1537,7 +1538,7 @@ impl CraneliftBackend {
 
                         let default_target = default.unwrap_or_else(|| {
                             // If no default, this is unreachable - create unreachable
-                            eprintln!("WARNING: PatternMatch without default target, using unreachable");
+                            warn!(" PatternMatch without default target, using unreachable");
                             *hir_block_id // Fallback to current block (will cause error)
                         });
 
@@ -1617,7 +1618,7 @@ impl CraneliftBackend {
 
                     _ => {
                         // Other terminators not implemented
-                        eprintln!("WARNING: Unimplemented terminator in block {:?}", hir_block_id);
+                        warn!(" Unimplemented terminator in block {:?}", hir_block_id);
                     }
                 }
             }
@@ -1648,9 +1649,9 @@ impl CraneliftBackend {
             func_id,
             &mut self.codegen_context,
         ).map_err(|e| {
-            eprintln!("Function compilation failed for: {}", function.name);
-            eprintln!("Error: {}", e);
-            eprintln!("Function dump:\n{}", self.codegen_context.func.display());
+            error!("Function compilation failed for: {}", function.name);
+            error!("Error: {}", e);
+            debug!("Function dump:\n{}", self.codegen_context.func.display());
             CompilerError::Backend(format!("Failed to compile function: {}", e))
         })?;
         
@@ -1711,11 +1712,11 @@ impl CraneliftBackend {
                     let offset = (index * ptr_size) as u32;
                     self.data_desc.write_function_addr(offset, func_ref);
                 } else {
-                    eprintln!("WARNING: Vtable method function {:?} not found in function_map", method_entry.function_id);
+                    warn!(" Vtable method function {:?} not found in function_map", method_entry.function_id);
                 }
             }
 
-            eprintln!("INFO: Vtable with {} methods emitted with function pointer relocations", vtable.methods.len());
+            info!("Vtable with {} methods emitted with function pointer relocations", vtable.methods.len());
         } else if let Some(HirConstant::String(s)) = &global.initializer {
             // String constants - emit as Haxe String format: [length: i32][utf8_bytes...]
             let string_val = s.resolve_global()
@@ -3410,9 +3411,9 @@ impl CraneliftBackend {
     /// Debug helper: Dump Cranelift IR for a function
     #[allow(dead_code)]
     fn dump_cranelift_ir(&self, func_name: &str) {
-        eprintln!("=== Cranelift IR for {} ===", func_name);
-        eprintln!("{}", self.codegen_context.func.display());
-        eprintln!("=== End IR ===\n");
+        debug!("=== Cranelift IR for {} ===", func_name);
+        debug!("{}", self.codegen_context.func.display());
+        debug!("=== End IR ===\n");
     }
 
     // =========================================================================
