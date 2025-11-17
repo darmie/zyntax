@@ -281,7 +281,7 @@ See [Haxe Integration Guide](./docs/HAXE_INTEGRATION.md) for details.
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/zyntax.git
+git clone https://github.com/darmie/zyntax.git
 cd zyntax
 
 # Run tests
