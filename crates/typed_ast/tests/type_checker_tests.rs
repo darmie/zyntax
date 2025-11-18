@@ -175,10 +175,13 @@ mod type_checker_tests {
                     node: TypedDeclaration::Function(TypedFunction {
                         name: main,
                         params: vec![],
-                        body: body,
+                        body: Some(body),
                         return_type: Type::Primitive(PrimitiveType::Unit),
                         visibility: Visibility::Public,
                         is_async: false,
+                        is_external: false,
+                        calling_convention: CallingConvention::Zyntax,
+                        link_name: None,
                     }),
                     ty: Type::Function {
                         params: vec![],
@@ -274,10 +277,13 @@ mod type_checker_tests {
             node: TypedDeclaration::Function(TypedFunction {
                 name: builder.intern("main"),
                 params: vec![],
-                body: main_body,
+                body: Some(main_body),
                 return_type: Type::Primitive(PrimitiveType::Unit),
                 visibility: Visibility::Public,
                 is_async: false,
+                is_external: false,
+                calling_convention: CallingConvention::Zyntax,
+                link_name: None,
             }),
             ty: Type::Function {
                 params: vec![],
@@ -352,10 +358,13 @@ mod type_checker_tests {
             node: TypedDeclaration::Function(TypedFunction {
                 name: builder.intern("main"),
                 params: vec![],
-                body: main_body,
+                body: Some(main_body),
                 return_type: Type::Primitive(PrimitiveType::Unit),
                 visibility: Visibility::Public,
                 is_async: false,
+                is_external: false,
+                calling_convention: CallingConvention::Zyntax,
+                link_name: None,
             }),
             ty: Type::Function {
                 params: vec![],
@@ -417,10 +426,13 @@ mod type_checker_tests {
             node: TypedDeclaration::Function(TypedFunction {
                 name: builder.intern("main"),
                 params: vec![],
-                body: main_body,
+                body: Some(main_body),
                 return_type: Type::Primitive(PrimitiveType::Unit),
                 visibility: Visibility::Public,
                 is_async: false,
+                is_external: false,
+                calling_convention: CallingConvention::Zyntax,
+                link_name: None,
             }),
             ty: Type::Function {
                 params: vec![],
@@ -486,10 +498,13 @@ mod type_checker_tests {
             node: TypedDeclaration::Function(TypedFunction {
                 name: builder.intern("main"),
                 params: vec![],
-                body: main_body,
+                body: Some(main_body),
                 return_type: Type::Primitive(PrimitiveType::Unit),
                 visibility: Visibility::Public,
                 is_async: false,
+                is_external: false,
+                calling_convention: CallingConvention::Zyntax,
+                link_name: None,
             }),
             ty: Type::Function {
                 params: vec![],
@@ -591,10 +606,13 @@ mod type_checker_tests {
             node: TypedDeclaration::Function(TypedFunction {
                 name: builder.intern("main"),
                 params: vec![],
-                body: main_body,
+                body: Some(main_body),
                 return_type: Type::Primitive(PrimitiveType::Unit),
                 visibility: Visibility::Public,
                 is_async: false,
+                is_external: false,
+                calling_convention: CallingConvention::Zyntax,
+                link_name: None,
             }),
             ty: Type::Function {
                 params: vec![],
@@ -715,10 +733,13 @@ mod type_checker_tests {
             node: TypedDeclaration::Function(TypedFunction {
                 name: builder.intern("main"),
                 params: vec![],
-                body: main_body,
+                body: Some(main_body),
                 return_type: Type::Primitive(PrimitiveType::Unit),
                 visibility: Visibility::Public,
                 is_async: false,
+                is_external: false,
+                calling_convention: CallingConvention::Zyntax,
+                link_name: None,
             }),
             ty: Type::Function {
                 params: vec![],
@@ -959,10 +980,13 @@ mod type_checker_tests {
             node: TypedDeclaration::Function(TypedFunction {
                 name: builder.intern("main"),
                 params: vec![],
-                body: main_body,
+                body: Some(main_body),
                 return_type: Type::Primitive(PrimitiveType::Unit),
                 visibility: Visibility::Public,
                 is_async: false,
+                is_external: false,
+                calling_convention: CallingConvention::Zyntax,
+                link_name: None,
             }),
             ty: Type::Function {
                 params: vec![],

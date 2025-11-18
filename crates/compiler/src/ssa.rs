@@ -47,6 +47,9 @@ pub struct SsaBuilder {
     idf_placement_done: bool,
     /// Current match context (scrutinee and discriminant for pattern matching)
     match_context: Option<MatchContext>,
+    /// Continuation block for control flow expressions (if/match)
+    /// When set, indicates that control flow has branched and this is the merge/end block
+    continuation_block: Option<HirId>,
 }
 
 /// Context for pattern matching
@@ -273,6 +276,7 @@ impl SsaBuilder {
             variable_writes: HashMap::new(),
             idf_placement_done: false,
             match_context: None,
+            continuation_block: None,
         }
     }
     
@@ -538,7 +542,21 @@ impl SsaBuilder {
             TypedTerminator::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
                     let value_id = self.translate_expression(block_id, expr)?;
-                    HirTerminator::Return { values: vec![value_id] }
+
+                    // Check if the expression set a continuation block (for control flow expressions)
+                    if let Some(continuation) = self.continuation_block.take() {
+                        // Control flow expression - set Return on continuation block, not entry block
+                        let cont_block = self.function.blocks.get_mut(&continuation)
+                            .ok_or_else(|| crate::CompilerError::Analysis("Continuation block not found".into()))?;
+                        cont_block.terminator = HirTerminator::Return { values: vec![value_id] };
+
+                        // Entry block already has correct terminator (Branch/CondBranch), so return None
+                        // to signal that we shouldn't overwrite it
+                        return Ok(());
+                    } else {
+                        // Regular expression - return normally from entry block
+                        HirTerminator::Return { values: vec![value_id] }
+                    }
                 } else {
                     HirTerminator::Return { values: vec![] }
                 }
@@ -1038,8 +1056,12 @@ impl SsaBuilder {
                 } else {
                     vec![]
                 };
-                
-                let block = self.function.blocks.get_mut(&block_id).unwrap();
+
+                // If a control flow expression (if/match) set a continuation block,
+                // place the Return terminator there instead of on the entry block
+                let target_block = self.continuation_block.take().unwrap_or(block_id);
+
+                let block = self.function.blocks.get_mut(&target_block).unwrap();
                 block.terminator = HirTerminator::Return { values };
             }
             
@@ -2883,6 +2905,9 @@ impl SsaBuilder {
 
             self.function.blocks.get_mut(&end_block_id).unwrap().phis.push(phi);
         }
+
+        // Set continuation block so that Return statements know to use end_block instead of entry block
+        self.continuation_block = Some(end_block_id);
 
         Ok(result)
     }
