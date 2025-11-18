@@ -877,6 +877,7 @@ impl TypedASTBuilder {
         typed_node(
             TypedDeclaration::Function(TypedFunction {
                 name: func_name,
+                type_params: vec![],
                 params,
                 return_type: return_type.clone(),
                 body: Some(body),
@@ -1095,6 +1096,7 @@ impl FluentFunctionBuilder {
         typed_node(
             TypedDeclaration::Function(TypedFunction {
                 name: self.name,
+                type_params: vec![],
                 params: self.params,
                 return_type: self.return_type.clone(),
                 body: Some(body),
@@ -1158,6 +1160,7 @@ impl FluentFunctionBuilder {
         let func = typed_node(
             TypedDeclaration::Function(TypedFunction {
                 name: self.name,
+                type_params: vec![],
                 params: self.params,
                 return_type: self.return_type,
                 body: Some(body),

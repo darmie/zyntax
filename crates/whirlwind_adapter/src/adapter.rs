@@ -346,6 +346,7 @@ impl WhirlwindAdapter {
         Ok(TypedNode::new(
             TypedDeclaration::Function(TypedFunction {
                 name: func_name,
+                type_params: vec![],
                 params,
                 return_type: return_type.clone(),
                 body: Some(body),

@@ -33,7 +33,9 @@ fn_decl = {
 }
 
 fn_params = { fn_param ~ ("," ~ fn_param)* }
-fn_param  = { identifier ~ ":" ~ type_expr }
+fn_param  = { comptime_param | regular_param }
+comptime_param = { "comptime" ~ identifier ~ ":" ~ "type" }
+regular_param  = { identifier ~ ":" ~ type_expr }
 
 struct_decl = {
     "const" ~ identifier ~ "=" ~ "struct" ~ "{" ~

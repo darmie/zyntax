@@ -52,6 +52,7 @@ pub enum TypedDeclaration {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedFunction {
     pub name: InternedString,
+    pub type_params: Vec<TypedTypeParam>,  // Generic type parameters
     pub params: Vec<TypedParameter>,
     pub return_type: Type,
     pub body: Option<TypedBlock>,  // None for extern functions

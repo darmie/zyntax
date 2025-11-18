@@ -280,6 +280,7 @@ impl<'a> TypedAstBuilder<'a> {
         
         let func = crate::typed_ast::TypedFunction {
             name,
+            type_params: vec![],
             params,
             return_type: return_type.clone(),
             body: Some(body),

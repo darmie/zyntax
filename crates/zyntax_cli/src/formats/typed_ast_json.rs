@@ -114,6 +114,7 @@ fn add_runtime_function_declarations(program: &mut TypedProgram, arena: &mut Ast
     let println_name = arena.intern_string("$String$println");
     let println_func = TypedFunction {
         name: println_name,
+        type_params: vec![],
         params: vec![TypedParameter {
             name: arena.intern_string("s"),
             ty: string_type.clone(),

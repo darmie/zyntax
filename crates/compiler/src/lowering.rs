@@ -1395,6 +1395,7 @@ impl LoweringContext {
         // Create a function from the method
         let func = TypedFunction {
             name: mangled_name,
+            type_params: method.type_params.clone(),
             params,
             return_type: method.return_type.clone(),
             body: method.body.clone().or_else(|| Some(zyntax_typed_ast::typed_ast::TypedBlock {
@@ -1451,6 +1452,7 @@ impl LoweringContext {
 
         let func = TypedFunction {
             name: ctor_name,
+            type_params: vec![],
             params,
             return_type,
             body: Some(ctor.body.clone()),

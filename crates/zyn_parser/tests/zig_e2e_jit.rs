@@ -585,6 +585,26 @@ fn test_zig_jit_switch_expression() {
 }
 
 #[test]
+#[ignore] // Generic functions parse correctly, but monomorphization not yet connected
+fn test_zig_jit_generic_function() {
+    // Test that generic function syntax parses correctly
+    // Note: Full monomorphization support requires connecting the existing monomorphize.rs
+    let source = r#"
+        fn identity(comptime T: type, x: T) T {
+            return x;
+        }
+
+        fn test_generic() i32 {
+            return identity(i32, 42);
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_generic", vec![]);
+    assert_eq!(result, 42);
+    println!("[Zig E2E] ✓ generic identity(i32, 42) = {}", result);
+}
+
+#[test]
 fn test_pattern_match_runtime_execution() {
     // This test verifies complete end-to-end pattern matching:
     // ✅ Pattern matching CONSTRUCTION: Some(42), None literals

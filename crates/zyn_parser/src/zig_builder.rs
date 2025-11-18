@@ -264,6 +264,8 @@ impl ZigBuilder {
     }
 
     fn build_fn_decl(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedDeclaration>> {
+        use zyntax_typed_ast::typed_ast::TypedTypeParam;
+
         let mut inner = pair.into_inner();
 
         // Parse function name
@@ -274,12 +276,15 @@ impl ZigBuilder {
 
         // Parse parameters (optional)
         let mut params = Vec::new();
+        let mut type_params = Vec::new();
         let mut next = inner.next().ok_or_else(|| {
             BuildError::Internal("Missing function parameters or return type".to_string())
         })?;
 
         if next.as_rule() == Rule::fn_params {
-            params = self.build_fn_params(next)?;
+            let (tp, p) = self.build_fn_params(next)?;
+            type_params = tp;
+            params = p;
             next = inner.next().ok_or_else(|| {
                 BuildError::Internal("Missing return type".to_string())
             })?;
@@ -332,6 +337,7 @@ impl ZigBuilder {
         // Create TypedFunction
         let typed_fn = TypedFunction {
             name,
+            type_params,
             params,
             return_type,
             body: Some(body),
@@ -349,19 +355,60 @@ impl ZigBuilder {
         })
     }
 
-    fn build_fn_params(&mut self, pair: Pair<Rule>) -> BuildResult<Vec<TypedParameter>> {
+    fn build_fn_params(&mut self, pair: Pair<Rule>) -> BuildResult<(Vec<zyntax_typed_ast::typed_ast::TypedTypeParam>, Vec<TypedParameter>)> {
+        use zyntax_typed_ast::typed_ast::TypedTypeParam;
+
+        let mut type_params = Vec::new();
         let mut params = Vec::new();
 
         for param_pair in pair.into_inner() {
             if param_pair.as_rule() == Rule::fn_param {
-                params.push(self.build_fn_param(param_pair)?);
+                let mut inner = param_pair.into_inner();
+                let first = inner.next().ok_or_else(|| {
+                    BuildError::Internal("Empty fn_param".to_string())
+                })?;
+
+                match first.as_rule() {
+                    Rule::comptime_param => {
+                        // comptime T: type -> type parameter
+                        let comptime_span = first.as_span();
+                        let mut comptime_inner = first.into_inner();
+                        let name_pair = comptime_inner.next().ok_or_else(|| {
+                            BuildError::Internal("Missing comptime parameter name".to_string())
+                        })?;
+                        let name = self.builder.intern(name_pair.as_str());
+
+                        type_params.push(TypedTypeParam {
+                            name,
+                            bounds: vec![],
+                            default: None,
+                            span: Span::new(comptime_span.start(), comptime_span.end()),
+                        });
+
+                        // Also add to scope as a type variable
+                        self.current_scope().variables.insert(
+                            name,
+                            Type::TypeVar(zyntax_typed_ast::TypeVar::unbound(name))
+                        );
+                    }
+                    Rule::regular_param => {
+                        // Regular parameter
+                        params.push(self.build_regular_param(first)?);
+                    }
+                    _ => {
+                        return Err(BuildError::UnexpectedRule {
+                            expected: "comptime_param or regular_param".to_string(),
+                            got: format!("{:?}", first.as_rule()),
+                        });
+                    }
+                }
             }
         }
 
-        Ok(params)
+        Ok((type_params, params))
     }
 
-    fn build_fn_param(&mut self, pair: Pair<Rule>) -> BuildResult<TypedParameter> {
+    fn build_regular_param(&mut self, pair: Pair<Rule>) -> BuildResult<TypedParameter> {
         let span_range = pair.as_span();
         let span = Span::new(span_range.start(), span_range.end());
 
