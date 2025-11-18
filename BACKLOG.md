@@ -57,8 +57,8 @@
 - [ ] Pattern matching - None literal (arena symbol resolution issue)
 - [ ] String operations (needs stdlib integration via plugin system)
 - [ ] Error unions (`!T` types)
-- [ ] Generic functions
-- [ ] Generics and advanced type features
+- [~] **Generic functions** (parsing complete, monomorphization pending)
+- [ ] Generic call site type inference
 - [x] 22/23 E2E JIT tests passing (95.7%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
@@ -314,6 +314,23 @@
 ---
 
 ## Completed (Archive)
+
+### 🚧 Generic Function Parsing (November 18, 2025) - Phase 1 Complete
+**Goal**: Support generic functions with comptime type parameters
+**Status**: Parsing complete, monomorphization integration pending
+
+**Completed**:
+- Added `type_params: Vec<TypedTypeParam>` field to TypedFunction
+- Grammar support for `comptime T: type` parameters
+- Builder parses type params and adds to scope as TypeVar
+- Test infrastructure in place (test_zig_jit_generic_function)
+
+**Pending**:
+- Connect existing monomorphization engine (monomorphize.rs)
+- Type argument separation at call sites
+- Generic instantiation in lowering/SSA
+
+**Note**: Monomorphization engine already exists and passes all 11 tests
 
 ### ✅ Switch Expression Implementation (November 18, 2025)
 **Problem**: Switch expressions not working - Cranelift only processed entry block, ignoring all match logic
