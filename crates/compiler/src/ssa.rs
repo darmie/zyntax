@@ -445,6 +445,13 @@ impl SsaBuilder {
                     self.seal_block(block_id);
                 }
 
+                // Extract pattern bindings if this is a match arm body
+                if let Some(pattern_info) = &typed_block.pattern_check {
+                    if let Some(variant_index) = pattern_info.variant_index {
+                        self.extract_pattern_bindings(block_id, &pattern_info.pattern, variant_index).unwrap();
+                    }
+                }
+
                 // Process each TypedStatement in this block
                 for stmt in &typed_block.statements {
                     self.process_statement(block_id, stmt).unwrap();
@@ -474,6 +481,13 @@ impl SsaBuilder {
 
                     if processed_blocks.contains(&block_id) {
                         continue;
+                    }
+
+                    // Extract pattern bindings if this is a match arm body
+                    if let Some(pattern_info) = &typed_block.pattern_check {
+                        if let Some(variant_index) = pattern_info.variant_index {
+                            self.extract_pattern_bindings(block_id, &pattern_info.pattern, variant_index)?;
+                        }
                     }
 
                     for stmt in &typed_block.statements {
@@ -643,6 +657,69 @@ impl SsaBuilder {
             true_target,
             false_target,
         })
+    }
+
+    /// Extract pattern bindings for a match arm body
+    /// Generates ExtractUnionValue instructions for pattern variables
+    fn extract_pattern_bindings(
+        &mut self,
+        block_id: HirId,
+        pattern: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedPattern>,
+        variant_index: u32,
+    ) -> CompilerResult<()> {
+        use zyntax_typed_ast::typed_ast::TypedPattern;
+
+        // Get the scrutinee value from match context
+        let (scrutinee_val, union_type) = if let Some(ctx) = &self.match_context {
+            (ctx.scrutinee_value, ctx.union_type.clone())
+        } else {
+            return Ok(()); // No match context, nothing to extract
+        };
+
+        let union_type = match union_type {
+            Some(ty) => ty,
+            None => return Ok(()), // Not a union type, no extraction needed
+        };
+
+        // Extract bindings from the pattern
+        match &pattern.node {
+            TypedPattern::Enum { fields, .. } => {
+                // For patterns like Some(x), extract the inner value
+                if fields.len() == 1 {
+                    if let TypedPattern::Identifier { name, .. } = &fields[0].node {
+                        // Get the type of the variant's inner value
+                        let variant = union_type.variants.iter()
+                            .find(|v| v.discriminant == variant_index as u64)
+                            .ok_or_else(|| crate::CompilerError::Analysis(
+                                format!("Variant with index {} not found", variant_index)
+                            ))?;
+
+                        // Generate ExtractUnionValue instruction
+                        let extracted_id = HirId::new();
+                        self.add_instruction(
+                            block_id,
+                            HirInstruction::ExtractUnionValue {
+                                result: extracted_id,
+                                union_val: scrutinee_val,
+                                variant_index,
+                                ty: variant.ty.clone(),
+                            },
+                        );
+
+                        // Bind the extracted value to the variable
+                        self.write_variable(*name, block_id, extracted_id);
+
+                        eprintln!("[SSA] Extracted union value for pattern variable {:?}: val={:?}",
+                                 name, extracted_id);
+                    }
+                }
+            }
+            _ => {
+                // Other patterns don't need extraction (for now)
+            }
+        }
+
+        Ok(())
     }
 
     /// Process a basic block

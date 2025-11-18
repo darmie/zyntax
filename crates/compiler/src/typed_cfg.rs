@@ -927,12 +927,18 @@ impl TypedCfgBuilder {
                             arm.body.span,
                         );
 
+                        // Store pattern info on body block for variable extraction
+                        let body_pattern_info = self.extract_pattern_check_info(
+                            &match_stmt.scrutinee,
+                            &arm.pattern,
+                        );
+
                         all_blocks.push(TypedBasicBlock {
                             id: body_id,
                             label: None,
                             statements: vec![body_stmt],
                             terminator: TypedTerminator::Jump(merge_id),
-                        pattern_check: None,
+                        pattern_check: body_pattern_info,
                         });
 
                         prev_pattern_id = next_pattern_id;
