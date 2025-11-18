@@ -955,7 +955,10 @@ impl SsaBuilder {
         stmt: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedStatement>
     ) -> CompilerResult<()> {
         use zyntax_typed_ast::typed_ast::TypedStatement;
-        
+
+        eprintln!("[SSA] process_statement: block={:?}, stmt_variant={:?}",
+                 block_id, std::mem::discriminant(&stmt.node));
+
         match &stmt.node {
             TypedStatement::Let(let_stmt) => {
                 // Evaluate the initializer if present
@@ -978,6 +981,7 @@ impl SsaBuilder {
 
             TypedStatement::Match(match_stmt) => {
                 // Handle match statement: evaluate scrutinee
+                eprintln!("[SSA] Match scrutinee expression: {:?}", match_stmt.scrutinee.node);
                 let scrutinee_val = self.translate_expression(block_id, &match_stmt.scrutinee)?;
 
                 // Check if scrutinee is a union type (Optional, Result, or custom union)
@@ -1090,7 +1094,13 @@ impl SsaBuilder {
         
         match &expr.node {
             TypedExpression::Variable(name) => {
-                // Check for None enum constructor
+                // First try to read the variable - if it exists in scope, use it
+                // Only treat as enum constructor if it's not a defined variable
+                if let Some(value_id) = self.try_read_variable(*name, block_id) {
+                    return Ok(value_id);
+                }
+
+                // Variable not in scope - check for enum constructors
                 let name_str = {
                     let arena = self.arena.lock().unwrap();
                     arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
@@ -1100,6 +1110,7 @@ impl SsaBuilder {
                     return self.translate_enum_constructor(block_id, &name_str, &[], &expr.ty);
                 }
 
+                // If not an enum constructor, read as undefined variable
                 Ok(self.read_variable(*name, block_id))
             }
             
@@ -1724,6 +1735,11 @@ impl SsaBuilder {
     }
     
     /// Read a variable in SSA form
+    /// Try to read a variable without creating phis - returns None if not found
+    fn try_read_variable(&self, var: InternedString, block: HirId) -> Option<HirId> {
+        self.definitions.get(&block).and_then(|defs| defs.get(&var)).copied()
+    }
+
     fn read_variable(&mut self, var: InternedString, block: HirId) -> HirId {
         if let Some(&value) = self.definitions.get(&block).and_then(|defs| defs.get(&var)) {
             eprintln!("[SSA] read_variable({:?}, {:?}) = {:?} (found in definitions)", var, block, value);

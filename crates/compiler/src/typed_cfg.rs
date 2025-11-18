@@ -847,10 +847,15 @@ impl TypedCfgBuilder {
 
                     // Entry block evaluates scrutinee and jumps to first pattern check
                     let first_pattern_id = self.new_block_id();
+
+                    // Add the Match statement to the entry block so SSA can process it
+                    let mut entry_statements = current_statements.clone();
+                    entry_statements.push(stmt.clone());
+
                     all_blocks.push(TypedBasicBlock {
                         id: current_block_id,
                         label: None,
-                        statements: current_statements.clone(),
+                        statements: entry_statements,
                         terminator: TypedTerminator::Jump(first_pattern_id),
                     pattern_check: None,
                     });

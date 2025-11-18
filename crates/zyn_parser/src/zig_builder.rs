@@ -806,24 +806,52 @@ impl ZigBuilder {
         })?;
         let pattern = self.build_pattern(pattern_pair)?;
 
+        eprintln!("[AST] if-let pattern: {:?}", pattern.node);
+
         let scrutinee_pair = inner.next().ok_or_else(|| {
             BuildError::Internal("Missing expression in if let statement".to_string())
         })?;
         let scrutinee = self.build_expression(scrutinee_pair)?;
 
-        // Enter new scope for pattern bindings
-        self.enter_scope();
+        eprintln!("[AST] if-let scrutinee: {:?}", scrutinee.node);
 
-        // Add pattern bindings to scope
-        self.add_pattern_bindings(&pattern.node, &scrutinee.ty);
+        // For Optional types, if-let with identifier pattern means "unwrap Some(x)"
+        // Convert: if (let x = opt) → match opt { Some(x) => ..., None => ... }
+        let actual_pattern = if let Type::Optional(_) = &scrutinee.ty {
+            if let TypedPattern::Identifier { name, mutability } = pattern.node {
+                // Wrap identifier in Some enum pattern
+                let optional_name = self.builder.intern("Optional");
+                let some_name = self.builder.intern("Some");
+                TypedNode {
+                    node: TypedPattern::Enum {
+                        name: optional_name,
+                        variant: some_name,
+                        fields: vec![TypedNode {
+                            node: TypedPattern::Identifier { name, mutability },
+                            ty: pattern.ty.clone(),
+                            span: pattern.span,
+                        }],
+                    },
+                    ty: scrutinee.ty.clone(),
+                    span: pattern.span,
+                }
+            } else {
+                pattern
+            }
+        } else {
+            pattern
+        };
+
+        eprintln!("[AST] if-let actual pattern: {:?}", actual_pattern.node);
+
+        // Note: Pattern bindings will be handled by the SSA layer when processing
+        // the match arms. We don't add them here because they only exist in the
+        // successful match arm, not before the match.
 
         let then_block_pair = inner.next().ok_or_else(|| {
             BuildError::Internal("Missing then block in if let statement".to_string())
         })?;
         let then_block = self.build_block(then_block_pair)?;
-
-        // Exit scope after then block
-        self.exit_scope();
 
         // Check for else clause
         let else_block = if let Some(else_pair) = inner.next() {
@@ -851,7 +879,7 @@ impl ZigBuilder {
         let match_arms = if let Some(else_blk) = else_block {
             vec![
                 TypedMatchArm {
-                    pattern: Box::new(pattern),
+                    pattern: Box::new(actual_pattern.clone()),
                     guard: None,
                     body: Box::new(TypedNode {
                         node: TypedExpression::Block(then_block),
@@ -876,7 +904,7 @@ impl ZigBuilder {
         } else {
             vec![
                 TypedMatchArm {
-                    pattern: Box::new(pattern),
+                    pattern: Box::new(actual_pattern),
                     guard: None,
                     body: Box::new(TypedNode {
                         node: TypedExpression::Block(then_block),

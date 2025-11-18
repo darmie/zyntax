@@ -460,6 +460,7 @@ impl CraneliftBackend {
                             let extended = (*v as u32) as i64;
                             builder.ins().iconst(types::I32, extended)
                         }
+                        HirConstant::U32(v) => builder.ins().iconst(types::I32, *v as i64),
                         HirConstant::I64(v) => builder.ins().iconst(types::I64, *v),
                         HirConstant::Bool(v) => builder.ins().iconst(types::I8, if *v { 1 } else { 0 }),
                         HirConstant::F32(v) => builder.ins().f32const(*v),
@@ -983,6 +984,34 @@ impl CraneliftBackend {
                             builder.ins().store(MemFlags::new(), value_val, union_ptr, data_offset);
 
                             self.value_map.insert(*result, union_ptr);
+                        }
+
+                        HirInstruction::GetUnionDiscriminant { result, union_val } => {
+                            // Extract discriminant from union
+                            let union_ptr = self.value_map[union_val];
+                            let discriminant = builder.ins().load(
+                                types::I32,
+                                MemFlags::new(),
+                                union_ptr,
+                                0 // Discriminant is at offset 0
+                            );
+                            self.value_map.insert(*result, discriminant);
+                        }
+
+                        HirInstruction::ExtractUnionValue { result, ty, union_val, variant_index: _ } => {
+                            // Extract value from union variant (unsafe - assumes correct variant)
+                            let union_ptr = self.value_map[union_val];
+                            // Use type_cache if available, otherwise default to i64
+                            let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+                            let data_offset = 4; // Skip discriminant
+
+                            let value = builder.ins().load(
+                                cranelift_ty,
+                                MemFlags::new(),
+                                union_ptr,
+                                data_offset
+                            );
+                            self.value_map.insert(*result, value);
                         }
 
                         HirInstruction::CreateTraitObject { result, trait_id, data_ptr, vtable_id } => {
