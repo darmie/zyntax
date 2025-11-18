@@ -45,6 +45,19 @@ pub struct SsaBuilder {
     variable_writes: HashMap<HirId, HashSet<InternedString>>,
     /// Flag: after IDF placement, don't create new phis
     idf_placement_done: bool,
+    /// Current match context (scrutinee and discriminant for pattern matching)
+    match_context: Option<MatchContext>,
+}
+
+/// Context for pattern matching
+#[derive(Debug, Clone)]
+struct MatchContext {
+    /// The scrutinee value being matched
+    scrutinee_value: HirId,
+    /// The extracted discriminant (for union types)
+    discriminant_value: Option<HirId>,
+    /// The union type being matched (if applicable)
+    union_type: Option<Box<crate::hir::HirUnionType>>,
 }
 
 /// SSA form representation
@@ -259,6 +272,7 @@ impl SsaBuilder {
             string_globals: Vec::new(),
             variable_writes: HashMap::new(),
             idf_placement_done: false,
+            match_context: None,
         }
     }
     
@@ -393,7 +407,7 @@ impl SsaBuilder {
                 for stmt in &typed_block.statements {
                     self.process_statement(entry_block, stmt)?;
                 }
-                self.process_typed_terminator(entry_block, &typed_block.terminator)?;
+                self.process_typed_terminator(entry_block, &typed_block.terminator, &typed_block.pattern_check)?;
                 break;
             }
         }
@@ -437,7 +451,7 @@ impl SsaBuilder {
                 }
 
                 // Process the terminator
-                self.process_typed_terminator(block_id, &typed_block.terminator).unwrap();
+                self.process_typed_terminator(block_id, &typed_block.terminator, &typed_block.pattern_check).unwrap();
 
                 // Mark block as filled
                 self.filled_blocks.insert(block_id);
@@ -465,7 +479,7 @@ impl SsaBuilder {
                     for stmt in &typed_block.statements {
                         self.process_statement(block_id, stmt)?;
                     }
-                    self.process_typed_terminator(block_id, &typed_block.terminator)?;
+                    self.process_typed_terminator(block_id, &typed_block.terminator, &typed_block.pattern_check)?;
                     self.filled_blocks.insert(block_id);
                     if !self.sealed_blocks.contains(&block_id) {
                         self.seal_block(block_id);
@@ -500,7 +514,8 @@ impl SsaBuilder {
     fn process_typed_terminator(
         &mut self,
         block_id: HirId,
-        terminator: &crate::typed_cfg::TypedTerminator
+        terminator: &crate::typed_cfg::TypedTerminator,
+        pattern_check: &Option<crate::typed_cfg::PatternCheckInfo>,
     ) -> CompilerResult<()> {
         use crate::typed_cfg::TypedTerminator;
 
@@ -516,7 +531,23 @@ impl SsaBuilder {
             }
 
             TypedTerminator::Jump(target) => {
-                HirTerminator::Branch { target: *target }
+                // Check if this is a pattern check block
+                if let Some(pattern_info) = pattern_check {
+                    if let Some(variant_index) = pattern_info.variant_index {
+                        // This is an enum pattern check - generate discriminant comparison
+                        self.generate_pattern_discriminant_check(
+                            block_id,
+                            *target,
+                            variant_index,
+                        )?
+                    } else {
+                        // Non-enum pattern, just jump
+                        HirTerminator::Branch { target: *target }
+                    }
+                } else {
+                    // Regular jump, no pattern check
+                    HirTerminator::Branch { target: *target }
+                }
             }
 
             TypedTerminator::CondBranch { condition, true_target, false_target } => {
@@ -540,7 +571,80 @@ impl SsaBuilder {
 
         Ok(())
     }
-    
+
+    /// Generate discriminant check for pattern matching
+    /// Returns a CondBranch terminator that checks if discriminant == variant_index
+    fn generate_pattern_discriminant_check(
+        &mut self,
+        block_id: HirId,
+        true_target: HirId,
+        variant_index: u32,
+    ) -> CompilerResult<HirTerminator> {
+        // Get the discriminant from match context
+        let discriminant_val = self.match_context
+            .as_ref()
+            .and_then(|ctx| ctx.discriminant_value)
+            .ok_or_else(|| crate::CompilerError::Analysis(
+                "Pattern check block has no match context with discriminant".into()
+            ))?;
+
+        // Create constant for the variant index we're checking
+        let variant_const = crate::hir::HirConstant::U32(variant_index);
+        let const_id = HirId::new();
+        self.function.values.insert(const_id, crate::hir::HirValue {
+            id: const_id,
+            ty: HirType::U32,
+            kind: crate::hir::HirValueKind::Constant(variant_const),
+            uses: HashSet::new(),
+            span: None,
+        });
+
+        // Generate comparison: discriminant == variant_index
+        let cmp_result = HirId::new();
+        self.add_instruction(
+            block_id,
+            HirInstruction::Binary {
+                result: cmp_result,
+                op: crate::hir::BinaryOp::Eq,
+                left: discriminant_val,
+                right: const_id,
+                ty: HirType::Bool,
+            },
+        );
+
+        eprintln!("[SSA] Generated pattern check: discriminant({:?}) == {} -> {:?}",
+                 discriminant_val, variant_index, cmp_result);
+
+        // Get the next pattern check block (false target)
+        // The CFG should have set up successors properly
+        let false_target = {
+            let block = self.function.blocks.get(&block_id)
+                .ok_or_else(|| crate::CompilerError::Analysis("Block not found".into()))?;
+
+            // For pattern checks, there should be 2 successors:
+            // - true_target (pattern matches, go to body)
+            // - false_target (pattern doesn't match, try next pattern)
+            if block.successors.len() >= 2 {
+                // Find the successor that isn't the true_target
+                block.successors.iter()
+                    .find(|&&succ| succ != true_target)
+                    .copied()
+                    .ok_or_else(|| crate::CompilerError::Analysis(
+                        "Pattern check block should have 2 distinct successors".into()
+                    ))?
+            } else {
+                // Fallback: assume next successor or unreachable
+                *block.successors.get(0).unwrap_or(&true_target)
+            }
+        };
+
+        Ok(HirTerminator::CondBranch {
+            condition: cmp_result,
+            true_target,
+            false_target,
+        })
+    }
+
     /// Process a basic block
     fn process_block(&mut self, block_id: HirId, cfg: &ControlFlowGraph) -> CompilerResult<()> {
         // Find the CFG block
@@ -592,12 +696,44 @@ impl SsaBuilder {
 
             TypedStatement::Match(match_stmt) => {
                 // Handle match statement: evaluate scrutinee
-                // The actual pattern checking is done in the CFG branching
-                // Here we just evaluate the scrutinee and make it available
-                let _scrutinee_val = self.translate_expression(block_id, &match_stmt.scrutinee)?;
+                let scrutinee_val = self.translate_expression(block_id, &match_stmt.scrutinee)?;
+
+                // Check if scrutinee is a union type (Optional, Result, or custom union)
+                let scrutinee_hir_type = self.convert_type(&match_stmt.scrutinee.ty);
+
+                if let HirType::Union(union_type) = &scrutinee_hir_type {
+                    // Extract discriminant for pattern matching
+                    let discriminant_id = HirId::new();
+
+                    self.add_instruction(
+                        block_id,
+                        HirInstruction::GetUnionDiscriminant {
+                            result: discriminant_id,
+                            union_val: scrutinee_val,
+                        },
+                    );
+
+                    // Store match context for use in pattern check blocks
+                    self.match_context = Some(MatchContext {
+                        scrutinee_value: scrutinee_val,
+                        discriminant_value: Some(discriminant_id),
+                        union_type: Some(union_type.clone()),
+                    });
+
+                    eprintln!("[SSA] Match on union type: scrutinee={:?}, discriminant={:?}",
+                             scrutinee_val, discriminant_id);
+                } else {
+                    // Non-union match (e.g., literals, structs)
+                    self.match_context = Some(MatchContext {
+                        scrutinee_value: scrutinee_val,
+                        discriminant_value: None,
+                        union_type: None,
+                    });
+                    eprintln!("[SSA] Match on non-union type: {:?}", scrutinee_hir_type);
+                }
 
                 // Pattern binding variables will be handled when the pattern arm body is processed
-                // TODO: Full pattern matching compilation - for now CFG handles simple cases
+                // The CFG creates separate blocks for each pattern check and arm body
             }
 
             // Note: Control flow statements (While, If, etc.) are now handled at the
@@ -1899,6 +2035,9 @@ impl SsaBuilder {
                 // Convert Optional<T> to a tagged union: enum { None, Some(T) }
                 use crate::hir::{HirUnionType, HirUnionVariant};
 
+                // Convert inner type FIRST before locking arena
+                let inner_hir_type = self.convert_type(inner_ty);
+
                 let mut arena = self.arena.lock().unwrap();
                 let none_name = arena.intern_string("None");
                 let some_name = arena.intern_string("Some");
@@ -1914,7 +2053,7 @@ impl SsaBuilder {
                         },
                         HirUnionVariant {
                             name: some_name,
-                            ty: self.convert_type(inner_ty),
+                            ty: inner_hir_type,
                             discriminant: 1,
                         },
                     ],
@@ -1926,6 +2065,10 @@ impl SsaBuilder {
                 // Convert Result<T, E> to a tagged union: enum { Ok(T), Err(E) }
                 use crate::hir::{HirUnionType, HirUnionVariant};
 
+                // Convert inner types FIRST before locking arena
+                let ok_hir_type = self.convert_type(ok_type);
+                let err_hir_type = self.convert_type(err_type);
+
                 let mut arena = self.arena.lock().unwrap();
                 let ok_name = arena.intern_string("Ok");
                 let err_name = arena.intern_string("Err");
@@ -1936,12 +2079,12 @@ impl SsaBuilder {
                     variants: vec![
                         HirUnionVariant {
                             name: ok_name,
-                            ty: self.convert_type(ok_type),
+                            ty: ok_hir_type,
                             discriminant: 0,
                         },
                         HirUnionVariant {
                             name: err_name,
-                            ty: self.convert_type(err_type),
+                            ty: err_hir_type,
                             discriminant: 1,
                         },
                     ],

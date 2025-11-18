@@ -50,6 +50,19 @@ pub struct TypedBasicBlock {
     pub statements: Vec<TypedNode<TypedStatement>>,
     /// How control flow exits this block
     pub terminator: TypedTerminator,
+    /// Pattern check metadata (for pattern matching blocks)
+    pub pattern_check: Option<PatternCheckInfo>,
+}
+
+/// Pattern check information for a basic block
+#[derive(Debug, Clone)]
+pub struct PatternCheckInfo {
+    /// The scrutinee expression being matched
+    pub scrutinee: TypedNode<TypedExpression>,
+    /// The pattern being checked in this block
+    pub pattern: TypedNode<TypedPattern>,
+    /// Variant index if this is a union variant check
+    pub variant_index: Option<u32>,
 }
 
 /// Control flow terminator for TypedBasicBlock
@@ -179,6 +192,7 @@ impl TypedCfgBuilder {
                 label: None,
                 statements,
                 terminator,
+                pattern_check: None,
             },
             block_id, // exit_id (same as entry for simple blocks)
         ))
@@ -221,6 +235,7 @@ impl TypedCfgBuilder {
                             true_target: then_id,
                             false_target: else_id,
                         },
+                        pattern_check: None,
                     });
 
                     // Process then block
@@ -262,6 +277,7 @@ impl TypedCfgBuilder {
                             label: None,
                             statements: vec![],
                             terminator: TypedTerminator::Jump(merge_id),
+                        pattern_check: None,
                         });
                         false
                     };
@@ -297,6 +313,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: current_statements.clone(),
                         terminator: TypedTerminator::Jump(header_id),
+                    pattern_check: None,
                     });
 
                     // Header block evaluates condition
@@ -309,6 +326,7 @@ impl TypedCfgBuilder {
                             true_target: body_id,
                             false_target: after_id,
                         },
+                        pattern_check: None,
                     });
 
                     // Push loop context for Break/Continue
@@ -359,6 +377,7 @@ impl TypedCfgBuilder {
                                 label: None,
                                 statements: current_statements.clone(),
                                 terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
                             });
 
                             // Header block (no condition, always enters body)
@@ -367,6 +386,7 @@ impl TypedCfgBuilder {
                                 label: None,
                                 statements: vec![],
                                 terminator: TypedTerminator::Jump(body_id),
+                            pattern_check: None,
                             });
 
                             // Push loop context for Break/Continue
@@ -406,6 +426,7 @@ impl TypedCfgBuilder {
                                 label: None,
                                 statements: current_statements.clone(),
                                 terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
                             });
 
                             // Header block (iterator logic will be handled by SSA builder)
@@ -418,6 +439,7 @@ impl TypedCfgBuilder {
                                 // TODO: Create proper iterator condition expression
                                 // For now, treat as unconditional to body (will be fixed in SSA)
                                 terminator: TypedTerminator::Jump(body_id),
+                            pattern_check: None,
                             });
 
                             // Push loop context
@@ -465,6 +487,7 @@ impl TypedCfgBuilder {
                                 label: None,
                                 statements: current_statements.clone(),
                                 terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
                             });
 
                             // Header evaluates condition
@@ -478,6 +501,7 @@ impl TypedCfgBuilder {
                                         true_target: body_id,
                                         false_target: after_id,
                                     },
+                                    pattern_check: None,
                                 });
                             } else {
                                 // No condition = infinite loop (like while(true))
@@ -486,6 +510,7 @@ impl TypedCfgBuilder {
                                     label: None,
                                     statements: vec![],
                                     terminator: TypedTerminator::Jump(body_id),
+                                pattern_check: None,
                                 });
                             }
 
@@ -522,6 +547,7 @@ impl TypedCfgBuilder {
                                 label: None,
                                 statements: update_statements,
                                 terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
                             });
 
                             // Continue with after block
@@ -542,6 +568,7 @@ impl TypedCfgBuilder {
                                 label: None,
                                 statements: current_statements.clone(),
                                 terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
                             });
 
                             all_blocks.push(TypedBasicBlock {
@@ -553,6 +580,7 @@ impl TypedCfgBuilder {
                                     true_target: body_id,
                                     false_target: after_id,
                                 },
+                                pattern_check: None,
                             });
 
                             self.loop_stack.push((header_id, after_id));
@@ -585,6 +613,7 @@ impl TypedCfgBuilder {
                                 label: None,
                                 statements: current_statements.clone(),
                                 terminator: TypedTerminator::Jump(body_id),
+                            pattern_check: None,
                             });
 
                             self.loop_stack.push((header_id, after_id));
@@ -609,6 +638,7 @@ impl TypedCfgBuilder {
                                     true_target: body_id,
                                     false_target: after_id,
                                 },
+                                pattern_check: None,
                             });
 
                             current_statements = Vec::new();
@@ -630,6 +660,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: current_statements.clone(),
                         terminator: TypedTerminator::Jump(header_id),
+                    pattern_check: None,
                     });
 
                     // Header (iterator protocol handled by SSA)
@@ -638,6 +669,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: vec![],
                         terminator: TypedTerminator::Jump(body_id),
+                    pattern_check: None,
                     });
 
                     self.loop_stack.push((header_id, after_id));
@@ -675,6 +707,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: current_statements.clone(),
                         terminator: TypedTerminator::Jump(header_id),
+                    pattern_check: None,
                     });
 
                     // Header with condition
@@ -688,6 +721,7 @@ impl TypedCfgBuilder {
                                 true_target: body_id,
                                 false_target: after_id,
                             },
+                            pattern_check: None,
                         });
                     } else {
                         all_blocks.push(TypedBasicBlock {
@@ -695,6 +729,7 @@ impl TypedCfgBuilder {
                             label: None,
                             statements: vec![],
                             terminator: TypedTerminator::Jump(body_id),
+                        pattern_check: None,
                         });
                     }
 
@@ -724,6 +759,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: update_statements,
                         terminator: TypedTerminator::Jump(header_id),
+                    pattern_check: None,
                     });
 
                     current_statements = Vec::new();
@@ -752,6 +788,7 @@ impl TypedCfgBuilder {
                             label: None,
                             statements: current_statements.clone(),
                             terminator: TypedTerminator::Jump(exit_id),
+                        pattern_check: None,
                         });
 
                         // Create a new unreachable block for any statements after break
@@ -776,6 +813,7 @@ impl TypedCfgBuilder {
                             label: None,
                             statements: current_statements.clone(),
                             terminator: TypedTerminator::Jump(header_id),
+                        pattern_check: None,
                         });
 
                         // Create a new unreachable block for any statements after continue
@@ -814,6 +852,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: current_statements.clone(),
                         terminator: TypedTerminator::Jump(first_pattern_id),
+                    pattern_check: None,
                     });
 
                     let mut prev_pattern_id = first_pattern_id;
@@ -839,6 +878,7 @@ impl TypedCfgBuilder {
                                     true_target: body_id,
                                     false_target: next_pattern_id,
                                 },
+                                pattern_check: None,
                             });
                         } else {
                             // No guard: try to generate pattern check
@@ -859,15 +899,23 @@ impl TypedCfgBuilder {
                                         true_target: body_id,
                                         false_target: next_pattern_id,
                                     },
+                                    pattern_check: None,
                                 });
                             } else {
                                 // Pattern always matches (wildcard, binding, or check handled by SSA)
-                                // Jump directly to body
+                                // For enum patterns, store pattern info for SSA to generate discriminant check
+                                let pattern_check_info = self.extract_pattern_check_info(
+                                    &match_stmt.scrutinee,
+                                    &arm.pattern,
+                                );
+
+                                // Jump directly to body (SSA will upgrade to CondBranch if needed)
                                 all_blocks.push(TypedBasicBlock {
                                     id: prev_pattern_id,
                                     label: None,
                                     statements: vec![],
                                     terminator: TypedTerminator::Jump(body_id),
+                                pattern_check: pattern_check_info,
                                 });
                             }
                         }
@@ -884,6 +932,7 @@ impl TypedCfgBuilder {
                             label: None,
                             statements: vec![body_stmt],
                             terminator: TypedTerminator::Jump(merge_id),
+                        pattern_check: None,
                         });
 
                         prev_pattern_id = next_pattern_id;
@@ -895,6 +944,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: vec![],
                         terminator: TypedTerminator::Unreachable,
+                    pattern_check: None,
                     });
 
                     // Continue with merge block
@@ -910,6 +960,7 @@ impl TypedCfgBuilder {
                         label: None,
                         statements: current_statements.clone(),
                         terminator: TypedTerminator::Return(expr.clone()),
+                    pattern_check: None,
                     });
 
                     // No more processing after return
@@ -935,6 +986,7 @@ impl TypedCfgBuilder {
                 label: None,
                 statements: current_statements,
                 terminator: TypedTerminator::Unreachable,
+            pattern_check: None,
             });
             exit_id = current_block_id;
         } else {
@@ -1010,6 +1062,75 @@ impl TypedCfgBuilder {
             }
 
             // Other patterns not yet implemented
+            _ => None,
+        }
+    }
+
+    /// Extract pattern check information for SSA to use
+    /// Returns PatternCheckInfo if this pattern requires runtime checking
+    fn extract_pattern_check_info(
+        &self,
+        scrutinee: &TypedNode<TypedExpression>,
+        pattern: &TypedNode<TypedPattern>,
+    ) -> Option<PatternCheckInfo> {
+        use zyntax_typed_ast::typed_ast::TypedPattern;
+
+        match &pattern.node {
+            // Enum variant patterns need discriminant checks
+            TypedPattern::Enum { variant, .. } => {
+                // Get variant index from the type system
+                let variant_index = self.get_variant_index(&scrutinee.ty, variant)?;
+
+                Some(PatternCheckInfo {
+                    scrutinee: scrutinee.clone(),
+                    pattern: pattern.clone(),
+                    variant_index: Some(variant_index),
+                })
+            }
+
+            // Wildcards and simple bindings don't need checks
+            TypedPattern::Wildcard => None,
+            TypedPattern::Identifier { .. } => None,
+
+            // Other patterns might need checks but we'll handle them later
+            _ => None,
+        }
+    }
+
+    /// Get the discriminant index for a variant in a union/enum type
+    fn get_variant_index(&self, ty: &Type, variant_name: &InternedString) -> Option<u32> {
+        match ty {
+            Type::Optional(_) => {
+                // Optional has two variants: None (0) and Some (1)
+                let mut arena = zyntax_typed_ast::arena::AstArena::new();
+                let none = arena.intern_string("None");
+                let some = arena.intern_string("Some");
+
+                if variant_name == &none {
+                    Some(0)
+                } else if variant_name == &some {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+
+            Type::Result { .. } => {
+                // Result has two variants: Ok (0) and Err (1)
+                let mut arena = zyntax_typed_ast::arena::AstArena::new();
+                let ok = arena.intern_string("Ok");
+                let err = arena.intern_string("Err");
+
+                if variant_name == &ok {
+                    Some(0)
+                } else if variant_name == &err {
+                    Some(1)
+                } else {
+                    None
+                }
+            }
+
+            // TODO: Handle custom enums/unions from type registry
             _ => None,
         }
     }
