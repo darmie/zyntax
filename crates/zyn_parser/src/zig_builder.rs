@@ -13,7 +13,7 @@ use zyntax_typed_ast::{
         TypedDeclaration, TypedStatement, TypedBlock, TypedFunction,
         TypedParameter, TypedClass, TypedField, TypedStructLiteral,
         TypedFieldInit, TypedFieldAccess, TypedFor, TypedPattern,
-        TypedIndex, TypedMatch, TypedMatchArm, TypedLiteralPattern,
+        TypedIndex, TypedMatch, TypedMatchArm, TypedMatchExpr, TypedLiteralPattern,
         TypedLiteral, typed_node,
     },
 };
@@ -1435,6 +1435,9 @@ impl ZigBuilder {
             Rule::struct_literal => {
                 self.build_struct_literal(inner)
             }
+            Rule::switch_expr => {
+                self.build_switch_expr(inner)
+            }
             _ => Err(BuildError::UnexpectedRule {
                 expected: "primary".to_string(),
                 got: format!("{:?}", inner.as_rule()),
@@ -1717,6 +1720,105 @@ impl ZigBuilder {
 
     fn current_scope(&mut self) -> &mut Scope {
         self.scopes.last_mut().expect("No scope available")
+    }
+
+    fn build_switch_expr(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        let span_range = pair.as_span();
+        let span = Span::new(span_range.start(), span_range.end());
+        let mut inner = pair.into_inner();
+
+        // Parse scrutinee expression
+        let scrutinee_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing scrutinee in switch expression".to_string())
+        })?;
+        let scrutinee = self.build_expression(scrutinee_pair)?;
+
+        // Parse switch cases
+        let mut arms = Vec::new();
+        for case_pair in inner {
+            if case_pair.as_rule() == Rule::switch_case {
+                let mut case_inner = case_pair.into_inner();
+
+                // Parse pattern
+                let pattern_pair = case_inner.next().ok_or_else(|| {
+                    BuildError::Internal("Missing pattern in switch case".to_string())
+                })?;
+
+                let pattern = self.build_switch_pattern(pattern_pair, &scrutinee.ty)?;
+
+                // Parse body expression
+                let body_pair = case_inner.next().ok_or_else(|| {
+                    BuildError::Internal("Missing body in switch case".to_string())
+                })?;
+                let body = self.build_expression(body_pair)?;
+
+                arms.push(TypedMatchArm {
+                    pattern: Box::new(pattern),
+                    guard: None,
+                    body: Box::new(body),
+                });
+            }
+        }
+
+        // Infer result type from first arm's body
+        let result_ty = arms.first()
+            .map(|arm| arm.body.ty.clone())
+            .unwrap_or(Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit));
+
+        // Convert switch to match expression
+        let match_expr = TypedExpression::Match(TypedMatchExpr {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        });
+
+        Ok(typed_node(match_expr, result_ty, span))
+    }
+
+    fn build_switch_pattern(
+        &mut self,
+        pair: Pair<Rule>,
+        scrutinee_ty: &Type,
+    ) -> BuildResult<TypedNode<TypedPattern>> {
+        let span_range = pair.as_span();
+        let span = Span::new(span_range.start(), span_range.end());
+        let mut inner = pair.into_inner();
+
+        let pattern_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Empty switch pattern".to_string())
+        })?;
+
+        let pattern = match pattern_pair.as_rule() {
+            Rule::integer_literal => {
+                // Literal pattern: 1 => expr
+                // Parse the integer directly
+                let text = pattern_pair.as_str();
+                let value: i128 = text.parse()
+                    .map_err(|_| BuildError::ParseNumber(text.to_string()))?;
+                TypedPattern::Literal(TypedLiteralPattern::Integer(value))
+            }
+            Rule::switch_else => {
+                // Wildcard pattern for else
+                TypedPattern::Wildcard
+            }
+            Rule::identifier => {
+                // Enum variant pattern
+                let name_str = pattern_pair.as_str();
+                let variant_name = self.builder.intern(name_str);
+                TypedPattern::Enum {
+                    name: variant_name,
+                    variant: variant_name,
+                    fields: vec![],
+                }
+            }
+            _ => {
+                return Err(BuildError::UnexpectedRule {
+                    expected: "switch_pattern".to_string(),
+                    got: format!("{:?}", pattern_pair.as_rule()),
+                });
+            }
+        };
+
+        Ok(typed_node(pattern, scrutinee_ty.clone(), span))
     }
 }
 

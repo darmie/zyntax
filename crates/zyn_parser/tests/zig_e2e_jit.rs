@@ -472,7 +472,6 @@ fn test_zig_jit_sized_array_type() {
 // TODO: Fix stack overflow when combining arrays with loops
 // Likely an issue with SSA variable reads/phi nodes for array indexing in loops
 #[test]
-#[ignore]
 fn test_zig_jit_array_in_loop() {
     let source = r#"
         fn sum_with_loop() i32 {
@@ -557,6 +556,32 @@ fn test_zig_if_let_syntax() {
     }
 
     println!("[Zig Syntax] ✓ if let syntax: parses and builds to TypedAST");
+}
+
+#[test]
+fn test_zig_jit_switch_expression() {
+    let source = r#"
+        fn get_name(x: i32) i32 {
+            return switch (x) {
+                1 => 100,
+                2 => 200,
+                3 => 300,
+                else => 999
+            };
+        }
+    "#;
+
+    let result1 = compile_and_execute_zig(source, "get_name", vec![1]);
+    assert_eq!(result1, 100);
+    println!("[Zig E2E] ✓ switch(1) = {}", result1);
+
+    let result2 = compile_and_execute_zig(source, "get_name", vec![2]);
+    assert_eq!(result2, 200);
+    println!("[Zig E2E] ✓ switch(2) = {}", result2);
+
+    let result3 = compile_and_execute_zig(source, "get_name", vec![99]);
+    assert_eq!(result3, 999);
+    println!("[Zig E2E] ✓ switch(99) = {} (else)", result3);
 }
 
 #[test]

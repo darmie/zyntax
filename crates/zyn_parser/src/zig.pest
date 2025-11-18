@@ -158,9 +158,30 @@ args = { expr ~ ("," ~ expr)* }
 primary = {
     literal
   | struct_literal
+  | switch_expr
   | "(" ~ expr ~ ")"
   | identifier
 }
+
+// ===== Switch Expression =====
+
+switch_expr = {
+    "switch" ~ "(" ~ expr ~ ")" ~ "{" ~
+    switch_case ~ ("," ~ switch_case)* ~ ","? ~
+    "}"
+}
+
+switch_case = {
+    switch_pattern ~ "=>" ~ expr
+}
+
+switch_pattern = {
+    integer_literal           // Single value: 1 => ...
+  | switch_else               // Default case
+  | identifier                // Enum variant or named value
+}
+
+switch_else = { "else" }
 
 // ===== Literals =====
 
