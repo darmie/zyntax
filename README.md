@@ -4,7 +4,7 @@
 
 [![Tests](https://img.shields.io/badge/tests-280%2F284%20passing-brightgreen)](./crates/compiler/tests)
 [![Test Coverage](https://img.shields.io/badge/coverage-98.6%25-brightgreen)](./crates/compiler/tests)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
 ---
