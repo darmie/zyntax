@@ -162,6 +162,14 @@ Zig provides an excellent foundation for testing Zyntax's compiler infrastructur
 - `break` and `continue` statements
 - `return` statements
 
+**Pattern Matching:**
+
+- `match` expressions on union types (Optional, Result)
+- `if let` syntax for optional unwrapping
+- Discriminant-based conditional branching
+- Pattern variable bindings with value extraction
+- Exhaustiveness checking
+
 **Advanced Features:**
 
 - Struct definitions with typed fields
