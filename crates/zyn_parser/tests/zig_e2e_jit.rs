@@ -557,7 +557,61 @@ fn test_zig_if_let_syntax() {
     }
 
     println!("[Zig Syntax] ✓ if let syntax: parses and builds to TypedAST");
-    println!("[NOTE] Full execution requires pattern matching backend (tracked in BACKLOG.md)");
+}
+
+#[test]
+#[ignore] // TODO: Requires Optional/Result value construction (Some(42), None literals)
+fn test_pattern_match_runtime_execution() {
+    // NOTE: This test demonstrates the INTENDED runtime behavior of pattern matching.
+    // Pattern matching DECONSTRUCTION is fully implemented (GetUnionDiscriminant, ExtractUnionValue, etc.)
+    // However, this test cannot run yet because Optional/Result value CONSTRUCTION is not implemented.
+    //
+    // What's implemented:
+    // ✅ Pattern matching infrastructure (CFG → SSA → HIR)
+    // ✅ Discriminant-based conditional branching
+    // ✅ Value extraction with ExtractUnionValue
+    // ✅ Variable bindings in match arms
+    //
+    // What's missing for this test:
+    // ❌ Creating Optional values: var opt: ?i32 = Some(42) or = None
+    // ❌ Creating Result values: var res: !i32 = Ok(val) or = Err(e)
+    //
+    // The pattern matching works perfectly when tested with manually constructed HIR
+    // (see stdlib/option.rs and stdlib/result.rs for working examples)
+
+    // Test 1: if let with Some variant - extract and use the value
+    let source_some = r#"
+        fn test_some_pattern() i32 {
+            var opt: ?i32 = Some(42);  // ← Requires Some() constructor
+
+            if (let x = opt) {
+                return x * 2;
+            } else {
+                return 0;
+            }
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source_some, "test_some_pattern", vec![]);
+    assert_eq!(result, 84, "Some(42) * 2 should equal 84");
+    println!("[Pattern Match Runtime] ✓ Some variant: extracted value and computed correctly (84)");
+
+    // Test 2: if let with None - take else branch
+    let source_none = r#"
+        fn test_none_pattern() i32 {
+            var opt: ?i32 = None;  // ← Requires None literal
+
+            if (let x = opt) {
+                return x * 2;
+            } else {
+                return -1;
+            }
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source_none, "test_none_pattern", vec![]);
+    assert_eq!(result, -1, "None should return -1");
+    println!("[Pattern Match Runtime] ✓ None variant: matched correctly (-1)");
 }
 
 #[test]
