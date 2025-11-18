@@ -14,7 +14,7 @@ use zyntax_typed_ast::{
         TypedParameter, TypedClass, TypedField, TypedStructLiteral,
         TypedFieldInit, TypedFieldAccess, TypedFor, TypedPattern,
         TypedIndex, TypedMatch, TypedMatchArm, TypedLiteralPattern,
-        TypedLiteral,
+        TypedLiteral, typed_node,
     },
 };
 use std::collections::HashMap;
@@ -1414,7 +1414,9 @@ impl ZigBuilder {
                 let name = inner.as_str();
                 let span_range = inner.as_span();
                 let span = Span::new(span_range.start(), span_range.end());
-                let interned_name = self.intern(name);
+
+                // Intern the name ONCE to ensure consistent symbols
+                let interned_name = self.builder.intern(name);
 
                 // Look up variable type from scope
                 let ty = self.lookup_variable_type(interned_name)
@@ -1423,7 +1425,8 @@ impl ZigBuilder {
                         Type::Primitive(zyntax_typed_ast::PrimitiveType::I32)
                     });
 
-                Ok(self.builder.variable(name, ty, span))
+                // Use the pre-interned name directly
+                Ok(typed_node(TypedExpression::Variable(interned_name), ty, span))
             }
             Rule::expr => {
                 // Parenthesized expression

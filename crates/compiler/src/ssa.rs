@@ -1093,13 +1093,17 @@ impl SsaBuilder {
                     arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
                 };
 
+                eprintln!("[SSA] Variable not found: {:?} resolves to '{}', type: {:?}", name, name_str, expr.ty);
+
                 // Check for known enum constructors
                 match name_str.as_str() {
                     "None" | "Some" | "Ok" | "Err" => {
+                        eprintln!("[SSA] Recognized as enum constructor: {}", name_str);
                         return self.translate_enum_constructor(block_id, &name_str, &[], &expr.ty);
                     }
                     _ => {
-                        // If not an enum constructor, read as undefined variable
+                        // If not an enum constructor, reading as undefined variable
+                        eprintln!("[SSA] Not an enum constructor, reading as undefined variable");
                         Ok(self.read_variable(*name, block_id))
                     }
                 }
