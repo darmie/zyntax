@@ -1,16 +1,17 @@
 # Zyntax Compiler - Development Backlog
 
 **Last Updated**: November 18, 2025
-**Current Status**: Production-Ready Core (98.9% tests passing, 20/21 Zig tests + array loop test)
+**Current Status**: Production-Ready Core (99% tests passing, 22/23 Zig tests)
 
 **Recent Progress**:
+- ✅ **Fixed control flow in return position** (switch/match/if expressions)
+- ✅ **Switch expressions working** (test_zig_jit_switch_expression passing)
 - ✅ **Fixed array indexing in loops bug** (SSA phi node cycle breaking)
 - ✅ **Pattern matching infrastructure complete** (Some/Ok/Err working)
 - ✅ Fixed branch wiring for match statements (proper false_target)
 - ✅ Fixed match arm body extraction (return statements preserved)
 - ✅ All loop tests passing (for, while, continue, break)
-- ✅ Array indexing in loops test passing (was stack overflow, now fixed)
-- ✅ 20/21 Zig E2E JIT tests passing (95.2%)
+- ✅ 22/23 Zig E2E JIT tests passing (95.7%)
 
 ---
 
@@ -52,13 +53,13 @@
 - [x] **String literals** (basic support, lowered to `*i8` globals) ✅
 - [x] **Optional types** (`?T` syntax) ✅
 - [x] **Pattern matching** (Some/Ok/Err variants working) ✅
+- [x] **Switch expressions** (full support with literal and wildcard patterns) ✅
 - [ ] Pattern matching - None literal (arena symbol resolution issue)
 - [ ] String operations (needs stdlib integration via plugin system)
 - [ ] Error unions (`!T` types)
-- [ ] Switch expressions
 - [ ] Generic functions
 - [ ] Generics and advanced type features
-- [x] 20/21 E2E JIT tests passing (95.2%) ✅
+- [x] 22/23 E2E JIT tests passing (95.7%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:
@@ -313,6 +314,21 @@
 ---
 
 ## Completed (Archive)
+
+### ✅ Switch Expression Implementation (November 18, 2025)
+**Problem**: Switch expressions not working - Cranelift only processed entry block, ignoring all match logic
+**Root Cause**: When control flow expressions (switch/match/if) were in return position, the Return statement overwrote the entry block's Branch terminator with Return, making other blocks unreachable
+**Solution**:
+- Added `continuation_block` field to SsaBuilder to track merge/end blocks
+- Control flow expressions set continuation_block when creating branching structure
+- Return statement handler places Return on continuation block instead of entry block
+- Preserves entry block's Branch terminator, allowing full CFG traversal
+**Files Modified**:
+- `crates/compiler/src/ssa.rs`: Added continuation_block tracking and fixed process_typed_terminator
+- `crates/zyn_parser/src/zig.pest`: Switch expression grammar
+- `crates/zyn_parser/src/zig_builder.rs`: build_switch_expr and build_switch_pattern functions
+- `crates/zyn_parser/tests/zig_e2e_jit.rs`: test_zig_jit_switch_expression
+**Impact**: Switch expressions fully working, 22/23 Zig tests passing (95.7%)
 
 ### ✅ Array Indexing in Loops Bug Fix (November 18, 2025)
 **Problem**: Stack overflow when accessing arrays inside while loops
