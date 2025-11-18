@@ -63,6 +63,8 @@ pub struct PatternCheckInfo {
     pub pattern: TypedNode<TypedPattern>,
     /// Variant index if this is a union variant check
     pub variant_index: Option<u32>,
+    /// Target block if pattern check fails (for match arms)
+    pub false_target: Option<HirId>,
 }
 
 /// Control flow terminator for TypedBasicBlock
@@ -912,6 +914,7 @@ impl TypedCfgBuilder {
                                 let pattern_check_info = self.extract_pattern_check_info(
                                     &match_stmt.scrutinee,
                                     &arm.pattern,
+                                    Some(next_pattern_id),
                                 );
 
                                 // Jump directly to body (SSA will upgrade to CondBranch if needed)
@@ -925,24 +928,53 @@ impl TypedCfgBuilder {
                             }
                         }
 
-                        // Body block - arm body is an expression
-                        let body_stmt = typed_node(
-                            zyntax_typed_ast::typed_ast::TypedStatement::Expression(arm.body.clone()),
-                            arm.body.ty.clone(),
-                            arm.body.span,
-                        );
+                        // Body block - extract statements from the arm body
+                        // If arm body is a Block expression, extract its statements
+                        // Otherwise, wrap it in an Expression statement
+                        let (body_stmts, body_terminator) = match &arm.body.node {
+                            TypedExpression::Block(block) => {
+                                // Extract statements from the block
+                                // Last statement might be a return - if so, use it as terminator
+                                if let Some(last_stmt) = block.statements.last() {
+                                    if matches!(last_stmt.node, TypedStatement::Return(_)) {
+                                        let stmts = block.statements[..block.statements.len()-1].to_vec();
+                                        let ret_stmt = &block.statements[block.statements.len()-1];
+                                        let term = if let TypedStatement::Return(ret_expr) = &ret_stmt.node {
+                                            TypedTerminator::Return(ret_expr.clone())
+                                        } else {
+                                            TypedTerminator::Jump(merge_id)
+                                        };
+                                        (stmts, term)
+                                    } else {
+                                        (block.statements.clone(), TypedTerminator::Jump(merge_id))
+                                    }
+                                } else {
+                                    (vec![], TypedTerminator::Jump(merge_id))
+                                }
+                            }
+                            _ => {
+                                // Non-block expression, wrap in Expression statement
+                                let body_stmt = typed_node(
+                                    zyntax_typed_ast::typed_ast::TypedStatement::Expression(arm.body.clone()),
+                                    arm.body.ty.clone(),
+                                    arm.body.span,
+                                );
+                                (vec![body_stmt], TypedTerminator::Jump(merge_id))
+                            }
+                        };
 
                         // Store pattern info on body block for variable extraction
                         let body_pattern_info = self.extract_pattern_check_info(
                             &match_stmt.scrutinee,
                             &arm.pattern,
+                            None,
                         );
 
                         all_blocks.push(TypedBasicBlock {
                             id: body_id,
                             label: None,
-                            statements: vec![body_stmt],
-                            terminator: TypedTerminator::Jump(merge_id),
+                            statements: body_stmts,
+                            terminator: body_terminator,
                         pattern_check: body_pattern_info,
                         });
 
@@ -1083,6 +1115,7 @@ impl TypedCfgBuilder {
         &self,
         scrutinee: &TypedNode<TypedExpression>,
         pattern: &TypedNode<TypedPattern>,
+        false_target: Option<HirId>,
     ) -> Option<PatternCheckInfo> {
         use zyntax_typed_ast::typed_ast::TypedPattern;
 
@@ -1096,6 +1129,7 @@ impl TypedCfgBuilder {
                     scrutinee: scrutinee.clone(),
                     pattern: pattern.clone(),
                     variant_index: Some(variant_index),
+                    false_target,
                 })
             }
 

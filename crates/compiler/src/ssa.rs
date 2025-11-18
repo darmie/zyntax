@@ -545,17 +545,19 @@ impl SsaBuilder {
             }
 
             TypedTerminator::Jump(target) => {
-                // Check if this is a pattern check block
+                // Check if this is a pattern check block (has pattern_check with false_target)
                 if let Some(pattern_info) = pattern_check {
-                    if let Some(variant_index) = pattern_info.variant_index {
+                    if let (Some(variant_index), Some(false_target)) =
+                        (pattern_info.variant_index, pattern_info.false_target) {
                         // This is an enum pattern check - generate discriminant comparison
                         self.generate_pattern_discriminant_check(
                             block_id,
                             *target,
+                            false_target,
                             variant_index,
                         )?
                     } else {
-                        // Non-enum pattern, just jump
+                        // Body block or non-enum pattern, just jump
                         HirTerminator::Branch { target: *target }
                     }
                 } else {
@@ -592,6 +594,7 @@ impl SsaBuilder {
         &mut self,
         block_id: HirId,
         true_target: HirId,
+        false_target: HirId,
         variant_index: u32,
     ) -> CompilerResult<HirTerminator> {
         // Get the discriminant from match context
@@ -629,29 +632,7 @@ impl SsaBuilder {
         eprintln!("[SSA] Generated pattern check: discriminant({:?}) == {} -> {:?}",
                  discriminant_val, variant_index, cmp_result);
 
-        // Get the next pattern check block (false target)
-        // The CFG should have set up successors properly
-        let false_target = {
-            let block = self.function.blocks.get(&block_id)
-                .ok_or_else(|| crate::CompilerError::Analysis("Block not found".into()))?;
-
-            // For pattern checks, there should be 2 successors:
-            // - true_target (pattern matches, go to body)
-            // - false_target (pattern doesn't match, try next pattern)
-            if block.successors.len() >= 2 {
-                // Find the successor that isn't the true_target
-                block.successors.iter()
-                    .find(|&&succ| succ != true_target)
-                    .copied()
-                    .ok_or_else(|| crate::CompilerError::Analysis(
-                        "Pattern check block should have 2 distinct successors".into()
-                    ))?
-            } else {
-                // Fallback: assume next successor or unreachable
-                *block.successors.get(0).unwrap_or(&true_target)
-            }
-        };
-
+        // Use the false_target provided by CFG (next pattern check or unreachable block)
         Ok(HirTerminator::CondBranch {
             condition: cmp_result,
             true_target,
@@ -904,13 +885,19 @@ impl SsaBuilder {
             self.translate_expression(block_id, &args[0])?
         };
 
-        // Create the union value
-        let result_id = HirId::new();
+        // Create the union value - must register in values map with Ptr type
+        // Union values are represented as pointers to stack-allocated memory
+        let union_hir_ty = HirType::Union(Box::new(union_type.clone()));
+        let result_id = self.create_value(
+            union_hir_ty.clone(),
+            HirValueKind::Instruction
+        );
+
         self.add_instruction(
             block_id,
             HirInstruction::CreateUnion {
                 result: result_id,
-                union_ty: HirType::Union(Box::new(union_type)),
+                union_ty: union_hir_ty,
                 variant_index,
                 value: value_id,
             },
@@ -1106,12 +1093,16 @@ impl SsaBuilder {
                     arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
                 };
 
-                if name_str == "None" {
-                    return self.translate_enum_constructor(block_id, &name_str, &[], &expr.ty);
+                // Check for known enum constructors
+                match name_str.as_str() {
+                    "None" | "Some" | "Ok" | "Err" => {
+                        return self.translate_enum_constructor(block_id, &name_str, &[], &expr.ty);
+                    }
+                    _ => {
+                        // If not an enum constructor, read as undefined variable
+                        Ok(self.read_variable(*name, block_id))
+                    }
                 }
-
-                // If not an enum constructor, read as undefined variable
-                Ok(self.read_variable(*name, block_id))
             }
             
             TypedExpression::Literal(lit) => {
@@ -1816,19 +1807,51 @@ impl SsaBuilder {
                     }
                 }
                 // No phi found - variable doesn't need a phi (like read-only parameters)
+                // IMPORTANT: To avoid infinite recursion with loops, we need to create a
+                // temporary placeholder phi before recursing to predecessors.
+                let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
+                let phi_val = self.create_value(ty.clone(), HirValueKind::Instruction);
+
+                // Temporarily write to break cycles
+                self.write_variable(var, block, phi_val);
+
                 // Try reading from each predecessor until we find the value
+                let mut found_values = Vec::new();
                 for pred in &predecessors {
                     let val = self.read_variable(var, *pred);
                     // Check if it's not undef
                     if let Some(v) = self.function.values.get(&val) {
                         if !matches!(v.kind, HirValueKind::Undef) {
-                            return val;
+                            found_values.push((val, *pred));
                         }
                     }
                 }
-                // All predecessors returned undef - variable is truly undefined
-                let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
-                return self.create_undef(ty);
+
+                // If all values are the same (and not the phi itself), just return that value
+                let unique_vals: HashSet<_> = found_values.iter()
+                    .map(|(v, _)| v)
+                    .filter(|&&v| v != phi_val)
+                    .collect();
+
+                if unique_vals.len() == 1 {
+                    // All predecessors have same value - no phi needed
+                    let single_val = **unique_vals.iter().next().unwrap();
+                    self.write_variable(var, block, single_val);
+                    return single_val;
+                } else if unique_vals.is_empty() {
+                    // All predecessors returned undef or just this phi
+                    let undef = self.create_undef(ty);
+                    self.write_variable(var, block, undef);
+                    return undef;
+                } else {
+                    // Need a real phi node
+                    self.function.blocks.get_mut(&block).unwrap().phis.push(HirPhi {
+                        result: phi_val,
+                        ty,
+                        incoming: found_values,
+                    });
+                    return phi_val;
+                }
             }
 
             let ty = self.var_types.get(&var).cloned()

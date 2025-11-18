@@ -20,7 +20,9 @@ fn convert_and_extract_function(source: &str) -> Result<Vec<zyntax_typed_ast::Ty
     // Extract first function
     for decl in &typed_program.declarations {
         if let TypedDeclaration::Function(func) = &decl.node {
-            return Ok(func.body.statements.clone());
+            if let Some(body) = &func.body {
+                return Ok(body.statements.clone());
+            }
         }
     }
 
@@ -289,14 +291,15 @@ function caller(y: int) -> int {
 
     // Extract second function
     if let TypedDeclaration::Function(func) = &typed_program.declarations[1].node {
-        let body = &func.body;
-        if body.statements.len() > 0 {
-            if let TypedStatement::Return(Some(expr)) = &body.statements[0].node {
-                print_expr(&expr, &adapter, 0);
+        if let Some(body) = &func.body {
+            if body.statements.len() > 0 {
+                if let TypedStatement::Return(Some(expr)) = &body.statements[0].node {
+                    print_expr(&expr, &adapter, 0);
 
-                if let TypedExpression::Call(call) = &expr.node {
-                    println!("Call result type: {:?}", expr.ty);
-                    println!("Number of positional args: {}", call.positional_args.len());
+                    if let TypedExpression::Call(call) = &expr.node {
+                        println!("Call result type: {:?}", expr.ty);
+                        println!("Number of positional args: {}", call.positional_args.len());
+                    }
                 }
             }
         }
