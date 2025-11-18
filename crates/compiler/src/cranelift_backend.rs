@@ -959,13 +959,30 @@ impl CraneliftBackend {
                             self.value_map.insert(*result, current_ptr);
                         }
 
-                        HirInstruction::CreateUnion { result, union_ty, variant_index, value } => {
-                            // Simplified union creation: allocate space and store discriminant + value
-                            // For now, create a dummy pointer value
-                            // TODO: Implement proper union layout with malloc + field storage
-                            warn!(" CreateUnion called - returning null pointer (not implemented)");
-                            let dummy_ptr = builder.ins().iconst(types::I64, 0);
-                            self.value_map.insert(*result, dummy_ptr);
+                        HirInstruction::CreateUnion { result, union_ty: _, variant_index, value } => {
+                            // Create a tagged union value
+                            // TODO: Calculate proper union layout - for now use fixed size of 16 bytes
+                            // (4 bytes discriminant + 12 bytes data, sufficient for i32/i64/ptr)
+                            let union_size = 16u32;
+                            let ptr_ty = self.module.target_config().pointer_type();
+
+                            // Allocate space for the union on the stack
+                            let union_slot = builder.create_sized_stack_slot(StackSlotData::new(
+                                StackSlotKind::ExplicitSlot,
+                                union_size
+                            ));
+                            let union_ptr = builder.ins().stack_addr(ptr_ty, union_slot, 0);
+
+                            // Store the discriminant in the first field
+                            let discriminant = builder.ins().iconst(types::I32, *variant_index as i64);
+                            builder.ins().store(MemFlags::new(), discriminant, union_ptr, 0);
+
+                            // Store the value in the data field (after discriminant)
+                            let value_val = self.value_map[value];
+                            let data_offset = 4; // Assuming 4-byte discriminant
+                            builder.ins().store(MemFlags::new(), value_val, union_ptr, data_offset);
+
+                            self.value_map.insert(*result, union_ptr);
                         }
 
                         HirInstruction::CreateTraitObject { result, trait_id, data_ptr, vtable_id } => {

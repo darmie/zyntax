@@ -560,24 +560,18 @@ fn test_zig_if_let_syntax() {
 }
 
 #[test]
-#[ignore] // TODO: Requires Optional/Result value construction (Some(42), None literals)
 fn test_pattern_match_runtime_execution() {
-    // NOTE: This test demonstrates the INTENDED runtime behavior of pattern matching.
-    // Pattern matching DECONSTRUCTION is fully implemented (GetUnionDiscriminant, ExtractUnionValue, etc.)
-    // However, this test cannot run yet because Optional/Result value CONSTRUCTION is not implemented.
+    // This test verifies complete end-to-end pattern matching:
+    // ✅ Pattern matching CONSTRUCTION: Some(42), None literals
+    // ✅ Pattern matching DECONSTRUCTION: GetUnionDiscriminant, ExtractUnionValue
+    // ✅ Complete pipeline: Parser → AST → CFG → SSA → HIR → Cranelift
     //
-    // What's implemented:
-    // ✅ Pattern matching infrastructure (CFG → SSA → HIR)
+    // What's tested:
+    // ✅ CreateUnion instruction generation for Some(value) and None
     // ✅ Discriminant-based conditional branching
     // ✅ Value extraction with ExtractUnionValue
-    // ✅ Variable bindings in match arms
-    //
-    // What's missing for this test:
-    // ❌ Creating Optional values: var opt: ?i32 = Some(42) or = None
-    // ❌ Creating Result values: var res: !i32 = Ok(val) or = Err(e)
-    //
-    // The pattern matching works perfectly when tested with manually constructed HIR
-    // (see stdlib/option.rs and stdlib/result.rs for working examples)
+    // ✅ Variable bindings in pattern arms
+    // ✅ Runtime execution through Cranelift JIT
 
     // Test 1: if let with Some variant - extract and use the value
     let source_some = r#"

@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use zyntax_typed_ast::{InternedString, Type, ConstValue};
+use zyntax_typed_ast::{InternedString, Type, ConstValue, typed_ast::{TypedNode, TypedExpression}};
 use petgraph::visit::EdgeRef; // For .source() method on edges
 use crate::hir::{
     HirId, HirFunction, HirBlock, HirInstruction, HirValueKind,
@@ -722,6 +722,211 @@ impl SsaBuilder {
         Ok(())
     }
 
+    /// Translate enum constructors (Some, None, Ok, Err) to CreateUnion instructions
+    pub fn translate_enum_constructor(
+        &mut self,
+        block_id: HirId,
+        constructor_name: &str,
+        args: &[TypedNode<TypedExpression>],
+        result_ty: &Type,
+    ) -> CompilerResult<HirId> {
+        use crate::hir::{HirInstruction, HirType, HirUnionType, HirUnionVariant};
+
+        // Determine variant index and extract inner type
+        let (variant_index, inner_ty, union_type) = match constructor_name {
+            "None" => {
+                // None: Optional<T> with discriminant 0, void value
+                // Extract T from Optional<T> or infer from context
+                let inner_hir_ty = if let Type::Optional(inner) = result_ty {
+                    self.convert_type(inner)
+                } else {
+                    // Fallback: use void if type is unclear
+                    HirType::Void
+                };
+
+                let mut arena = self.arena.lock().unwrap();
+                let none_name = arena.intern_string("None");
+                let some_name = arena.intern_string("Some");
+                drop(arena);
+
+                let union_ty = HirUnionType {
+                    name: None,
+                    variants: vec![
+                        HirUnionVariant {
+                            name: none_name,
+                            ty: HirType::Void,
+                            discriminant: 0,
+                        },
+                        HirUnionVariant {
+                            name: some_name,
+                            ty: inner_hir_ty.clone(),
+                            discriminant: 1,
+                        },
+                    ],
+                    discriminant_type: Box::new(HirType::U32),
+                    is_c_union: false,
+                };
+
+                (0, HirType::Void, union_ty)
+            }
+            "Some" => {
+                // Some(value): Optional<T> with discriminant 1
+                if args.len() != 1 {
+                    return Err(crate::CompilerError::Analysis(
+                        format!("Some() requires exactly 1 argument, got {}", args.len())
+                    ));
+                }
+
+                let value_ty = self.convert_type(&args[0].ty);
+
+                let mut arena = self.arena.lock().unwrap();
+                let none_name = arena.intern_string("None");
+                let some_name = arena.intern_string("Some");
+                drop(arena);
+
+                let union_ty = HirUnionType {
+                    name: None,
+                    variants: vec![
+                        HirUnionVariant {
+                            name: none_name,
+                            ty: HirType::Void,
+                            discriminant: 0,
+                        },
+                        HirUnionVariant {
+                            name: some_name,
+                            ty: value_ty.clone(),
+                            discriminant: 1,
+                        },
+                    ],
+                    discriminant_type: Box::new(HirType::U32),
+                    is_c_union: false,
+                };
+
+                (1, value_ty, union_ty)
+            }
+            "Ok" => {
+                // Ok(value): Result<T,E> with discriminant 0
+                if args.len() != 1 {
+                    return Err(crate::CompilerError::Analysis(
+                        format!("Ok() requires exactly 1 argument, got {}", args.len())
+                    ));
+                }
+
+                let value_ty = self.convert_type(&args[0].ty);
+
+                // Extract error type from Result<T,E> or default to i32
+                let error_ty = if let Type::Result { err_type, .. } = result_ty {
+                    self.convert_type(err_type)
+                } else {
+                    HirType::I32
+                };
+
+                let mut arena = self.arena.lock().unwrap();
+                let ok_name = arena.intern_string("Ok");
+                let err_name = arena.intern_string("Err");
+                drop(arena);
+
+                let union_ty = HirUnionType {
+                    name: None,
+                    variants: vec![
+                        HirUnionVariant {
+                            name: ok_name,
+                            ty: value_ty.clone(),
+                            discriminant: 0,
+                        },
+                        HirUnionVariant {
+                            name: err_name,
+                            ty: error_ty,
+                            discriminant: 1,
+                        },
+                    ],
+                    discriminant_type: Box::new(HirType::U32),
+                    is_c_union: false,
+                };
+
+                (0, value_ty, union_ty)
+            }
+            "Err" => {
+                // Err(error): Result<T,E> with discriminant 1
+                if args.len() != 1 {
+                    return Err(crate::CompilerError::Analysis(
+                        format!("Err() requires exactly 1 argument, got {}", args.len())
+                    ));
+                }
+
+                let error_ty = self.convert_type(&args[0].ty);
+
+                // Extract value type from Result<T,E> or default to i32
+                let value_ty = if let Type::Result { ok_type, .. } = result_ty {
+                    self.convert_type(ok_type)
+                } else {
+                    HirType::I32
+                };
+
+                let mut arena = self.arena.lock().unwrap();
+                let ok_name = arena.intern_string("Ok");
+                let err_name = arena.intern_string("Err");
+                drop(arena);
+
+                let union_ty = HirUnionType {
+                    name: None,
+                    variants: vec![
+                        HirUnionVariant {
+                            name: ok_name,
+                            ty: value_ty,
+                            discriminant: 0,
+                        },
+                        HirUnionVariant {
+                            name: err_name,
+                            ty: error_ty.clone(),
+                            discriminant: 1,
+                        },
+                    ],
+                    discriminant_type: Box::new(HirType::U32),
+                    is_c_union: false,
+                };
+
+                (1, error_ty, union_ty)
+            }
+            _ => {
+                return Err(crate::CompilerError::Analysis(
+                    format!("Unknown enum constructor: {}", constructor_name)
+                ));
+            }
+        };
+
+        // Translate the value argument if present
+        let value_id = if args.is_empty() {
+            // For None: create a void/unit value
+            self.create_undef(HirType::Void)
+        } else {
+            // For Some/Ok/Err: translate the argument
+            self.translate_expression(block_id, &args[0])?
+        };
+
+        // Create the union value
+        let result_id = HirId::new();
+        self.add_instruction(
+            block_id,
+            HirInstruction::CreateUnion {
+                result: result_id,
+                union_ty: HirType::Union(Box::new(union_type)),
+                variant_index,
+                value: value_id,
+            },
+        );
+
+        // Track use
+        if !args.is_empty() {
+            self.add_use(value_id, result_id);
+        }
+
+        eprintln!("[SSA] Created union for {}: result={:?}, variant_index={}, value={:?}",
+                 constructor_name, result_id, variant_index, value_id);
+
+        Ok(result_id)
+    }
+
     /// Process a basic block
     fn process_block(&mut self, block_id: HirId, cfg: &ControlFlowGraph) -> CompilerResult<()> {
         // Find the CFG block
@@ -885,6 +1090,16 @@ impl SsaBuilder {
         
         match &expr.node {
             TypedExpression::Variable(name) => {
+                // Check for None enum constructor
+                let name_str = {
+                    let arena = self.arena.lock().unwrap();
+                    arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
+                };
+
+                if name_str == "None" {
+                    return self.translate_enum_constructor(block_id, &name_str, &[], &expr.ty);
+                }
+
                 Ok(self.read_variable(*name, block_id))
             }
             
@@ -991,6 +1206,18 @@ impl SsaBuilder {
             TypedExpression::Call(call) => {
                 let callee = &call.callee;
                 let args = &call.positional_args;
+
+                // Check for enum constructors (Some, Ok, Err)
+                if let TypedExpression::Variable(func_name) = &callee.node {
+                    let name_str = {
+                        let arena = self.arena.lock().unwrap();
+                        arena.resolve_string(*func_name).map(|s| s.to_string()).unwrap_or_default()
+                    };
+
+                    if name_str == "Some" || name_str == "Ok" || name_str == "Err" {
+                        return self.translate_enum_constructor(block_id, &name_str, args, &expr.ty);
+                    }
+                }
 
                 // Check if callee is a function name (direct call) vs expression (indirect call)
                 let (hir_callable, indirect_callee_val) = if let TypedExpression::Variable(func_name) = &callee.node {
