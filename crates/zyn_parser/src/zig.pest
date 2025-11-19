@@ -161,9 +161,13 @@ primary = {
     literal
   | struct_literal
   | switch_expr
+  | try_expr
   | "(" ~ expr ~ ")"
   | identifier
 }
+
+// ===== Try Expression =====
+try_expr = { "try" ~ postfix }
 
 // ===== Switch Expression =====
 

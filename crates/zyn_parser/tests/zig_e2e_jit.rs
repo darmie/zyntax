@@ -672,6 +672,26 @@ fn test_zig_jit_error_union_type() {
     println!("[NOTE] Error union type parses/compiles but is not functionally used");
 }
 
+#[test]
+fn test_zig_jit_try_expression() {
+    // Test that try expression syntax parses correctly
+    // Note: Full error propagation requires SSA translate_try_operator to be connected
+    let source = r#"
+        fn might_fail() !i32 {
+            return 42;
+        }
+
+        fn use_try() i32 {
+            const result = try might_fail();
+            return result;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "use_try", vec![]);
+    assert_eq!(result, 42);
+    println!("[Zig E2E] ✓ try expression = {}", result);
+}
+
 // ===== HELPER FUNCTIONS =====
 
 /// Compile and execute a Zig function with arguments

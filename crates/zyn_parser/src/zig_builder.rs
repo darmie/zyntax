@@ -1485,6 +1485,9 @@ impl ZigBuilder {
             Rule::switch_expr => {
                 self.build_switch_expr(inner)
             }
+            Rule::try_expr => {
+                self.build_try_expr(inner)
+            }
             _ => Err(BuildError::UnexpectedRule {
                 expected: "primary".to_string(),
                 got: format!("{:?}", inner.as_rule()),
@@ -1819,6 +1822,35 @@ impl ZigBuilder {
         });
 
         Ok(typed_node(match_expr, result_ty, span))
+    }
+
+    fn build_try_expr(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        let span_range = pair.as_span();
+        let span = Span::new(span_range.start(), span_range.end());
+        let mut inner = pair.into_inner();
+
+        // Parse the inner expression (what we're trying)
+        let inner_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing expression in try".to_string())
+        })?;
+
+        // Build the inner expression
+        let inner_expr = self.build_postfix(inner_pair)?;
+
+        // The inner expression should return a Result/error union type
+        // For now, we'll wrap it in TypedExpression::Try
+        // The result type is the Ok type of the Result
+        let result_ty = match &inner_expr.ty {
+            Type::Result { ok_type, .. } => ok_type.as_ref().clone(),
+            // If not a Result type, assume it returns the same type (error at semantic analysis)
+            other => other.clone(),
+        };
+
+        Ok(typed_node(
+            TypedExpression::Try(Box::new(inner_expr)),
+            result_ty,
+            span,
+        ))
     }
 
     fn build_switch_pattern(

@@ -603,7 +603,7 @@ impl LoweringContext {
             self.type_registry.clone(),
             self.arena.clone(),
             self.symbols.functions.clone()
-        );
+        ).with_return_type(func.return_type.clone());
         let ssa = ssa_builder.build_from_typed_cfg(&typed_cfg)?;
 
         // Verify SSA properties

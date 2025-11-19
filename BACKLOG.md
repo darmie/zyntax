@@ -1,9 +1,10 @@
 # Zyntax Compiler - Development Backlog
 
 **Last Updated**: November 18, 2025
-**Current Status**: Production-Ready Core (99% tests passing, 22/23 Zig tests)
+**Current Status**: Production-Ready Core (99% tests passing, 23/24 Zig tests)
 
 **Recent Progress**:
+- ✅ **Try expression / error propagation** (full try operator implementation)
 - ✅ **Fixed control flow in return position** (switch/match/if expressions)
 - ✅ **Switch expressions working** (test_zig_jit_switch_expression passing)
 - ✅ **Fixed array indexing in loops bug** (SSA phi node cycle breaking)
@@ -11,7 +12,7 @@
 - ✅ Fixed branch wiring for match statements (proper false_target)
 - ✅ Fixed match arm body extraction (return statements preserved)
 - ✅ All loop tests passing (for, while, continue, break)
-- ✅ 22/23 Zig E2E JIT tests passing (95.7%)
+- ✅ 23/24 Zig E2E JIT tests passing (95.8%)
 
 ---
 
@@ -54,12 +55,12 @@
 - [x] **Optional types** (`?T` syntax) ✅
 - [x] **Pattern matching** (Some/Ok/Err variants working) ✅
 - [x] **Switch expressions** (full support with literal and wildcard patterns) ✅
+- [x] **Try expression** (error propagation with auto-wrapping Result returns) ✅
 - [ ] Pattern matching - None literal (arena symbol resolution issue)
 - [ ] String operations (needs stdlib integration via plugin system)
-- [ ] Error unions (`!T` types)
 - [~] **Generic functions** (parsing complete, monomorphization pending)
 - [ ] Generic call site type inference
-- [x] 22/23 E2E JIT tests passing (95.7%) ✅
+- [x] 23/24 E2E JIT tests passing (95.8%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:
@@ -331,6 +332,26 @@
 - Generic instantiation in lowering/SSA
 
 **Note**: Monomorphization engine already exists and passes all 11 tests
+
+### ✅ Try Expression / Error Propagation (November 18, 2025)
+**Goal**: Implement Zig's `try` operator for error union types (`!T`)
+**Problem**: `try` expression test failing - returned 0 instead of 42
+**Root Causes**:
+1. Functions returning `!T` weren't wrapping plain return values in Result::Ok union
+2. ExtractValue instruction had wrong `ty` field (aggregate type instead of extracted value type)
+3. Union type not handled in Cranelift ExtractValue case
+**Solution**:
+- Added `original_return_type: Option<Type>` field to SsaBuilder
+- Added `with_return_type()` builder method to pass original return type
+- Modified `process_typed_terminator` to auto-wrap return values in Result::Ok when function returns error union
+- Fixed ExtractValue `ty` fields: discriminant uses `HirType::U32`, ok_value uses `hir_ok_ty`, err_value uses `hir_err_ty`
+- Added `HirType::Union` case to Cranelift backend's ExtractValue handler
+**Files Modified**:
+- `crates/compiler/src/ssa.rs`: Return value wrapping, fixed ExtractValue types
+- `crates/compiler/src/lowering.rs`: Pass return type to SsaBuilder
+- `crates/compiler/src/cranelift_backend.rs`: Union ExtractValue handling
+- `crates/zyn_parser/tests/zig_e2e_jit.rs`: test_zig_jit_try_expression
+**Impact**: Try expressions fully working, 23/24 Zig tests passing (95.8%)
 
 ### ✅ Switch Expression Implementation (November 18, 2025)
 **Problem**: Switch expressions not working - Cranelift only processed entry block, ignoring all match logic

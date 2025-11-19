@@ -1295,9 +1295,51 @@ impl CraneliftBackend {
                                                 }
                                             }
                                         }
+                                        HirType::Union(union_def) => {
+                                            // Union field access: index 0 = discriminant, index 1 = data
+                                            let field_index = index_u32 as usize;
+
+                                            // Calculate union layout inline
+                                            // Tagged union layout: [discriminant][padding][data]
+                                            // Discriminant is always 4 bytes (u32), data starts at offset 4
+                                            let discriminant_offset = 0u32;
+                                            let data_offset = 4u32; // u32 discriminant size
+
+                                            let field_offset = if field_index == 0 {
+                                                discriminant_offset
+                                            } else {
+                                                data_offset
+                                            };
+
+                                            if !is_last {
+                                                // Intermediate: calculate new pointer
+                                                let offset_val = builder.ins().iconst(types::I64, field_offset as i64);
+                                                current_ptr = builder.ins().iadd(current_ptr, offset_val);
+                                                // Update current_type based on what we're extracting
+                                                if field_index == 0 {
+                                                    // Discriminant field
+                                                    current_type = union_def.discriminant_type.as_ref().clone();
+                                                } else {
+                                                    // Data field - use the first variant's type as representative
+                                                    // (all variants share the same memory location)
+                                                    if let Some(variant) = union_def.variants.first() {
+                                                        current_type = variant.ty.clone();
+                                                    }
+                                                }
+                                            } else {
+                                                // Last index: calculate pointer and load
+                                                let offset_val = builder.ins().iconst(types::I64, field_offset as i64);
+                                                let field_ptr = builder.ins().iadd(current_ptr, offset_val);
+
+                                                let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
+                                                let flags = cranelift_codegen::ir::MemFlags::new();
+                                                let loaded = builder.ins().load(cranelift_ty, flags, field_ptr, 0);
+                                                self.value_map.insert(*result, loaded);
+                                            }
+                                        }
                                         _ => {
                                             // Unsupported type - just return a dummy value
-                                            warn!(" ExtractValue on unsupported type");
+                                            warn!(" ExtractValue on unsupported type: {:?}", current_type);
                                             let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
                                             let dummy = builder.ins().iconst(cranelift_ty, 0);
                                             self.value_map.insert(*result, dummy);

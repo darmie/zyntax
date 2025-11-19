@@ -50,6 +50,8 @@ pub struct SsaBuilder {
     /// Continuation block for control flow expressions (if/match)
     /// When set, indicates that control flow has branched and this is the merge/end block
     continuation_block: Option<HirId>,
+    /// Original return type from TypedAST (for auto-wrapping Result returns)
+    original_return_type: Option<Type>,
 }
 
 /// Context for pattern matching
@@ -277,7 +279,15 @@ impl SsaBuilder {
             idf_placement_done: false,
             match_context: None,
             continuation_block: None,
+            original_return_type: None,
         }
+    }
+
+    /// Create SsaBuilder with original return type information
+    /// This is needed for auto-wrapping return values in Result::Ok for error union types
+    pub fn with_return_type(mut self, return_type: Type) -> Self {
+        self.original_return_type = Some(return_type);
+        self
     }
     
     /// Build SSA form from CFG
@@ -541,7 +551,62 @@ impl SsaBuilder {
         let hir_terminator = match terminator {
             TypedTerminator::Return(expr_opt) => {
                 if let Some(expr) = expr_opt {
-                    let value_id = self.translate_expression(block_id, expr)?;
+                    let mut value_id = self.translate_expression(block_id, expr)?;
+
+                    // Auto-wrap return value in Result::Ok if function returns error union (!T)
+                    // and the expression is not already a Result type
+                    if let Some(Type::Result { ok_type, err_type }) = &self.original_return_type {
+                        // Check if the expression type is NOT already a Result
+                        // If it's a plain value, wrap it in Ok(value)
+                        if !matches!(&expr.ty, Type::Result { .. }) {
+                            // Create Result union type
+                            use crate::hir::{HirUnionType, HirUnionVariant};
+
+                            let ok_hir_ty = self.convert_type(ok_type);
+                            let err_hir_ty = self.convert_type(err_type);
+
+                            let mut arena = self.arena.lock().unwrap();
+                            let ok_name = arena.intern_string("Ok");
+                            let err_name = arena.intern_string("Err");
+                            drop(arena);
+
+                            let union_ty = HirUnionType {
+                                name: None,
+                                variants: vec![
+                                    HirUnionVariant {
+                                        name: ok_name,
+                                        ty: ok_hir_ty.clone(),
+                                        discriminant: 0,
+                                    },
+                                    HirUnionVariant {
+                                        name: err_name,
+                                        ty: err_hir_ty,
+                                        discriminant: 1,
+                                    },
+                                ],
+                                discriminant_type: Box::new(HirType::U32),
+                                is_c_union: false,
+                            };
+
+                            let union_hir_ty = HirType::Union(Box::new(union_ty));
+                            let result_id = self.create_value(
+                                union_hir_ty.clone(),
+                                HirValueKind::Instruction
+                            );
+
+                            self.add_instruction(
+                                block_id,
+                                HirInstruction::CreateUnion {
+                                    result: result_id,
+                                    union_ty: union_hir_ty,
+                                    variant_index: 0, // Ok variant
+                                    value: value_id,
+                                },
+                            );
+
+                            value_id = result_id;
+                        }
+                    }
 
                     // Check if the expression set a continuation block (for control flow expressions)
                     if let Some(continuation) = self.continuation_block.take() {
@@ -2966,7 +3031,7 @@ impl SsaBuilder {
         let discriminant_val = self.create_value(HirType::U32, HirValueKind::Instruction);
         self.add_instruction(block_id, HirInstruction::ExtractValue {
             result: discriminant_val,
-            ty: hir_result_ty.clone(),
+            ty: HirType::U32, // Discriminant type
             aggregate: inner_result_val,
             indices: vec![0], // Discriminant is first field in union
         });
@@ -3000,7 +3065,7 @@ impl SsaBuilder {
         let ok_value = self.create_value(hir_ok_ty.clone(), HirValueKind::Instruction);
         self.add_instruction(ok_block_id, HirInstruction::ExtractValue {
             result: ok_value,
-            ty: hir_result_ty.clone(),
+            ty: hir_ok_ty.clone(), // Ok value type (T)
             aggregate: inner_result_val,
             indices: vec![1], // Data field (contains the actual Ok/Err value)
         });
@@ -3013,7 +3078,7 @@ impl SsaBuilder {
         let err_value = self.create_value(hir_err_ty.clone(), HirValueKind::Instruction);
         self.add_instruction(err_block_id, HirInstruction::ExtractValue {
             result: err_value,
-            ty: hir_result_ty.clone(),
+            ty: hir_err_ty.clone(), // Err value type (E)
             aggregate: inner_result_val,
             indices: vec![1], // Data field (contains the actual Ok/Err value)
         });
@@ -3035,16 +3100,9 @@ impl SsaBuilder {
             };
 
         // CONTINUE BLOCK: Continue with the Ok value
-        // The ok_value is now accessible and we continue execution
-        // The caller's block_id needs to be updated to continue_block_id
-        //
-        // NOTE: This function returns the ok_value, but the caller needs to know
-        // that subsequent instructions should go into continue_block_id, not the original block_id.
-        //
-        // For now, we return ok_value and the caller will use continue_block_id implicitly
-        // through the CFG structure (ok_block branches to continue_block).
-        //
-        // TODO: This might need refactoring to properly handle block continuation
+        // Set continuation_block so that Return statements know to use continue_block
+        // instead of the entry block (which now has a CondBranch terminator)
+        self.continuation_block = Some(continue_block_id);
 
         // Return the extracted Ok value as the result of the ? expression
         Ok(ok_value)
@@ -3054,6 +3112,10 @@ impl SsaBuilder {
     /// Returns (T, E) if successful, error otherwise
     fn extract_result_type_args(&self, ty: &Type) -> CompilerResult<(Type, Type)> {
         match ty {
+            // Direct Result type (from Zig's !T error union)
+            Type::Result { ok_type, err_type } => {
+                Ok((ok_type.as_ref().clone(), err_type.as_ref().clone()))
+            }
             Type::Named { type_args, .. } => {
                 // For now, we assume any Named type with 2 type arguments could be Result
                 // Type checker should ensure only Result<T, E> can use ? operator
