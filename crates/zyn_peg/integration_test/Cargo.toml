@@ -1,0 +1,19 @@
+[package]
+name = "zyn_peg_integration_test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# This crate tests ZynPEG-generated parser code with scaffolding types.
+# The scaffolding provides a self-contained type system for testing
+# before integration with the full zyntax_typed_ast crate.
+
+# Keep this crate out of the main workspace
+[workspace]
+
+[dependencies]
+pest = "2.7"
+pest_derive = "2.7"
+
+[dev-dependencies]
+# None needed - tests are in the crate itself

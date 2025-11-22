@@ -82,8 +82,9 @@ action_body = {
   | action_code                                   // Direct Rust code
 }
 
+// Field assignment in action block - colon must NOT be followed by another colon (::)
 action_field = {
-    identifier ~ ":" ~ rust_expr
+    identifier ~ ":" ~ !(":") ~ rust_expr
 }
 
 // Direct Rust code in action block (for match expressions, function calls, etc.)

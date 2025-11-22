@@ -557,8 +557,8 @@ literal = {
     bool_literal
   | null_literal
   | undefined_literal
+  | float_literal     // Must be before integer_literal (3.14 vs 3)
   | integer_literal
-  | float_literal
   | string_literal
   | array_literal
 }
@@ -614,9 +614,11 @@ array_literal = { "[" ~ "_" ~ "]" ~ type_expr ~ "{" ~ (expr ~ ("," ~ expr)*)? ~ 
           v.extend(rest);
           v
       }).unwrap_or_default();
-      expr: Array(elements.clone()),
-      ty: Type::Array(Box::new($4), Some(elements.len())),
-      span: span($1, $7),
+      TypedExpression {
+          expr: Array(elements.clone()),
+          ty: Type::Array(Box::new($4), Some(elements.len())),
+          span: span($1, $7),
+      }
   }
 
 struct_literal = {

@@ -25,3 +25,7 @@ internment = "0.8"
 [dev-dependencies]
 # Testing
 pretty_assertions = "1.4"
+regex = "1.10"
+# Dynamic grammar loading for runtime tests
+pest_vm = "2.8"
+pest_meta = "2.8"

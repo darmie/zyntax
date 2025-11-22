@@ -223,8 +223,9 @@ fn test_generated_build_methods() {
     assert!(ast_builder_str.contains("fn build_integer_literal"), "Missing build_integer_literal method");
     println!("✓ Build methods generated for action rules");
 
-    // Check that capture references are transformed
-    assert!(ast_builder_str.contains("get_child"), "Capture refs should use get_child");
+    // Check that capture references are transformed to rule-name-based variables
+    assert!(ast_builder_str.contains("child_identifier") || ast_builder_str.contains("child_declaration"),
+        "Capture refs should use child_<rulename> pattern");
     println!("✓ Capture references transformed correctly");
 
     // Check raw code actions are embedded
