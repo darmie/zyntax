@@ -300,13 +300,17 @@ fn test_comprehensive_program_structure() {
                 TypedDeclaration::Function(TypedFunction {
                     name: main_func,
                     params: vec![],
+                    type_params: vec![],
                     return_type: Type::Primitive(PrimitiveType::Unit),
-                    body: TypedBlock {
+                    body: Some(TypedBlock {
                         statements: vec![],
                         span: Span::new(80, 90),
-                    },
+                    }),
                     visibility: Visibility::Public,
                     is_async: false,
+                    is_external: false,
+                    calling_convention: CallingConvention::Default,
+                    link_name: None,
                 }),
                 Type::Function {
                     params: vec![],

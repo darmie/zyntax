@@ -113,6 +113,7 @@ fn test_vtable_generation_simple() {
     let impl_function = zyntax_typed_ast::TypedFunction {
         name: impl_func_name,
         params: vec![],
+        type_params: vec![],
         return_type: Type::Primitive(zyntax_typed_ast::PrimitiveType::I32),
         body: Some(zyntax_typed_ast::typed_ast::TypedBlock {
             statements: vec![],

@@ -26,6 +26,7 @@ fn create_extern_function(arena: &mut AstArena, name: &str, cc: CallingConventio
                 span,
             },
         ],
+        type_params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
         body: None,  // Extern - no body
         visibility: Visibility::Public,
@@ -193,6 +194,7 @@ fn test_non_extern_function_without_body_fails() {
     let bad_func = TypedFunction {
         name: func_name,
         params: vec![],
+        type_params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
         body: None,  // Regular function WITHOUT body
         visibility: Visibility::Public,

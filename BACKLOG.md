@@ -1,7 +1,7 @@
 # Zyntax Compiler - Development Backlog
 
 **Last Updated**: November 22, 2025
-**Current Status**: Production-Ready Core (94% tests passing, 67/71 Zig tests)
+**Current Status**: Production-Ready Core (97% tests passing, 69/71 Zig tests)
 
 **Recent Progress**:
 
@@ -24,7 +24,8 @@
 - ✅ **Pattern matching infrastructure complete** (Some/Ok/Err working)
 - ✅ All loop tests passing (for, while, continue, break)
 - ✅ Lambda tests passing (basic lambda, capture, calls in loops)
-- ✅ 62/68 Zig E2E JIT tests passing (91%)
+- ✅ **Try expressions in loops** (fixed SSA value_map issue with simplified control flow)
+- ✅ 69/71 Zig E2E JIT tests passing (97%)
 
 ---
 
@@ -86,7 +87,7 @@
 - [x] **Address-of operator** (`&expr` creates reference) ✅
 - [x] **Pointer dereference** (`ptr.*` dereferences pointer) ✅
 - [x] **Pointer JIT execution** (SSA stack allocation for address-taken vars) ✅
-- [x] 67/71 E2E JIT tests passing (94%) ✅
+- [x] 69/71 E2E JIT tests passing (97%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:

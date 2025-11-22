@@ -41,13 +41,17 @@ fn create_test_function() -> TypedProgram {
                 node: TypedDeclaration::Function(TypedFunction {
                     name: func_name,
                     params: vec![],
+                    type_params: vec![],
                     return_type: Type::Primitive(PrimitiveType::Unit),
-                    body: TypedBlock {
+                    body: Some(TypedBlock {
                         statements: vec![],
                         span,
-                    },
+                    }),
                     visibility: zyntax_typed_ast::type_registry::Visibility::Private,
                     is_async: false,
+                    is_external: false,
+                    calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+                    link_name: None,
                 }),
                 ty: Type::Function {
                     params: vec![],
@@ -277,8 +281,9 @@ fn test_complex_program_structure() {
                 node: TypedDeclaration::Function(TypedFunction {
                     name: func_name,
                     params: vec![],
+                    type_params: vec![],
                     return_type: Type::Primitive(PrimitiveType::Unit),
-                    body: TypedBlock {
+                    body: Some(TypedBlock {
                         statements: vec![
                             TypedNode {
                                 node: TypedStatement::Let(TypedLet {
@@ -293,9 +298,12 @@ fn test_complex_program_structure() {
                             }
                         ],
                         span,
-                    },
+                    }),
                     visibility: zyntax_typed_ast::type_registry::Visibility::Private,
                     is_async: false,
+                    is_external: false,
+                    calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+                    link_name: None,
                 }),
                 ty: Type::Function {
                     params: vec![],

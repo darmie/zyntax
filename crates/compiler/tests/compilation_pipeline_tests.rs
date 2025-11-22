@@ -33,7 +33,7 @@ fn test_arena() -> AstArena {
 /// Helper to create a simple typed program with one function
 fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) -> TypedProgram {
     let name = arena.intern_string(func_name);
-    let function = TypedFunction {
+    let function = TypedFunction { type_params: vec![],
         name,
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -629,7 +629,7 @@ fn test_compilation_pipeline_with_async_function() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let func = TypedFunction {
+    let func = TypedFunction { type_params: vec![],
         name: arena.intern_string("get_value"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -699,7 +699,7 @@ fn test_compilation_pipeline_without_async_runtime() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let func = TypedFunction {
+    let func = TypedFunction { type_params: vec![],
         name: arena.intern_string("get_value"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -769,7 +769,7 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let sync_func = TypedFunction {
+    let sync_func = TypedFunction { type_params: vec![],
         name: arena.intern_string("sync_fn"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -799,7 +799,7 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let async_func = TypedFunction {
+    let async_func = TypedFunction { type_params: vec![],
         name: arena.intern_string("async_fn"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),

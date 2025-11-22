@@ -605,7 +605,6 @@ fn test_zig_jit_generic_function() {
 }
 
 #[test]
-#[ignore] // TODO: Some() constructor generates null pointer load - needs CreateUnion fix
 fn test_pattern_match_runtime_execution() {
     // This test verifies complete end-to-end pattern matching:
     // ✅ Pattern matching CONSTRUCTION: Some(42), None literals
@@ -781,7 +780,6 @@ fn test_zig_jit_chained_try() {
 }
 
 #[test]
-#[ignore] // TODO: try inside loops has SSA value_map issue
 fn test_zig_jit_try_in_loop() {
     // Test try expression inside a loop
     let source = r#"

@@ -1229,10 +1229,12 @@ impl SsaBuilder {
                 }
 
                 // Variable not in scope - check for enum constructors
-                let name_str = {
+                // Use resolve_global() since the string may have been interned by a different arena (e.g., ZigBuilder)
+                let name_str = name.resolve_global().unwrap_or_else(|| {
+                    // Fallback to local arena if global resolution fails
                     let arena = self.arena.lock().unwrap();
                     arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
-                };
+                });
 
                 eprintln!("[SSA] Variable not found: {:?} resolves to '{}', type: {:?}", name, name_str, expr.ty);
 
@@ -3153,6 +3155,13 @@ impl SsaBuilder {
     ///           ```
     ///
     /// Gap 8 Phase 2 implementation.
+    ///
+    /// SIMPLIFIED VERSION: Instead of creating multiple blocks, this version:
+    /// 1. Checks if the result is an error
+    /// 2. If error, early returns
+    /// 3. If ok, extracts and returns the value
+    ///
+    /// All done in the same block to avoid SSA complications with loop variables.
     fn translate_try_operator(
         &mut self,
         block_id: HirId,
@@ -3164,8 +3173,6 @@ impl SsaBuilder {
         let inner_result_ty = &try_expr.ty;
 
         // Check if the type is Result<T, E>
-        // For now, we assume any type with the name "Result" is Result<T, E>
-        // TODO: More robust type checking when TypeRegistry has better introspection
         let (ok_ty, err_ty) = self.extract_result_type_args(inner_result_ty)?;
 
         // Convert types to HIR
@@ -3173,34 +3180,16 @@ impl SsaBuilder {
         let hir_err_ty = self.convert_type(&err_ty);
         let hir_result_ty = self.convert_type(inner_result_ty);
 
-        // Create blocks for the match:
-        // - ok_block: handles Ok(value) case, extracts value
-        // - err_block: handles Err(error) case, returns Err(error)
-        // - continue_block: continues execution with the extracted Ok value
-
-        let ok_block_id = HirId::new();
-        self.function.blocks.insert(ok_block_id, HirBlock::new(ok_block_id));
-        self.definitions.insert(ok_block_id, HashMap::new());
-
-        let err_block_id = HirId::new();
-        self.function.blocks.insert(err_block_id, HirBlock::new(err_block_id));
-        self.definitions.insert(err_block_id, HashMap::new());
-
-        let continue_block_id = HirId::new();
-        self.function.blocks.insert(continue_block_id, HirBlock::new(continue_block_id));
-        self.definitions.insert(continue_block_id, HashMap::new());
-
-        // Check discriminant: Result is a union with discriminant 0 = Ok, 1 = Err
-        // Extract discriminant from the Result union
+        // Extract discriminant: Result is a union with discriminant 0 = Ok, 1 = Err
         let discriminant_val = self.create_value(HirType::U32, HirValueKind::Instruction);
         self.add_instruction(block_id, HirInstruction::ExtractValue {
             result: discriminant_val,
-            ty: HirType::U32, // Discriminant type
+            ty: HirType::U32,
             aggregate: inner_result_val,
-            indices: vec![0], // Discriminant is first field in union
+            indices: vec![0],
         });
 
-        // Compare discriminant with 0 (Ok) or 1 (Err)
+        // Check if discriminant == 0 (Ok)
         let zero_const = self.create_value(
             HirType::U32,
             HirValueKind::Constant(crate::hir::HirConstant::U32(0))
@@ -3215,30 +3204,50 @@ impl SsaBuilder {
             right: zero_const,
         });
 
-        // Branch: if is_ok, go to ok_block, else go to err_block
+        // Extract the Ok value unconditionally
+        // (This is safe because if it's an error, we'll return early)
+        let ok_value = self.create_value(hir_ok_ty.clone(), HirValueKind::Instruction);
+        self.add_instruction(block_id, HirInstruction::ExtractValue {
+            result: ok_value,
+            ty: hir_ok_ty.clone(),
+            aggregate: inner_result_val,
+            indices: vec![1],
+        });
+
+        // Create error block for early return
+        let err_block_id = HirId::new();
+        self.function.blocks.insert(err_block_id, HirBlock::new(err_block_id));
+        self.definitions.insert(err_block_id, HashMap::new());
+
+        // Create continue block for success path
+        let continue_block_id = HirId::new();
+        self.function.blocks.insert(continue_block_id, HirBlock::new(continue_block_id));
+        self.definitions.insert(continue_block_id, HashMap::new());
+
+        // Set up predecessors/successors
+        {
+            let block = self.function.blocks.get_mut(&block_id).unwrap();
+            block.successors.push(continue_block_id);
+            block.successors.push(err_block_id);
+        }
+        {
+            let continue_block = self.function.blocks.get_mut(&continue_block_id).unwrap();
+            continue_block.predecessors.push(block_id);
+        }
+        {
+            let err_block = self.function.blocks.get_mut(&err_block_id).unwrap();
+            err_block.predecessors.push(block_id);
+        }
+
+        // Branch: if is_ok, continue; else, go to error block
         self.function.blocks.get_mut(&block_id).unwrap().terminator =
             HirTerminator::CondBranch {
                 condition: is_ok,
-                true_target: ok_block_id,
+                true_target: continue_block_id,
                 false_target: err_block_id,
             };
 
-        // OK BLOCK: Extract value from Ok(value) and continue
-        // Result<T, E> union has: [discriminant: u32, data: union { Ok: T, Err: E }]
-        // Extract the Ok value (index 1 is the data union, then we need the Ok variant)
-        let ok_value = self.create_value(hir_ok_ty.clone(), HirValueKind::Instruction);
-        self.add_instruction(ok_block_id, HirInstruction::ExtractValue {
-            result: ok_value,
-            ty: hir_ok_ty.clone(), // Ok value type (T)
-            aggregate: inner_result_val,
-            indices: vec![1], // Data field (contains the actual Ok/Err value)
-        });
-
-        // Jump to continue block with the extracted value
-        self.function.blocks.get_mut(&ok_block_id).unwrap().terminator =
-            HirTerminator::Branch { target: continue_block_id };
-
-        // ERR BLOCK: Extract error from Err(error) and return Err(error)
+        // ERR BLOCK: Extract error and return early
         let err_value = self.create_value(hir_err_ty.clone(), HirValueKind::Instruction);
         self.add_instruction(err_block_id, HirInstruction::ExtractValue {
             result: err_value,
@@ -3263,12 +3272,20 @@ impl SsaBuilder {
                 values: vec![return_err],
             };
 
-        // CONTINUE BLOCK: Continue with the Ok value
-        // Set continuation_block so that Return statements know to use continue_block
-        // instead of the entry block (which now has a CondBranch terminator)
-        self.continuation_block = Some(continue_block_id);
+        // CONTINUE BLOCK: This block continues normal execution
+        // For now, leave its terminator as Unreachable - it will be set by the caller
+        // or the CFG processing based on what comes next.
+        //
+        // NOTE: We don't set continuation_block here because it interferes with
+        // loop exit handling. The try expression just branches to continue_block
+        // on success, and the original CFG flow continues from there.
+        //
+        // Since ok_value was extracted in block_id (before the branch),
+        // we return ok_value directly. This works because:
+        // 1. If control flows to continue_block (is_ok == true), ok_value is valid
+        // 2. If control flows to err_block, we early return, so ok_value isn't used
 
-        // Return the extracted Ok value as the result of the ? expression
+        // Return the ok_value which was extracted in block_id
         Ok(ok_value)
     }
 

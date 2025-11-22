@@ -51,6 +51,7 @@ fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) 
     let function = TypedFunction {
         name,
         params: vec![],
+        type_params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
         body: Some(body),
         visibility: Visibility::Public,

@@ -69,6 +69,7 @@ fn test_struct_type_resolution() {
     let function = TypedFunction {
         name: func_name,
         params: vec![],
+        type_params: vec![],
         return_type: Type::Named {
             id: point_id,
             type_args: vec![],
@@ -173,6 +174,7 @@ fn test_enum_type_resolution() {
     let function = TypedFunction {
         name: func_name,
         params: vec![],
+        type_params: vec![],
         return_type: Type::Named {
             id: option_id,
             type_args: vec![],
@@ -276,6 +278,7 @@ fn test_type_alias_resolution() {
     let function = TypedFunction {
         name: func_name,
         params: vec![],
+        type_params: vec![],
         return_type: Type::Named {
             id: alias_id,
             type_args: vec![],
@@ -391,6 +394,7 @@ fn test_nested_struct_resolution() {
     let function = TypedFunction {
         name: func_name,
         params: vec![],
+        type_params: vec![],
         return_type: Type::Named {
             id: outer_id,
             type_args: vec![],
@@ -537,6 +541,7 @@ fn test_multiple_struct_types() {
     let func1 = TypedFunction {
         name: arena.intern_string("get_point"),
         params: vec![],
+        type_params: vec![],
         return_type: Type::Named {
             id: point_id,
             type_args: vec![],
@@ -558,6 +563,7 @@ fn test_multiple_struct_types() {
     let func2 = TypedFunction {
         name: arena.intern_string("get_rect"),
         params: vec![],
+        type_params: vec![],
         return_type: Type::Named {
             id: rect_id,
             type_args: vec![],

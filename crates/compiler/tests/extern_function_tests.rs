@@ -34,6 +34,7 @@ fn create_extern_function(
     TypedFunction {
         name: func_name,
         params: typed_params,
+        type_params: vec![],
         return_type,
         body: None,  // Extern functions have no body
         visibility: Visibility::Public,
