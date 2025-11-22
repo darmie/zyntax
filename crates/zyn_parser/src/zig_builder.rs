@@ -1150,11 +1150,19 @@ impl ZigBuilder {
     // ===== Expression Builders =====
 
     fn build_expression(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
-        // Entry point - delegates to logical_or (lowest precedence)
+        // Entry point - delegates to orelse_expr (lowest precedence)
         let inner = pair.into_inner().next().ok_or_else(|| {
             BuildError::Internal("Empty expression".to_string())
         })?;
-        self.build_logical_or(inner)
+        self.build_orelse_expr(inner)
+    }
+
+    fn build_orelse_expr(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        self.build_binary_expr_chain(pair, Rule::catch_expr, "orelse")
+    }
+
+    fn build_catch_expr(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        self.build_binary_expr_chain(pair, Rule::logical_or, "catch")
     }
 
     fn build_logical_or(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
@@ -1170,7 +1178,23 @@ impl ZigBuilder {
     }
 
     fn build_comparison(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
-        self.build_binary_expr_chain(pair, Rule::addition, "<")
+        self.build_binary_expr_chain(pair, Rule::bitwise_or, "<")
+    }
+
+    fn build_bitwise_or(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        self.build_binary_expr_chain(pair, Rule::bitwise_xor, "|")
+    }
+
+    fn build_bitwise_xor(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        self.build_binary_expr_chain(pair, Rule::bitwise_and, "^")
+    }
+
+    fn build_bitwise_and(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        self.build_binary_expr_chain(pair, Rule::bit_shift, "&")
+    }
+
+    fn build_bit_shift(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        self.build_binary_expr_chain(pair, Rule::addition, "<<")
     }
 
     fn build_addition(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
@@ -1196,9 +1220,15 @@ impl ZigBuilder {
         })?;
 
         let mut left = match operand_rule {
+            Rule::catch_expr => self.build_catch_expr(first)?,
+            Rule::logical_or => self.build_logical_or(first)?,
             Rule::logical_and => self.build_logical_and(first)?,
             Rule::equality => self.build_equality(first)?,
             Rule::comparison => self.build_comparison(first)?,
+            Rule::bitwise_or => self.build_bitwise_or(first)?,
+            Rule::bitwise_xor => self.build_bitwise_xor(first)?,
+            Rule::bitwise_and => self.build_bitwise_and(first)?,
+            Rule::bit_shift => self.build_bit_shift(first)?,
             Rule::addition => self.build_addition(first)?,
             Rule::multiplication => self.build_multiplication(first)?,
             Rule::unary => self.build_unary(first)?,
@@ -1213,9 +1243,15 @@ impl ZigBuilder {
             })?;
 
             let right = match operand_rule {
+                Rule::catch_expr => self.build_catch_expr(right_pair)?,
+                Rule::logical_or => self.build_logical_or(right_pair)?,
                 Rule::logical_and => self.build_logical_and(right_pair)?,
                 Rule::equality => self.build_equality(right_pair)?,
                 Rule::comparison => self.build_comparison(right_pair)?,
+                Rule::bitwise_or => self.build_bitwise_or(right_pair)?,
+                Rule::bitwise_xor => self.build_bitwise_xor(right_pair)?,
+                Rule::bitwise_and => self.build_bitwise_and(right_pair)?,
+                Rule::bit_shift => self.build_bit_shift(right_pair)?,
                 Rule::addition => self.build_addition(right_pair)?,
                 Rule::multiplication => self.build_multiplication(right_pair)?,
                 Rule::unary => self.build_unary(right_pair)?,
@@ -1698,19 +1734,31 @@ impl ZigBuilder {
         use zyntax_typed_ast::BinaryOp;
 
         let op = match op_str {
+            // Arithmetic
             "+" => BinaryOp::Add,
             "-" => BinaryOp::Sub,
             "*" => BinaryOp::Mul,
             "/" => BinaryOp::Div,
             "%" => BinaryOp::Rem,
+            // Comparison
             "==" => BinaryOp::Eq,
             "!=" => BinaryOp::Ne,
             "<" => BinaryOp::Lt,
             "<=" => BinaryOp::Le,
             ">" => BinaryOp::Gt,
             ">=" => BinaryOp::Ge,
+            // Logical
             "and" => BinaryOp::And,
             "or" => BinaryOp::Or,
+            // Bitwise
+            "&" => BinaryOp::BitAnd,
+            "|" => BinaryOp::BitOr,
+            "^" => BinaryOp::BitXor,
+            "<<" => BinaryOp::Shl,
+            ">>" => BinaryOp::Shr,
+            // orelse/catch are handled specially but use Or as fallback
+            "orelse" => BinaryOp::Or,  // TODO: proper orelse semantics
+            "catch" => BinaryOp::Or,   // TODO: proper catch semantics
             _ => return Err(BuildError::Parse(format!("Unknown binary operator: {}", op_str))),
         };
 
@@ -1723,6 +1771,7 @@ impl ZigBuilder {
         let op = match op_str {
             "-" => UnaryOp::Minus,
             "!" => UnaryOp::Not,
+            "~" => UnaryOp::BitNot,
             _ => return Err(BuildError::Parse(format!("Unknown unary operator: {}", op_str))),
         };
 

@@ -19,6 +19,7 @@ declaration = {
   | var_decl
   | fn_decl
   | struct_decl
+  | enum_decl
 }
 
 // ===== Declarations =====
@@ -44,6 +45,16 @@ struct_decl = {
 }
 
 field_decl = { identifier ~ ":" ~ type_expr ~ "," }
+
+// Enum declaration: const Color = enum { red, green, blue };
+enum_decl = {
+    "const" ~ identifier ~ "=" ~ "enum" ~ ("(" ~ type_expr ~ ")")? ~ "{" ~
+    enum_variant ~ ("," ~ enum_variant)* ~ ","? ~
+    "}" ~ ";"
+}
+
+// Enum variant: red, green = 1, blue
+enum_variant = { identifier ~ ("=" ~ expr)? }
 
 // ===== Type Expressions =====
 
@@ -81,8 +92,16 @@ statement = {
   | break_stmt
   | continue_stmt
   | return_stmt
+  | defer_stmt
+  | errdefer_stmt
   | expr_stmt
 }
+
+// Defer: execute at end of scope (LIFO order)
+defer_stmt = { "defer" ~ (block | expr_stmt) }
+
+// Errdefer: execute only if scope exits with error
+errdefer_stmt = { "errdefer" ~ (block | expr_stmt) }
 
 // Assignment supports: identifier, array index (arr[i]), field access (obj.field)
 assignment = { assign_target ~ "=" ~ expr ~ ";" }
@@ -123,22 +142,34 @@ block = { "{" ~ statement* ~ "}" }
 
 // ===== Expressions =====
 // Precedence (lowest to highest):
-// 1. Logical OR
-// 2. Logical AND
-// 3. Equality (==, !=)
-// 4. Comparison (<, >, <=, >=)
-// 5. Addition/Subtraction
-// 6. Multiplication/Division/Modulo
-// 7. Unary (-, !)
-// 8. Postfix (., [], ())
-// 9. Primary (literals, identifiers, parentheses)
+// 1. orelse (optional unwrap with default)
+// 2. catch (error unwrap with default/handler)
+// 3. Logical OR
+// 4. Logical AND
+// 5. Equality (==, !=)
+// 6. Comparison (<, >, <=, >=)
+// 7. Bitwise OR (|)
+// 8. Bitwise XOR (^)
+// 9. Bitwise AND (&)
+// 10. Bit shift (<<, >>)
+// 11. Addition/Subtraction
+// 12. Multiplication/Division/Modulo
+// 13. Unary (-, !, ~, &, *)
+// 14. Postfix (., [], ())
+// 15. Primary (literals, identifiers, parentheses)
 
-expr = { logical_or }
+expr = { orelse_expr }
 
+orelse_expr = { catch_expr ~ (orelse_op ~ catch_expr)* }
+catch_expr  = { logical_or ~ (catch_op ~ logical_or)* }
 logical_or  = { logical_and ~ (log_or_op ~ logical_and)* }
 logical_and = { equality ~ (log_and_op ~ equality)* }
 equality    = { comparison ~ (eq_op ~ comparison)* }
-comparison  = { addition ~ (cmp_op ~ addition)* }
+comparison  = { bitwise_or ~ (cmp_op ~ bitwise_or)* }
+bitwise_or  = { bitwise_xor ~ (bit_or_op ~ bitwise_xor)* }
+bitwise_xor = { bitwise_and ~ (bit_xor_op ~ bitwise_and)* }
+bitwise_and = { bit_shift ~ (bit_and_op ~ bit_shift)* }
+bit_shift   = { addition ~ (shift_op ~ addition)* }
 addition    = { multiplication ~ (add_op ~ multiplication)* }
 multiplication = { unary ~ (mul_op ~ unary)* }
 
@@ -254,13 +285,30 @@ identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // ===== Operators =====
 
+// Optional/Error handling operators
+orelse_op  = { "orelse" }
+catch_op   = { "catch" }
+
+// Logical operators
 log_or_op  = { "or" }
 log_and_op = { "and" }
-add_op     = { "+" | "-" }
-mul_op     = { "*" | "/" | "%" }
+
+// Comparison operators
 cmp_op     = { "<=" | ">=" | "<" | ">" }
 eq_op      = { "==" | "!=" }
-unary_op   = { "-" | "!" }
+
+// Bitwise operators
+bit_or_op  = { "|" }
+bit_xor_op = { "^" }
+bit_and_op = { "&" }
+shift_op   = { "<<" | ">>" }
+
+// Arithmetic operators
+add_op     = { "+" | "-" }
+mul_op     = { "*" | "/" | "%" }
+
+// Unary operators
+unary_op   = { "-" | "!" | "~" }
 
 // ===== Whitespace and Comments =====
 

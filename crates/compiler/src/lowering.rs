@@ -620,6 +620,11 @@ impl LoweringContext {
             self.module.globals.insert(global.id, global);
         }
 
+        // Add closure/lambda functions generated during SSA construction
+        for closure_func in ssa.closure_functions {
+            self.module.add_function(closure_func);
+        }
+
         // Gap 6 Phase 2: Transform async functions to state machines
         if func.is_async {
             hir_func = self.transform_async_function(hir_func)?;

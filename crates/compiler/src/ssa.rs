@@ -3856,22 +3856,269 @@ impl SsaBuilder {
         lambda: &zyntax_typed_ast::typed_ast::TypedLambda,
         closure_ty: &Type,
     ) -> CompilerResult<HirId> {
-        // TODO: Full closure implementation requires:
-        // - Lambda function generation (translate_lambda_to_function)
-        // - Closure object creation (function_ptr + env_ptr)
-        // - Indirect call support
-        //
-        // For now, just generate environment struct for capturing closures
+        use zyntax_typed_ast::typed_ast::TypedLambdaBody;
 
-        // Check if closure has captures
-        if lambda.captures.is_empty() {
-            // No captures: Return opaque function pointer placeholder
-            let func_ptr_ty = HirType::Ptr(Box::new(HirType::Void));
-            return Ok(self.create_undef(func_ptr_ty));
+        // Build function signature from lambda type
+        let (param_types, return_type) = match closure_ty {
+            Type::Function { params, return_type, .. } => {
+                let hir_params: Vec<HirType> = params.iter()
+                    .map(|p| self.convert_type(&p.ty))
+                    .collect();
+                let hir_return = self.convert_type(return_type);
+                (hir_params, hir_return)
+            }
+            _ => {
+                // Fallback: no params, i32 return
+                (vec![], HirType::I32)
+            }
+        };
+
+        // Generate a unique function ID for the lambda
+        let lambda_func_id = HirId::new();
+        let lambda_name = {
+            let mut arena = self.arena.lock().unwrap();
+            // Use Debug format since HirId inner field is private
+            arena.intern_string(&format!("__lambda_{:?}", lambda_func_id).replace("-", "").chars().take(20).collect::<String>())
+        };
+
+        // Create HIR params for signature
+        let hir_params: Vec<crate::hir::HirParam> = param_types.iter().enumerate().map(|(idx, ty)| {
+            let param_name = {
+                let mut arena = self.arena.lock().unwrap();
+                arena.intern_string(&format!("arg{}", idx))
+            };
+            crate::hir::HirParam {
+                id: HirId::new(),
+                name: param_name,
+                ty: ty.clone(),
+                attributes: crate::hir::ParamAttributes::default(),
+            }
+        }).collect();
+
+        // Create the lambda function signature
+        let signature = crate::hir::HirFunctionSignature {
+            params: hir_params.clone(),
+            returns: vec![return_type.clone()],
+            type_params: vec![],
+            const_params: vec![],
+            lifetime_params: vec![],
+            is_variadic: false,
+            is_async: false,
+        };
+
+        // Create entry block for lambda
+        let entry_block_id = HirId::new();
+        let mut entry_block = crate::hir::HirBlock {
+            id: entry_block_id,
+            label: None,
+            phis: vec![],
+            instructions: Vec::new(),
+            terminator: crate::hir::HirTerminator::Unreachable,
+            dominance_frontier: HashSet::new(),
+            predecessors: Vec::new(),
+            successors: Vec::new(),
+        };
+
+        // Create parameter values
+        let param_values: Vec<(HirId, HirType)> = hir_params.iter()
+            .map(|p| (p.id, p.ty.clone()))
+            .collect();
+
+        // Create the lambda HirFunction
+        let mut lambda_func = HirFunction {
+            id: lambda_func_id,
+            name: lambda_name,
+            signature,
+            entry_block: entry_block_id,
+            blocks: HashMap::new(),
+            locals: HashMap::new(),
+            values: HashMap::new(),
+            previous_version: None,
+            is_external: false,
+            calling_convention: crate::hir::CallingConvention::Fast,
+            attributes: crate::hir::FunctionAttributes::default(),
+        };
+
+        // Add parameter values to function
+        for (idx, (param_id, param_ty)) in param_values.iter().enumerate() {
+            lambda_func.values.insert(*param_id, crate::hir::HirValue {
+                id: *param_id,
+                ty: param_ty.clone(),
+                kind: crate::hir::HirValueKind::Parameter(idx as u32),
+                uses: HashSet::new(),
+                span: None,
+            });
         }
 
-        // Has captures: Create environment struct
-        self.translate_closure_environment(block_id, lambda)
+        // Collect outer scope variables for capture support
+        // Get all variables defined in the current block that can be captured
+        let outer_captures: HashMap<InternedString, HirId> = self.definitions
+            .get(&block_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // Translate lambda body
+        let result_val = match &lambda.body {
+            TypedLambdaBody::Expression(expr) => {
+                self.translate_lambda_expr(&mut lambda_func, &mut entry_block, &param_values, &lambda.params, &outer_captures, expr, &return_type)?
+            }
+            TypedLambdaBody::Block(_block) => {
+                // Block body - for now, just return 0
+                let val_id = HirId::new();
+                lambda_func.values.insert(val_id, crate::hir::HirValue {
+                    id: val_id,
+                    ty: return_type.clone(),
+                    kind: crate::hir::HirValueKind::Constant(crate::hir::HirConstant::I32(0)),
+                    uses: HashSet::new(),
+                    span: None,
+                });
+                val_id
+            }
+        };
+
+        // Set return terminator
+        entry_block.terminator = crate::hir::HirTerminator::Return {
+            values: vec![result_val],
+        };
+
+        // Add entry block to function
+        lambda_func.blocks.insert(entry_block_id, entry_block);
+
+        // Store the lambda function for later compilation
+        self.closure_functions.push(lambda_func);
+
+        // Create closure type using proper structure
+        let func_type = crate::hir::HirFunctionType {
+            params: param_types.clone(),
+            returns: vec![return_type.clone()],
+            lifetime_params: vec![],
+            is_variadic: false,
+        };
+
+        let closure_ty_hir = HirType::Closure(Box::new(crate::hir::HirClosureType {
+            function_type: func_type,
+            captures: vec![],
+            call_mode: crate::hir::HirClosureCallMode::Fn,
+        }));
+
+        let closure_result = self.create_value(closure_ty_hir.clone(), HirValueKind::Instruction);
+
+        // Generate CreateClosure instruction
+        let create_closure_inst = HirInstruction::CreateClosure {
+            result: closure_result,
+            closure_ty: closure_ty_hir,
+            function: lambda_func_id, // Use HirId, not name
+            captures: vec![],
+        };
+
+        self.add_instruction(block_id, create_closure_inst);
+
+        Ok(closure_result)
+    }
+
+    /// Translate a lambda expression body
+    fn translate_lambda_expr(
+        &self,
+        func: &mut HirFunction,
+        block: &mut crate::hir::HirBlock,
+        param_values: &[(HirId, HirType)],
+        lambda_params: &[zyntax_typed_ast::typed_ast::TypedLambdaParam],
+        outer_captures: &HashMap<InternedString, HirId>,
+        expr: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        result_ty: &HirType,
+    ) -> CompilerResult<HirId> {
+        use zyntax_typed_ast::typed_ast::TypedExpression;
+
+        match &expr.node {
+            TypedExpression::Literal(lit) => {
+                let constant = self.translate_literal(lit);
+                let val_id = HirId::new();
+                func.values.insert(val_id, crate::hir::HirValue {
+                    id: val_id,
+                    ty: result_ty.clone(),
+                    kind: crate::hir::HirValueKind::Constant(constant),
+                    uses: HashSet::new(),
+                    span: None,
+                });
+                Ok(val_id)
+            }
+            TypedExpression::Variable(name) => {
+                // Look up in lambda params first
+                for (idx, param) in lambda_params.iter().enumerate() {
+                    if param.name == *name {
+                        if let Some((id, _)) = param_values.get(idx) {
+                            return Ok(*id);
+                        }
+                    }
+                }
+
+                // Look up in captured variables from outer scope
+                if let Some(&outer_val_id) = outer_captures.get(name) {
+                    // Found in captures - copy the value's constant into the lambda
+                    if let Some(outer_value) = self.function.values.get(&outer_val_id) {
+                        // Clone the captured value into the lambda function
+                        let val_id = HirId::new();
+                        func.values.insert(val_id, crate::hir::HirValue {
+                            id: val_id,
+                            ty: outer_value.ty.clone(),
+                            kind: outer_value.kind.clone(),
+                            uses: HashSet::new(),
+                            span: None,
+                        });
+                        return Ok(val_id);
+                    }
+                }
+
+                // Not found - return undef
+                let val_id = HirId::new();
+                func.values.insert(val_id, crate::hir::HirValue {
+                    id: val_id,
+                    ty: result_ty.clone(),
+                    kind: crate::hir::HirValueKind::Undef,
+                    uses: HashSet::new(),
+                    span: None,
+                });
+                Ok(val_id)
+            }
+            TypedExpression::Binary(bin) => {
+                // Translate binary expression
+                let left_id = self.translate_lambda_expr(func, block, param_values, lambda_params, outer_captures, &bin.left, result_ty)?;
+                let right_id = self.translate_lambda_expr(func, block, param_values, lambda_params, outer_captures, &bin.right, result_ty)?;
+
+                let hir_op = self.convert_binary_op(&bin.op);
+                let result_id = HirId::new();
+                func.values.insert(result_id, crate::hir::HirValue {
+                    id: result_id,
+                    ty: result_ty.clone(),
+                    kind: crate::hir::HirValueKind::Instruction,
+                    uses: HashSet::new(),
+                    span: None,
+                });
+
+                let binary_inst = HirInstruction::Binary {
+                    op: hir_op,
+                    result: result_id,
+                    ty: result_ty.clone(),
+                    left: left_id,
+                    right: right_id,
+                };
+                block.instructions.push(binary_inst);
+
+                Ok(result_id)
+            }
+            _ => {
+                // Fallback - return constant 0
+                let val_id = HirId::new();
+                func.values.insert(val_id, crate::hir::HirValue {
+                    id: val_id,
+                    ty: result_ty.clone(),
+                    kind: crate::hir::HirValueKind::Constant(crate::hir::HirConstant::I32(0)),
+                    uses: HashSet::new(),
+                    span: None,
+                });
+                Ok(val_id)
+            }
+        }
     }
 
     /// Create and initialize environment struct for a capturing closure

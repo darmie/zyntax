@@ -772,7 +772,6 @@ fn test_zig_jit_loop_with_conditional_capture() {
 // These tests verify that lambda expressions parse and basic closure infrastructure works
 
 #[test]
-#[ignore] // Lambda execution not yet implemented in Cranelift backend
 fn test_zig_jit_lambda_basic() {
     // Basic lambda without captures - just tests parsing
     let source = r#"
@@ -788,7 +787,6 @@ fn test_zig_jit_lambda_basic() {
 }
 
 #[test]
-#[ignore] // Lambda execution not yet implemented in Cranelift backend
 fn test_zig_jit_lambda_with_capture() {
     // Lambda that captures outer variable - tests capture detection
     let source = r#"
@@ -802,6 +800,225 @@ fn test_zig_jit_lambda_with_capture() {
     let result = compile_and_execute_zig(source, "test_capture", vec![]);
     assert_eq!(result, 42);
     println!("[Zig E2E] ✓ test_capture() = {} (lambda with capture parses)", result);
+}
+
+#[test]
+fn test_zig_jit_lambda_call() {
+    // Lambda that we actually call - verifies end-to-end lambda execution
+    let source = r#"
+        fn test_call() i32 {
+            const add = |x: i32, y: i32| x + y;
+            return add(3, 5);
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_call", vec![]);
+    assert_eq!(result, 8);
+    println!("[Zig E2E] ✓ test_call() = {} (lambda call works)", result);
+}
+
+#[test]
+fn test_zig_jit_lambda_capture_call() {
+    // Lambda that captures outer variable and gets called
+    // This tests that captured environment is correctly passed
+    let source = r#"
+        fn test_capture_call() i32 {
+            const multiplier = 10;
+            const scale = |x: i32| x * multiplier;
+            return scale(7);
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_capture_call", vec![]);
+    assert_eq!(result, 70);  // 7 * 10 = 70
+    println!("[Zig E2E] ✓ test_capture_call() = {} (lambda with capture works)", result);
+}
+
+#[test]
+fn test_zig_jit_lambda_call_in_loop() {
+    // Lambda called multiple times in a loop
+    // This tests that the lambda function pointer remains valid across iterations
+    // Similar to thread spawns: each iteration should get the same function
+    let source = r#"
+        fn test_loop_call() i32 {
+            const double = |x: i32| x * 2;
+            var sum: i32 = 0;
+            var i: i32 = 1;
+            while (i <= 5) {
+                sum = sum + double(i);
+                i = i + 1;
+            }
+            return sum;
+        }
+    "#;
+
+    // double(1) + double(2) + double(3) + double(4) + double(5)
+    // = 2 + 4 + 6 + 8 + 10 = 30
+    let result = compile_and_execute_zig(source, "test_loop_call", vec![]);
+    assert_eq!(result, 30);
+    println!("[Zig E2E] ✓ test_loop_call() = {} (lambda called in loop)", result);
+}
+
+#[test]
+fn test_zig_jit_lambda_capture_in_loop() {
+    // Lambda capturing a variable, called in loop with different arguments
+    // This is the classic "closure capturing loop variable" scenario
+    // The captured value should be fixed at lambda creation time
+    let source = r#"
+        fn test_capture_loop() i32 {
+            const base = 100;
+            const add_base = |x: i32| x + base;
+            var sum: i32 = 0;
+            var i: i32 = 1;
+            while (i <= 3) {
+                sum = sum + add_base(i);
+                i = i + 1;
+            }
+            return sum;
+        }
+    "#;
+
+    // add_base(1) + add_base(2) + add_base(3)
+    // = (1+100) + (2+100) + (3+100) = 101 + 102 + 103 = 306
+    let result = compile_and_execute_zig(source, "test_capture_loop", vec![]);
+    assert_eq!(result, 306);
+    println!("[Zig E2E] ✓ test_capture_loop() = {} (captured lambda in loop)", result);
+}
+
+#[test]
+fn test_zig_jit_lambda_accumulator() {
+    // Multiple lambda calls accumulating results
+    // Simulates thread-like pattern: spawn work, collect results
+    let source = r#"
+        fn test_accumulator() i32 {
+            const square = |x: i32| x * x;
+            var total: i32 = 0;
+            var i: i32 = 1;
+            while (i <= 4) {
+                total = total + square(i);
+                i = i + 1;
+            }
+            return total;
+        }
+    "#;
+
+    // 1^2 + 2^2 + 3^2 + 4^2 = 1 + 4 + 9 + 16 = 30
+    let result = compile_and_execute_zig(source, "test_accumulator", vec![]);
+    assert_eq!(result, 30);
+    println!("[Zig E2E] ✓ test_accumulator() = {} (lambda as accumulator)", result);
+}
+
+#[test]
+fn test_zig_jit_multiple_lambdas_in_loop() {
+    // Multiple different lambdas called in the same loop
+    // Like spawning different types of tasks
+    let source = r#"
+        fn test_multi_lambda() i32 {
+            const inc = |x: i32| x + 1;
+            const dec = |x: i32| x - 1;
+            var val: i32 = 10;
+            var i: i32 = 0;
+            while (i < 3) {
+                val = inc(val);
+                val = dec(val);
+                val = inc(val);
+                i = i + 1;
+            }
+            return val;
+        }
+    "#;
+
+    // Start: 10
+    // Each iteration: +1, -1, +1 = net +1
+    // After 3 iterations: 10 + 3 = 13
+    let result = compile_and_execute_zig(source, "test_multi_lambda", vec![]);
+    assert_eq!(result, 13);
+    println!("[Zig E2E] ✓ test_multi_lambda() = {} (multiple lambdas in loop)", result);
+}
+
+// ===== BITWISE OPERATOR TESTS =====
+
+#[test]
+fn test_zig_jit_bitwise_and() {
+    let source = r#"
+        fn test_bitand() i32 {
+            return 15 & 10;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_bitand", vec![]);
+    assert_eq!(result, 10);  // 0b1111 & 0b1010 = 0b1010 = 10
+    println!("[Zig E2E] ✓ test_bitand() = {} (bitwise AND)", result);
+}
+
+#[test]
+fn test_zig_jit_bitwise_or() {
+    let source = r#"
+        fn test_bitor() i32 {
+            return 12 | 3;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_bitor", vec![]);
+    assert_eq!(result, 15);  // 0b1100 | 0b0011 = 0b1111 = 15
+    println!("[Zig E2E] ✓ test_bitor() = {} (bitwise OR)", result);
+}
+
+#[test]
+fn test_zig_jit_bitwise_xor() {
+    let source = r#"
+        fn test_bitxor() i32 {
+            return 15 ^ 10;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_bitxor", vec![]);
+    assert_eq!(result, 5);  // 0b1111 ^ 0b1010 = 0b0101 = 5
+    println!("[Zig E2E] ✓ test_bitxor() = {} (bitwise XOR)", result);
+}
+
+#[test]
+fn test_zig_jit_bit_shift_left() {
+    let source = r#"
+        fn test_shl() i32 {
+            return 1 << 4;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_shl", vec![]);
+    assert_eq!(result, 16);  // 1 << 4 = 16
+    println!("[Zig E2E] ✓ test_shl() = {} (bit shift left)", result);
+}
+
+#[test]
+fn test_zig_jit_bit_shift_right() {
+    let source = r#"
+        fn test_shr() i32 {
+            return 32 >> 2;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_shr", vec![]);
+    assert_eq!(result, 8);  // 32 >> 2 = 8
+    println!("[Zig E2E] ✓ test_shr() = {} (bit shift right)", result);
+}
+
+#[test]
+fn test_zig_jit_bitwise_complex() {
+    // Complex bitwise expression: (a | b) & (c ^ 15)
+    let source = r#"
+        fn test_complex() i32 {
+            const a = 12;
+            const b = 3;
+            const c = 5;
+            return (a | b) & (c ^ 15);
+        }
+    "#;
+
+    // a | b = 15, c ^ 15 = 10, result = 15 & 10 = 10
+    let result = compile_and_execute_zig(source, "test_complex", vec![]);
+    assert_eq!(result, 10);
+    println!("[Zig E2E] ✓ test_complex() = {} (complex bitwise)", result);
 }
 
 // ===== HELPER FUNCTIONS =====

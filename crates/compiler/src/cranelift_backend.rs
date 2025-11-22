@@ -775,8 +775,35 @@ impl CraneliftBackend {
                                         }
                                     }
                                 }
+                                HirCallable::Indirect(func_ptr_id) => {
+                                    // Indirect call through closure/function pointer
+                                    // The closure value IS the function pointer (for non-capturing lambdas)
+                                    let func_ptr_val = self.value_map.get(func_ptr_id).copied()
+                                        .unwrap_or_else(|| {
+                                            warn!(" Indirect call: function pointer {:?} not in value_map", func_ptr_id);
+                                            builder.ins().iconst(types::I64, 0)
+                                        });
+
+                                    // Create signature for the indirect call
+                                    let mut sig = self.module.make_signature();
+                                    for arg_val in &arg_values {
+                                        let arg_ty = builder.func.dfg.value_type(*arg_val);
+                                        sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
+                                    }
+                                    // Add return type (assume i32 for now)
+                                    sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I32));
+
+                                    let sig_ref = builder.import_signature(sig);
+                                    let call = builder.ins().call_indirect(sig_ref, func_ptr_val, &arg_values);
+
+                                    if let Some(result_id) = result {
+                                        if let Some(&ret_val) = builder.inst_results(call).first() {
+                                            self.value_map.insert(*result_id, ret_val);
+                                        }
+                                    }
+                                }
                                 _ => {
-                                    // Other callable types (closures, etc.) not implemented yet
+                                    // Other callable types not implemented yet
                                     warn!(" Unsupported callable type");
                                 }
                             }
@@ -1210,12 +1237,19 @@ impl CraneliftBackend {
                         }
 
                         HirInstruction::CreateClosure { result, closure_ty, function, captures } => {
-                            // Simplified closure creation: allocate environment and create function pointer
-                            // For now, create a dummy pointer value
-                            // TODO: Implement proper closure environment allocation and capture
-                            warn!(" CreateClosure called - returning null pointer (not implemented)");
-                            let dummy_ptr = builder.ins().iconst(types::I64, 0);
-                            self.value_map.insert(*result, dummy_ptr);
+                            // Create a closure with function pointer
+                            let ptr_ty = self.module.target_config().pointer_type();
+
+                            // For simple single-block functions, just return the function pointer
+                            if let Some(&cranelift_func_id) = self.function_map.get(function) {
+                                let local_func_ref = self.module.declare_func_in_func(cranelift_func_id, builder.func);
+                                let func_ptr = builder.ins().func_addr(ptr_ty, local_func_ref);
+                                self.value_map.insert(*result, func_ptr);
+                            } else {
+                                warn!(" CreateClosure: Lambda function {:?} not found", function);
+                                let null_ptr = builder.ins().iconst(ptr_ty, 0);
+                                self.value_map.insert(*result, null_ptr);
+                            }
                         }
 
                         HirInstruction::ExtractValue { result, ty, aggregate, indices } => {
@@ -3168,24 +3202,31 @@ impl CraneliftBackend {
             HirInstruction::CreateClosure { result, closure_ty, function, captures } => {
                 // Create a closure with captured environment
                 let ptr_ty = self.module.target_config().pointer_type();
-                
+
                 // Calculate closure layout: function pointer + captured values
                 let closure_layout = self.calculate_closure_layout(closure_ty)?;
-                
-                // Allocate closure on heap (simplified - should use proper allocator)
+
+                // Allocate closure on stack (simplified - should use proper allocator for escaping closures)
                 let closure_slot = builder.create_sized_stack_slot(StackSlotData::new(
                     StackSlotKind::ExplicitSlot,
                     closure_layout.total_size
                 ));
                 let closure_ptr = builder.ins().stack_addr(ptr_ty, closure_slot, 0);
-                
-                // Store function pointer
-                if let Some(&func_id) = self.function_map.get(function) {
-                    // In a real implementation, we'd store the actual function pointer
-                    let func_ptr = builder.ins().iconst(ptr_ty, func_id.as_u32() as i64);
+
+                // Store function pointer - get the actual function address
+                if let Some(&cranelift_func_id) = self.function_map.get(function) {
+                    // Declare the function reference in the current function
+                    let local_func_ref = self.module.declare_func_in_func(cranelift_func_id, builder.func);
+                    // Get the function address as a pointer value
+                    let func_ptr = builder.ins().func_addr(ptr_ty, local_func_ref);
                     builder.ins().store(MemFlags::new(), func_ptr, closure_ptr, 0);
+                } else {
+                    // Lambda function not found - store null pointer as fallback
+                    warn!(" Lambda function {:?} not found in function_map", function);
+                    let null_ptr = builder.ins().iconst(ptr_ty, 0);
+                    builder.ins().store(MemFlags::new(), null_ptr, closure_ptr, 0);
                 }
-                
+
                 // Store captured values
                 let mut offset = 8; // After function pointer
                 for capture_id in captures {
@@ -3194,7 +3235,7 @@ impl CraneliftBackend {
                         offset += 8; // Simplified - should calculate proper size
                     }
                 }
-                
+
                 self.value_map.insert(*result, closure_ptr);
             }
 

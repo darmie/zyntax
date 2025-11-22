@@ -117,6 +117,7 @@ fn wrap_expr_in_program(
     // Create function
     let func = TypedFunction {
         name: func_name,
+        type_params: vec![],
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
         body: Some(body),
