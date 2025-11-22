@@ -192,6 +192,7 @@ fn build_rule_def(pair: Pair<Rule>) -> Result<RuleDef, String> {
 fn build_action_block(pair: Pair<Rule>) -> Result<ActionBlock, String> {
     let mut return_type = String::new();
     let mut fields = Vec::new();
+    let mut raw_code = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -200,8 +201,14 @@ fn build_action_block(pair: Pair<Rule>) -> Result<ActionBlock, String> {
             }
             Rule::action_body => {
                 for field_pair in inner.into_inner() {
-                    if field_pair.as_rule() == Rule::action_field {
-                        fields.push(build_action_field(field_pair)?);
+                    match field_pair.as_rule() {
+                        Rule::action_field => {
+                            fields.push(build_action_field(field_pair)?);
+                        }
+                        Rule::action_code => {
+                            raw_code = Some(field_pair.as_str().trim().to_string());
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -212,6 +219,7 @@ fn build_action_block(pair: Pair<Rule>) -> Result<ActionBlock, String> {
     Ok(ActionBlock {
         return_type,
         fields,
+        raw_code,
     })
 }
 
@@ -280,5 +288,34 @@ mod tests {
         assert_eq!(action.fields.len(), 2);
         assert_eq!(action.fields[0].name, "expr");
         assert_eq!(action.fields[1].name, "ty");
+    }
+
+    #[test]
+    fn test_nested_braces_in_action() {
+        let input = r#"test = { "test" }
+  -> TestType {
+      decl: ConstDecl {
+          name: intern($2),
+          ty: Type::I32,
+      },
+      visibility: Visibility::Private,
+  }"#;
+
+        let result = ZynGrammarParser::parse(Rule::rule_def, input);
+        match result {
+            Ok(pairs) => {
+                let rule = build_rule_def(pairs.into_iter().next().unwrap()).unwrap();
+                assert_eq!(rule.name, "test");
+                assert!(rule.action.is_some());
+                let action = rule.action.unwrap();
+                assert_eq!(action.return_type, "TestType");
+                assert_eq!(action.fields.len(), 2);
+                assert_eq!(action.fields[0].name, "decl");
+                assert_eq!(action.fields[1].name, "visibility");
+            }
+            Err(e) => {
+                panic!("Failed to parse: {}", e);
+            }
+        }
     }
 }

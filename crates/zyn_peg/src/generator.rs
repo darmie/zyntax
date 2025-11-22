@@ -6,7 +6,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{quote, format_ident};
-use crate::{ZynGrammar, RuleDef, ActionBlock, RuleModifier};
+use crate::{ZynGrammar, RuleDef, RuleModifier};
 use crate::error::{Result, ZynPegError};
 
 /// Generate complete Rust code from a ZynGrammar

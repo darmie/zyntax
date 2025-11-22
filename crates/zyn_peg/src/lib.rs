@@ -107,6 +107,8 @@ pub enum RuleModifier {
 pub struct ActionBlock {
     pub return_type: String,
     pub fields: Vec<ActionField>,
+    /// Raw Rust code if not using structured fields
+    pub raw_code: Option<String>,
 }
 
 /// A field in an action block
@@ -120,6 +122,14 @@ pub struct ActionField {
 mod tests {
     use super::*;
     use pest::Parser;
+
+    #[test]
+    fn test_comment_in_string_literal() {
+        // Test that "//" inside a string literal doesn't start a comment
+        let input = r#"COMMENT = _{ "//" ~ ANY* }"#;
+        let result = ZynGrammarParser::parse(Rule::rule_def, input);
+        assert!(result.is_ok(), "Failed to parse rule with // in string: {:?}", result.err());
+    }
 
     #[test]
     fn test_parse_simple_rule() {

@@ -72,16 +72,27 @@ rule_def = {
 rule_modifier = { "@" | "!" | "$" | "_" }
 
 // Action block: -> TypedExpression { expr: ..., ty: ..., span: ... }
+// Supports both structured fields and direct Rust code
 action_block = {
     "->" ~ rust_type ~ "{" ~ action_body ~ "}"
 }
 
 action_body = {
     action_field ~ ("," ~ action_field)* ~ ","?  // Structured fields: expr: ..., ty: ...
+  | action_code                                   // Direct Rust code
 }
 
 action_field = {
     identifier ~ ":" ~ rust_expr
+}
+
+// Direct Rust code in action block (for match expressions, function calls, etc.)
+action_code = { rust_action_inner+ }
+rust_action_inner = {
+    "{" ~ rust_action_inner* ~ "}"     // Nested braces
+  | "(" ~ rust_action_inner* ~ ")"     // Nested parens
+  | "[" ~ rust_action_inner* ~ "]"     // Nested brackets
+  | !("{" | "}" | "(" | ")" | "[" | "]") ~ ANY
 }
 
 // ===== PEG Patterns (pest-compatible) =====
@@ -90,7 +101,7 @@ pattern = { choice }
 
 choice = { sequence ~ ("|" ~ sequence)* }
 
-sequence = { prefix* }
+sequence = { prefix ~ ("~" ~ prefix)* }
 
 prefix = {
     ("!" | "&")? ~ postfix
@@ -135,12 +146,19 @@ rust_type_segment = @{ identifier }
 rust_type_generics = { "<" ~ rust_type ~ ("," ~ rust_type)* ~ ">" }
 rust_type_ref = { "&" ~ "mut"? }
 
-rust_expr = { rust_expr_inner+ }
-rust_expr_inner = {
-    !("," | "}") ~ ANY
-  | "{" ~ rust_expr_inner* ~ "}"
-  | "(" ~ rust_expr_inner* ~ ")"
-  | "[" ~ rust_expr_inner* ~ "]"
+rust_expr = { rust_expr_atom+ }
+rust_expr_atom = {
+    "{" ~ rust_expr_any* ~ "}"    // Balanced braces - consume everything inside
+  | "(" ~ rust_expr_any* ~ ")"    // Balanced parens - consume everything inside
+  | "[" ~ rust_expr_any* ~ "]"    // Balanced brackets - consume everything inside
+  | !("," | "}") ~ ANY            // Anything else except field/block terminators
+}
+// Inside balanced delimiters, we can have commas and closing braces
+rust_expr_any = {
+    "{" ~ rust_expr_any* ~ "}"
+  | "(" ~ rust_expr_any* ~ ")"
+  | "[" ~ rust_expr_any* ~ "]"
+  | !("{" | "}" | "(" | ")" | "[" | "]") ~ ANY
 }
 
 // ===== Capture References =====
@@ -151,7 +169,7 @@ capture_ref = { "$" ~ (integer | identifier) }
 
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-string_literal = { "\"" ~ string_inner ~ "\"" }
+string_literal = ${ "\"" ~ string_inner ~ "\"" }
 string_inner = @{ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* }
 
 integer = @{ ASCII_DIGIT+ }
