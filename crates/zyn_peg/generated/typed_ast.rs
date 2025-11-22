@@ -5,7 +5,7 @@
 #![doc = r" of parsed source code."]
 #![doc = r""]
 #![doc = "Generated for: Zig"]
-#![allow(dead_code, unused_variables, unused_imports, non_upper_case_globals)]
+#![allow(dead_code, unused_variables, unused_imports)]
 use std::collections::HashMap;
 #[doc = r" Span in source code"]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -315,8 +315,8 @@ pub struct TypedProgram {
     pub declarations: Vec<TypedDeclaration>,
     pub span: Span,
 }
-#[doc = r" Create span from pest span"]
-pub fn span(start_pair: impl HasSpan, end_pair: impl HasSpan) -> Span {
+#[doc = r" Create span from two HasSpan items"]
+pub fn make_span(start_pair: impl HasSpan, end_pair: impl HasSpan) -> Span {
     Span::merge(&start_pair.span(), &end_pair.span())
 }
 pub trait HasSpan {
@@ -501,8 +501,10 @@ pub enum AssignOp {
 pub struct Error;
 impl Type {
     #[doc = r" The Error type constant"]
+    #[allow(non_upper_case_globals)]
     pub const Error: Type = Type::Unknown;
     #[doc = r" The Type type constant (for comptime)"]
+    #[allow(non_upper_case_globals)]
     pub const Type: Type = Type::Unknown;
 }
 #[doc = r" Assignment statement (can be used directly in stmt field)"]

@@ -52,7 +52,7 @@
                 "catch" => BinaryOp::Catch,
                 _ => default_op,
             };
-            let result_ty = infer_binary_type(&left.ty, op, &right.ty);
+            let result_ty = Self::infer_binary_type(&left.ty, op, &right.ty);
             TypedExpression {
                 expr: Expression::BinaryOp(op, Box::new(left.clone()), Box::new(right.clone())),
                 ty: result_ty,
@@ -110,8 +110,8 @@
 
 program = { SOI ~ declaration* ~ EOI }
   -> TypedProgram {
-      declarations: $2.collect(),
-      module_path: vec![],
+      declarations: $2,
+      span: span($1, $3),
   }
 
 declaration = {
@@ -128,24 +128,23 @@ declaration = {
 
 const_decl = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
   -> TypedDeclaration {
-      decl: ConstDecl {
+      decl: Declaration::Const(ConstDecl {
           name: intern($2),
-          ty: $3.map(|t| t).unwrap_or(infer_type($5)),
+          ty: $3,
           value: $5,
-      },
-      visibility: Visibility::Private,
+          is_pub: false,
+      }),
       span: span($1, $6),
   }
 
 var_decl = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
   -> TypedDeclaration {
-      decl: VarDecl {
+      decl: Declaration::Var(VarDecl {
           name: intern($2),
-          ty: $3.map(|t| t).unwrap_or(infer_type($5)),
+          ty: $3,
           value: $5,
-          mutable: true,
-      },
-      visibility: Visibility::Private,
+          is_pub: false,
+      }),
       span: span($1, $6),
   }
 
@@ -155,14 +154,15 @@ fn_decl = {
     block
 }
   -> TypedDeclaration {
-      decl: FunctionDecl {
+      decl: Declaration::Function(FnDecl {
           name: intern($2),
           params: $4.unwrap_or_default(),
           return_type: $6,
-          body: Some($7),
-          type_params: vec![],
-      },
-      visibility: Visibility::Private,
+          body: Some($7.statements),
+          is_pub: false,
+          is_export: false,
+          is_extern: false,
+      }),
       span: span($1, $7),
   }
 
@@ -188,11 +188,11 @@ struct_decl = {
     "}" ~ ";"
 }
   -> TypedDeclaration {
-      decl: StructDecl {
+      decl: Declaration::Struct(StructDecl {
           name: intern($2),
           fields: $6,
-      },
-      visibility: Visibility::Private,
+          is_packed: false,
+      }),
       span: span($1, $8),
   }
 
@@ -200,6 +200,7 @@ field_decl = { identifier ~ ":" ~ type_expr ~ "," }
   -> TypedField {
       name: intern($1),
       ty: $3,
+      default: None,
   }
 
 enum_decl = {

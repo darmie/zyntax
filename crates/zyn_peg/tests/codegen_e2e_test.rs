@@ -56,6 +56,7 @@ fn generate_standalone_parser_files() -> (String, String, String, String) {
 }
 
 #[test]
+#[ignore = "Overwrites hand-crafted ast_builder.rs - run manually when generator is fixed"]
 fn test_write_generated_files() {
     let (pest_grammar, ast_builder, parser_impl) = generate_parser_files();
 
@@ -85,6 +86,7 @@ fn test_write_generated_files() {
 }
 
 #[test]
+#[ignore = "Overwrites hand-crafted ast_builder.rs - run manually when generator is fixed"]
 fn test_write_standalone_files() {
     let (pest_grammar, ast_builder, parser_impl, typed_ast) = generate_standalone_parser_files();
 

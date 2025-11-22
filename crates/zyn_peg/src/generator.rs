@@ -447,8 +447,8 @@ fn generate_typed_ast_types(grammar: &ZynGrammar) -> Result<TokenStream> {
         // Helper Functions
         // ============================================================
 
-        /// Create span from pest span
-        pub fn span(start_pair: impl HasSpan, end_pair: impl HasSpan) -> Span {
+        /// Create span from two HasSpan items
+        pub fn make_span(start_pair: impl HasSpan, end_pair: impl HasSpan) -> Span {
             Span::merge(&start_pair.span(), &end_pair.span())
         }
 
@@ -965,7 +965,7 @@ fn generate_ast_builder(grammar: &ZynGrammar) -> Result<TokenStream> {
     // Generate build methods for each rule with an action
     let build_methods: Vec<TokenStream> = grammar.rules.iter()
         .filter(|r| r.action.is_some())
-        .map(|r| generate_build_method(r))
+        .map(|r| generate_build_method(r, grammar))
         .collect::<Result<Vec<_>>>()?;
 
     Ok(quote! {
@@ -1024,11 +1024,19 @@ fn generate_parser_impl(grammar: &ZynGrammar) -> Result<TokenStream> {
 fn generate_standalone_ast_builder(grammar: &ZynGrammar) -> Result<TokenStream> {
     let type_helpers = parse_type_helpers(&grammar.type_helpers.code);
 
-    // Generate build methods for each rule with an action
-    let build_methods: Vec<TokenStream> = grammar.rules.iter()
+    // Generate build methods for rules WITH actions
+    let action_methods: Vec<TokenStream> = grammar.rules.iter()
         .filter(|r| r.action.is_some())
-        .map(|r| generate_build_method(r))
+        .map(|r| generate_build_method(r, grammar))
         .collect::<Result<Vec<_>>>()?;
+
+    // Generate dispatch methods for rules WITHOUT actions (like declaration, type_expr, etc.)
+    let dispatch_methods: Vec<TokenStream> = grammar.rules.iter()
+        .filter(|r| r.action.is_none())
+        .filter(|r| !r.name.starts_with("WHITESPACE") && !r.name.starts_with("COMMENT"))
+        .filter(|r| r.modifier != Some(RuleModifier::Silent) && r.modifier != Some(RuleModifier::Atomic))
+        .map(|r| generate_dispatch_method(r, grammar))
+        .collect();
 
     // Standalone: no external imports, uses generated typed_ast types
     Ok(quote! {
@@ -1041,6 +1049,45 @@ fn generate_standalone_ast_builder(grammar: &ZynGrammar) -> Result<TokenStream> 
         use super::typed_ast::*;
         use super::Rule;  // Import the Rule enum from the parser
 
+        // Type helper for folding postfix operations
+        fn fold_postfix_ops(base: TypedExpression, ops: Vec<PostfixOp>) -> TypedExpression {
+            ops.into_iter().fold(base, |expr, op| {
+                let span = expr.span;
+                match op {
+                    PostfixOp::Deref => TypedExpression {
+                        ty: expr.ty.deref(),
+                        expr: Expression::Deref(Box::new(expr)),
+                        span,
+                    },
+                    PostfixOp::Field(name) => TypedExpression {
+                        ty: Type::Unknown,
+                        expr: Expression::FieldAccess(Box::new(expr), name),
+                        span,
+                    },
+                    PostfixOp::Index(index) => TypedExpression {
+                        ty: expr.ty.element_type(),
+                        expr: Expression::Index(Box::new(expr), Box::new(index)),
+                        span,
+                    },
+                    PostfixOp::Call(args) => TypedExpression {
+                        ty: expr.ty.return_type(),
+                        expr: Expression::Call(Box::new(expr), args),
+                        span,
+                    },
+                    PostfixOp::OptionalUnwrap => TypedExpression {
+                        ty: expr.ty.unwrap_optional(),
+                        expr: Expression::UnaryOp(UnaryOp::Try, Box::new(expr)),
+                        span,
+                    },
+                    PostfixOp::TryUnwrap => TypedExpression {
+                        ty: expr.ty.unwrap_result(),
+                        expr: Expression::UnaryOp(UnaryOp::Try, Box::new(expr)),
+                        span,
+                    },
+                }
+            })
+        }
+
         /// TypedAST builder context
         pub struct AstBuilderContext;
 
@@ -1051,9 +1098,122 @@ fn generate_standalone_ast_builder(grammar: &ZynGrammar) -> Result<TokenStream> 
 
             #type_helpers
 
-            #(#build_methods)*
+            #(#action_methods)*
+
+            #(#dispatch_methods)*
         }
     })
+}
+
+/// Generate a dispatch method for a rule without an action
+/// These methods dispatch to child rules based on match
+fn generate_dispatch_method(rule: &RuleDef, grammar: &ZynGrammar) -> TokenStream {
+    let method_name = format_ident!("build_{}", rule.name);
+
+    // Parse the pattern to find child rules
+    let child_rules = extract_child_rules(&rule.pattern);
+
+    // Filter to rules that have build methods
+    let dispatchable: Vec<_> = child_rules.iter()
+        .filter(|name| {
+            grammar.rules.iter().any(|r| &r.name == *name)
+        })
+        .collect();
+
+    if dispatchable.is_empty() {
+        // No child rules to dispatch to - return a default/passthrough
+        quote! {
+            pub fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<TypedExpression, ParseError> {
+                let span = Span::from_pest(pair.as_span());
+                let text = pair.as_str().trim();
+
+                // Try to interpret as literal or identifier
+                if let Ok(n) = text.parse::<i64>() {
+                    return Ok(TypedExpression {
+                        expr: Expression::IntLiteral(n),
+                        ty: Type::I64,
+                        span,
+                    });
+                }
+                if let Ok(n) = text.parse::<f64>() {
+                    return Ok(TypedExpression {
+                        expr: Expression::FloatLiteral(n),
+                        ty: Type::F64,
+                        span,
+                    });
+                }
+                if text == "true" {
+                    return Ok(TypedExpression {
+                        expr: Expression::BoolLiteral(true),
+                        ty: Type::Bool,
+                        span,
+                    });
+                }
+                if text == "false" {
+                    return Ok(TypedExpression {
+                        expr: Expression::BoolLiteral(false),
+                        ty: Type::Bool,
+                        span,
+                    });
+                }
+
+                Ok(TypedExpression {
+                    expr: Expression::Identifier(text.to_string()),
+                    ty: Type::Unknown,
+                    span,
+                })
+            }
+        }
+    } else {
+        // Generate match arms for child rules
+        let match_arms: Vec<TokenStream> = dispatchable.iter().map(|child_name| {
+            let rule_variant = format_ident!("{}", child_name);
+            let build_method = format_ident!("build_{}", child_name);
+            quote! {
+                Rule::#rule_variant => self.#build_method(inner),
+            }
+        }).collect();
+
+        quote! {
+            pub fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<TypedExpression, ParseError> {
+                let span = Span::from_pest(pair.as_span());
+                if let Some(inner) = pair.into_inner().next() {
+                    match inner.as_rule() {
+                        #(#match_arms)*
+                        _ => Ok(TypedExpression {
+                            expr: Expression::Identifier(inner.as_str().to_string()),
+                            ty: Type::Unknown,
+                            span,
+                        }),
+                    }
+                } else {
+                    Err(ParseError(format!("Empty {} rule", stringify!(#method_name))))
+                }
+            }
+        }
+    }
+}
+
+/// Extract child rule names from a pattern
+fn extract_child_rules(pattern: &str) -> Vec<String> {
+    let mut rules = Vec::new();
+
+    // Simple extraction - find lowercase identifiers that aren't keywords
+    let keywords = ["SOI", "EOI", "ANY", "ASCII", "ASCII_DIGIT", "ASCII_ALPHA", "ASCII_ALPHANUMERIC", "WHITESPACE", "COMMENT"];
+
+    for part in pattern.split(|c: char| !c.is_alphanumeric() && c != '_') {
+        let part = part.trim();
+        if !part.is_empty()
+            && part.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+            && !keywords.contains(&part)
+        {
+            if !rules.contains(&part.to_string()) {
+                rules.push(part.to_string());
+            }
+        }
+    }
+
+    rules
 }
 
 /// Generate standalone parser implementation (simpler, no external types)
@@ -1094,7 +1254,7 @@ fn generate_standalone_parser_impl(_grammar: &ZynGrammar) -> Result<TokenStream>
 }
 
 /// Generate a build method for a rule with an action
-fn generate_build_method(rule: &RuleDef) -> Result<TokenStream> {
+fn generate_build_method(rule: &RuleDef, _grammar: &ZynGrammar) -> Result<TokenStream> {
     let action = rule.action.as_ref()
         .ok_or_else(|| ZynPegError::InvalidAction("No action for rule".into()))?;
 
@@ -1415,6 +1575,18 @@ fn generate_child_extraction(pattern: &[PatternElement]) -> String {
 fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String {
     let mut result = value.to_string();
 
+    // First, replace span($X, $Y) patterns with just `span`
+    // since we pre-compute span at the start of each build method
+    // Use simple string search to find and replace span(...) calls
+    while let Some(start) = result.find("span(") {
+        if let Some(end) = result[start..].find(')') {
+            let end_pos = start + end + 1;
+            result = format!("{}{}{}", &result[..start], "span", &result[end_pos..]);
+        } else {
+            break;
+        }
+    }
+
     // First, flatten groups to get the true element order
     // For pattern like: "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";"
     // The effective positions are:
@@ -1492,16 +1664,60 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
                 result = result.replace(&map_pattern, &replacement);
             }
 
-            // Replace plain $N with the variable reference
+            // Replace $N.unwrap_or_default() pattern
+            let unwrap_pattern = format!("{}.unwrap_or_default()", pattern_str);
+            if result.contains(&unwrap_pattern) {
+                let replacement = format!(
+                    "{}.as_ref().and_then(|p| self.build_{}(p.clone()).ok()).unwrap_or_default()",
+                    var_name, rule_name
+                );
+                result = result.replace(&unwrap_pattern, &replacement);
+            }
+
+            // Replace $N.field patterns (e.g., $7.statements) with building and field access
+            let dot_pattern = format!("{}.", pattern_str);
+            while let Some(start) = result.find(&dot_pattern) {
+                let after_dot = start + dot_pattern.len();
+                // Find the field name (alphanumeric chars after the dot)
+                let field_end = result[after_dot..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .count();
+                if field_end > 0 {
+                    let field_name = &result[after_dot..after_dot + field_end];
+                    let full_match_len = dot_pattern.len() + field_end;
+                    let replacement = format!(
+                        "{}.as_ref().and_then(|p| self.build_{}(p.clone()).ok()).map(|v| v.{}).unwrap_or_default()",
+                        var_name, rule_name, field_name
+                    );
+                    result = format!("{}{}{}", &result[..start], replacement, &result[start + full_match_len..]);
+                } else {
+                    break;
+                }
+            }
+
+            // Replace plain $N with the properly typed value
             if *repeated {
-                // For repeated elements, the var is already a Vec
-                result = result.replace(&pattern_str, &var_name);
+                // For repeated elements, build each and collect
+                let replacement = format!(
+                    "{}.iter().filter_map(|p| self.build_{}(p.clone()).ok()).collect::<Vec<_>>()",
+                    var_name, rule_name
+                );
+                result = result.replace(&pattern_str, &replacement);
             } else if *optional {
-                // For optional elements, use the Option
-                result = result.replace(&pattern_str, &var_name);
+                // For optional elements, build if present
+                let replacement = format!(
+                    "{}.as_ref().and_then(|p| self.build_{}(p.clone()).ok())",
+                    var_name, rule_name
+                );
+                result = result.replace(&pattern_str, &replacement);
             } else {
-                // For required elements, still an Option from find()
-                result = result.replace(&pattern_str, &var_name);
+                // For required elements, build and unwrap with default fallback
+                let replacement = format!(
+                    "{}.as_ref().and_then(|p| self.build_{}(p.clone()).ok()).unwrap_or_default()",
+                    var_name, rule_name
+                );
+                result = result.replace(&pattern_str, &replacement);
             }
         } else if let Some(None) = position_to_rule.get(i - 1) {
             // This position is a literal - it doesn't produce a child, so $N refers to the text
