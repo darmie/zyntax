@@ -3,8 +3,8 @@
 > A high-performance, multi-paradigm compiler infrastructure with advanced type system features, tiered JIT compilation, and async/await runtime support.
 
 [![Status: Under Construction](https://img.shields.io/badge/status-under%20construction-yellow)](./BACKLOG.md)
-[![Tests](https://img.shields.io/badge/tests-23%2F24%20Zig%20tests-brightgreen)](./crates/zyn_parser/tests)
-[![Test Coverage](https://img.shields.io/badge/coverage-95.8%25-brightgreen)](./crates/zyn_parser/tests)
+[![Tests](https://img.shields.io/badge/tests-26%2F27%20Zig%20tests-brightgreen)](./crates/zyn_parser/tests)
+[![Test Coverage](https://img.shields.io/badge/coverage-96.3%25-brightgreen)](./crates/zyn_parser/tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 

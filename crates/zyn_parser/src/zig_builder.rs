@@ -708,33 +708,65 @@ impl ZigBuilder {
     fn build_assignment(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedStatement>> {
         let mut inner = pair.into_inner();
 
-        // identifier = expr ;
-        let name_pair = inner.next().ok_or_else(|| {
-            BuildError::Internal("Missing variable name in assignment".to_string())
+        // assign_target = expr ;
+        // assign_target = identifier ~ ("[" ~ expr ~ "]")*
+        let target_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing assignment target".to_string())
         })?;
-        let name_str = name_pair.as_str();
-        let interned_name = self.intern(name_str);
 
         let value_pair = inner.next().ok_or_else(|| {
             BuildError::Internal("Missing value in assignment".to_string())
         })?;
         let value = self.build_expression(value_pair)?;
 
+        // Parse the assign_target: identifier followed by optional index expressions
+        let mut target_inner = target_pair.into_inner();
+        let name_pair = target_inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing variable name in assignment target".to_string())
+        })?;
+        let name_str = name_pair.as_str();
+        let interned_name = self.intern(name_str);
+
         // Look up variable in scope to get its type
         let var_type = self.lookup_variable_type(interned_name)?;
 
-        // Create assignment as a binary expression with Assign operator
-        let target = TypedNode {
+        // Build the target expression - start with the variable
+        let mut target = TypedNode {
             node: TypedExpression::Variable(interned_name),
             ty: var_type.clone(),
             span,
         };
 
+        // Apply any index expressions: arr[i][j] etc.
+        let mut current_type = var_type.clone();
+        for index_pair in target_inner {
+            // Each index_pair is an expr inside the brackets
+            let index_expr = self.build_expression(index_pair)?;
+
+            // Determine element type from array type
+            let elem_type = match &current_type {
+                Type::Array { element_type, .. } => element_type.as_ref().clone(),
+                Type::Reference { ty, .. } => ty.as_ref().clone(),
+                _ => current_type.clone(), // Fallback
+            };
+
+            // Build index expression
+            target = TypedNode {
+                node: TypedExpression::Index(zyntax_typed_ast::typed_ast::TypedIndex {
+                    object: Box::new(target),
+                    index: Box::new(index_expr),
+                }),
+                ty: elem_type.clone(),
+                span,
+            };
+            current_type = elem_type;
+        }
+
         let assign_expr = self.builder.binary(
             zyntax_typed_ast::BinaryOp::Assign,
             target,
             value,
-            var_type,
+            current_type,
             span,
         );
 

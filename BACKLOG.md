@@ -1,7 +1,7 @@
 # Zyntax Compiler - Development Backlog
 
 **Last Updated**: November 18, 2025
-**Current Status**: Production-Ready Core (99% tests passing, 23/24 Zig tests)
+**Current Status**: Production-Ready Core (99% tests passing, 26/27 Zig tests)
 
 **Recent Progress**:
 - ✅ **Try expression / error propagation** (full try operator implementation)
@@ -60,7 +60,8 @@
 - [ ] String operations (needs stdlib integration via plugin system)
 - [~] **Generic functions** (parsing complete, monomorphization pending)
 - [ ] Generic call site type inference
-- [x] 23/24 E2E JIT tests passing (95.8%) ✅
+- [x] **Array index assignment** (arr[i] = value syntax) ✅
+- [x] 26/27 E2E JIT tests passing (96.3%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:

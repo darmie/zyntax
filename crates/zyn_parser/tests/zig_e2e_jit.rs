@@ -692,6 +692,82 @@ fn test_zig_jit_try_expression() {
     println!("[Zig E2E] ✓ try expression = {}", result);
 }
 
+// ===== CLOSURE-LIKE CAPTURE TESTS =====
+// These tests verify that loop variables are correctly captured/copied
+// when stored into arrays (simulating closure capture semantics)
+
+#[test]
+fn test_zig_jit_loop_capture_to_array() {
+    // Classic closure capture problem: store loop variable values into array
+    // Each iteration should capture the CURRENT value of i, not a reference
+    let source = r#"
+        fn capture_loop_values() i32 {
+            var results: [5]i32 = [_]i32{0, 0, 0, 0, 0};
+            var i: i32 = 0;
+            while (i < 5) {
+                results[i] = i * 10;
+                i = i + 1;
+            }
+            // Should return 0 + 10 + 20 + 30 + 40 = 100
+            return results[0] + results[1] + results[2] + results[3] + results[4];
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "capture_loop_values", vec![]);
+    assert_eq!(result, 100);
+    println!("[Zig E2E] ✓ capture_loop_values() = {} (loop capture correct)", result);
+}
+
+#[test]
+fn test_zig_jit_nested_loop_capture() {
+    // Nested loops - both loop variables should be correctly captured
+    let source = r#"
+        fn nested_capture() i32 {
+            var sum: i32 = 0;
+            var i: i32 = 0;
+            while (i < 3) {
+                var j: i32 = 0;
+                while (j < 3) {
+                    sum = sum + i * 10 + j;
+                    j = j + 1;
+                }
+                i = i + 1;
+            }
+            // i=0: 0+1+2=3, i=1: 10+11+12=33, i=2: 20+21+22=63 = 99
+            return sum;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "nested_capture", vec![]);
+    assert_eq!(result, 99);
+    println!("[Zig E2E] ✓ nested_capture() = {} (nested loop capture correct)", result);
+}
+
+#[test]
+fn test_zig_jit_loop_with_conditional_capture() {
+    // Loop with conditional - tests that captured value is correct even with branching
+    let source = r#"
+        fn conditional_capture() i32 {
+            var evens: [3]i32 = [_]i32{0, 0, 0};
+            var even_idx: i32 = 0;
+            var i: i32 = 0;
+            while (i < 6) {
+                if (i % 2 == 0) {
+                    evens[even_idx] = i;
+                    even_idx = even_idx + 1;
+                }
+                i = i + 1;
+            }
+            // evens = [0, 2, 4], sum = 6
+            return evens[0] + evens[1] + evens[2];
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "conditional_capture", vec![]);
+    assert_eq!(result, 6);
+    println!("[Zig E2E] ✓ conditional_capture() = {} (conditional capture correct)", result);
+}
+
 // ===== HELPER FUNCTIONS =====
 
 /// Compile and execute a Zig function with arguments

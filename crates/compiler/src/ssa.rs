@@ -2814,6 +2814,8 @@ impl SsaBuilder {
                 }
 
                 // Create GetElementPtr instruction to get pointer to element
+                // Note: ty should be the ARRAY type so Cranelift can calculate element size
+                let array_hir_type = self.convert_type(&array.ty);
                 let ptr_type = HirType::Ptr(Box::new(element_type.clone()));
                 let ptr = self.create_value(ptr_type, HirValueKind::Instruction);
 
@@ -2821,7 +2823,7 @@ impl SsaBuilder {
                     result: ptr,
                     ptr: array_val,
                     indices: vec![index_val],
-                    ty: element_type.clone(),
+                    ty: array_hir_type, // Pass array type, not element type
                 };
 
                 self.add_instruction(block_id, gep_inst);

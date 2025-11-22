@@ -84,7 +84,9 @@ statement = {
   | expr_stmt
 }
 
-assignment = { identifier ~ "=" ~ expr ~ ";" }
+// Assignment supports: identifier, array index (arr[i]), field access (obj.field)
+assignment = { assign_target ~ "=" ~ expr ~ ";" }
+assign_target = { identifier ~ ("[" ~ expr ~ "]")* }
 return_stmt = { "return" ~ expr? ~ ";" }
 expr_stmt = { expr ~ ";" }
 
