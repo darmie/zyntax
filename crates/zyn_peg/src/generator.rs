@@ -145,42 +145,66 @@ fn generate_build_method(rule: &RuleDef) -> Result<TokenStream> {
     let return_type: TokenStream = action.return_type.parse()
         .map_err(|e| ZynPegError::CodeGenError(format!("Invalid return type: {}", e)))?;
 
-    // Generate field assignments from action fields
-    let field_assignments: Vec<TokenStream> = action.fields.iter()
-        .map(|f| {
-            let name = format_ident!("{}", f.name);
-            let value = process_capture_refs(&f.value);
-            let value_tokens: TokenStream = value.parse()
-                .unwrap_or_else(|_| quote! { todo!() });
-            quote! { #name: #value_tokens }
-        })
-        .collect();
+    // Check if this is a raw code action or structured fields
+    let body = if let Some(ref raw_code) = action.raw_code {
+        // Raw code action - embed the code directly
+        let code = process_capture_refs(raw_code);
+        let code_tokens: TokenStream = code.parse()
+            .unwrap_or_else(|_| quote! { todo!("Failed to parse raw code") });
+        quote! { #code_tokens }
+    } else {
+        // Structured field assignments
+        let field_assignments: Vec<TokenStream> = action.fields.iter()
+            .map(|f| {
+                let name = format_ident!("{}", f.name);
+                let value = process_capture_refs(&f.value);
+                let value_tokens: TokenStream = value.parse()
+                    .unwrap_or_else(|_| quote! { todo!("Failed to parse field value") });
+                quote! { #name: #value_tokens }
+            })
+            .collect();
+
+        quote! {
+            #return_type {
+                #(#field_assignments,)*
+            }
+        }
+    };
 
     Ok(quote! {
+        /// Build a #return_type from a parsed rule
         fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<#return_type, ParseError> {
             let inner: Vec<_> = pair.clone().into_inner().collect();
             let span = pair.as_span();
 
-            Ok(#return_type {
-                #(#field_assignments,)*
-            })
+            // Helper: get child by index (1-based in grammar, 0-based here)
+            let get_child = |idx: usize| -> Option<&pest::iterators::Pair<Rule>> {
+                inner.get(idx.saturating_sub(1))
+            };
+
+            // Helper: get child text
+            let get_text = |idx: usize| -> &str {
+                inner.get(idx.saturating_sub(1)).map(|p| p.as_str()).unwrap_or("")
+            };
+
+            Ok(#body)
         }
     })
 }
 
 /// Process capture references like $1, $2, $name
+/// Transforms capture refs into proper Rust code for accessing parsed children
 fn process_capture_refs(value: &str) -> String {
     let mut result = value.to_string();
 
-    // Replace $N with inner[N-1]
-    for i in 1..=9 {
+    // Replace $N with get_child(N) or get_text(N) depending on context
+    // For now, use a simpler approach: inner.get(N-1)
+    for i in (1..=9).rev() {  // Reverse to handle $10+ before $1
         let pattern = format!("${}", i);
-        let replacement = format!("inner[{}]", i - 1);
+        // Use get_child for accessing child pairs, get_text for text content
+        let replacement = format!("get_child({})", i);
         result = result.replace(&pattern, &replacement);
     }
-
-    // Replace $name with get capture by name (if we implement named captures)
-    // For now, just leave as-is
 
     result
 }
@@ -251,9 +275,9 @@ mod tests {
 
     #[test]
     fn test_process_capture_refs() {
-        assert_eq!(process_capture_refs("$1"), "inner[0]");
-        assert_eq!(process_capture_refs("$1 + $2"), "inner[0] + inner[1]");
-        assert_eq!(process_capture_refs("foo($1, $3)"), "foo(inner[0], inner[2])");
+        assert_eq!(process_capture_refs("$1"), "get_child(1)");
+        assert_eq!(process_capture_refs("$1 + $2"), "get_child(1) + get_child(2)");
+        assert_eq!(process_capture_refs("foo($1, $3)"), "foo(get_child(1), get_child(3))");
     }
 
     #[test]

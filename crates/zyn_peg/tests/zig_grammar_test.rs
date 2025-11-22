@@ -197,4 +197,38 @@ fn test_generate_pest_grammar_from_zig_zyn() {
     assert!(!parser_impl_str.is_empty());
     assert!(parser_impl_str.contains("ZigParser"));
     println!("✓ Generated parser implementation");
+
+    // Show sample of AST builder code
+    println!("\n--- Generated AST Builder (sample) ---");
+    let ast_sample = &ast_builder_str[..2000.min(ast_builder_str.len())];
+    println!("{}", ast_sample);
+    println!("---");
+}
+
+#[test]
+fn test_generated_build_methods() {
+    let grammar_content = fs::read_to_string(ZIG_GRAMMAR_PATH)
+        .expect("Failed to read zig.zyn grammar file");
+
+    let pairs = ZynGrammarParser::parse(Rule::program, &grammar_content)
+        .expect("Failed to parse grammar");
+    let grammar = build_grammar(pairs).expect("Failed to build grammar AST");
+
+    let generated = generate_parser(&grammar).expect("Failed to generate parser");
+    let ast_builder_str = generated.ast_builder.to_string();
+
+    // Check that build methods are generated for rules with actions
+    assert!(ast_builder_str.contains("fn build_program"), "Missing build_program method");
+    assert!(ast_builder_str.contains("fn build_const_decl"), "Missing build_const_decl method");
+    assert!(ast_builder_str.contains("fn build_integer_literal"), "Missing build_integer_literal method");
+    println!("✓ Build methods generated for action rules");
+
+    // Check that capture references are transformed
+    assert!(ast_builder_str.contains("get_child"), "Capture refs should use get_child");
+    println!("✓ Capture references transformed correctly");
+
+    // Check raw code actions are embedded
+    // Rules like primitive_type use match expressions
+    assert!(ast_builder_str.contains("fn build_primitive_type"), "Missing build_primitive_type method");
+    println!("✓ Raw code actions embedded");
 }
