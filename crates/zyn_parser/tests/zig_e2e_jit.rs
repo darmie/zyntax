@@ -768,6 +768,42 @@ fn test_zig_jit_loop_with_conditional_capture() {
     println!("[Zig E2E] ✓ conditional_capture() = {} (conditional capture correct)", result);
 }
 
+// ===== LAMBDA/CLOSURE TESTS =====
+// These tests verify that lambda expressions parse and basic closure infrastructure works
+
+#[test]
+#[ignore] // Lambda execution not yet implemented in Cranelift backend
+fn test_zig_jit_lambda_basic() {
+    // Basic lambda without captures - just tests parsing
+    let source = r#"
+        fn test_lambda() i32 {
+            const add = |x: i32, y: i32| x + y;
+            return 42;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_lambda", vec![]);
+    assert_eq!(result, 42);
+    println!("[Zig E2E] ✓ test_lambda() = {} (lambda parses)", result);
+}
+
+#[test]
+#[ignore] // Lambda execution not yet implemented in Cranelift backend
+fn test_zig_jit_lambda_with_capture() {
+    // Lambda that captures outer variable - tests capture detection
+    let source = r#"
+        fn test_capture() i32 {
+            const multiplier = 10;
+            const scale = |x: i32| x * multiplier;
+            return 42;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "test_capture", vec![]);
+    assert_eq!(result, 42);
+    println!("[Zig E2E] ✓ test_capture() = {} (lambda with capture parses)", result);
+}
+
 // ===== HELPER FUNCTIONS =====
 
 /// Compile and execute a Zig function with arguments

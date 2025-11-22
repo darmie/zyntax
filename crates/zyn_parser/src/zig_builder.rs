@@ -1520,11 +1520,178 @@ impl ZigBuilder {
             Rule::try_expr => {
                 self.build_try_expr(inner)
             }
+            Rule::lambda_expr => {
+                self.build_lambda_expr(inner)
+            }
             _ => Err(BuildError::UnexpectedRule {
                 expected: "primary".to_string(),
                 got: format!("{:?}", inner.as_rule()),
             }),
         }
+    }
+
+    /// Build a lambda/closure expression: |params| body
+    fn build_lambda_expr(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
+        use zyntax_typed_ast::typed_ast::{TypedLambda, TypedLambdaParam, TypedLambdaBody};
+
+        let span = Span::new(pair.as_span().start(), pair.as_span().end());
+        let mut inner = pair.into_inner();
+
+        // Parse parameters (optional)
+        let mut params = Vec::new();
+        let mut param_types = Vec::new();
+
+        // Push a new scope for lambda parameters
+        self.scopes.push(Scope::new());
+
+        // Check first element - could be lambda_params or body
+        if let Some(first) = inner.next() {
+            match first.as_rule() {
+                Rule::lambda_params => {
+                    // Parse parameters
+                    for param_pair in first.into_inner() {
+                        if param_pair.as_rule() == Rule::lambda_param {
+                            let mut param_inner = param_pair.into_inner();
+                            let name_pair = param_inner.next().ok_or_else(|| {
+                                BuildError::Internal("Missing parameter name".to_string())
+                            })?;
+                            let name = self.intern(name_pair.as_str());
+
+                            // Optional type annotation
+                            let ty = if let Some(type_pair) = param_inner.next() {
+                                Some(self.build_type_expr(type_pair)?)
+                            } else {
+                                // Default to i32 for untyped params (simplification)
+                                Some(Type::Primitive(zyntax_typed_ast::PrimitiveType::I32))
+                            };
+
+                            let param_ty = ty.clone().unwrap_or(Type::Primitive(zyntax_typed_ast::PrimitiveType::I32));
+                            param_types.push(param_ty.clone());
+
+                            // Add parameter to lambda scope
+                            self.current_scope().variables.insert(name, param_ty);
+
+                            params.push(TypedLambdaParam { name, ty });
+                        }
+                    }
+                }
+                Rule::block => {
+                    // No params, this is the body block
+                    let body_block = self.build_block(first)?;
+
+                    // Pop lambda scope
+                    self.scopes.pop();
+
+                    // Create function type - block returns Unit
+                    let func_type = Type::Function {
+                        params: vec![],
+                        return_type: Box::new(Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit)),
+                        is_varargs: false,
+                        has_named_params: false,
+                        has_default_params: false,
+                        async_kind: zyntax_typed_ast::type_registry::AsyncKind::Sync,
+                        calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+                        nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                    };
+
+                    return Ok(TypedNode {
+                        node: TypedExpression::Lambda(TypedLambda {
+                            params: vec![],
+                            body: TypedLambdaBody::Block(body_block),
+                            captures: vec![],
+                        }),
+                        ty: func_type,
+                        span,
+                    });
+                }
+                _ => {
+                    // No params, this is an expression body
+                    let body_expr = self.build_expression(first)?;
+                    let return_type = body_expr.ty.clone();
+
+                    // Pop lambda scope
+                    self.scopes.pop();
+
+                    let func_type = Type::Function {
+                        params: vec![],
+                        return_type: Box::new(return_type),
+                        is_varargs: false,
+                        has_named_params: false,
+                        has_default_params: false,
+                        async_kind: zyntax_typed_ast::type_registry::AsyncKind::Sync,
+                        calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+                        nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                    };
+
+                    return Ok(TypedNode {
+                        node: TypedExpression::Lambda(TypedLambda {
+                            params: vec![],
+                            body: TypedLambdaBody::Expression(Box::new(body_expr)),
+                            captures: vec![],
+                        }),
+                        ty: func_type,
+                        span,
+                    });
+                }
+            }
+        }
+
+        // Parse body (block or expression)
+        let body_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing lambda body".to_string())
+        })?;
+
+        let (body, return_type) = match body_pair.as_rule() {
+            Rule::block => {
+                let block = self.build_block(body_pair)?;
+                (TypedLambdaBody::Block(block), Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit))
+            }
+            _ => {
+                let expr = self.build_expression(body_pair)?;
+                let ty = expr.ty.clone();
+                (TypedLambdaBody::Expression(Box::new(expr)), ty)
+            }
+        };
+
+        // Pop lambda scope
+        self.scopes.pop();
+
+        // Create param info for function type
+        let param_infos: Vec<zyntax_typed_ast::type_registry::ParamInfo> = param_types.iter().map(|ty| {
+            zyntax_typed_ast::type_registry::ParamInfo {
+                ty: ty.clone(),
+                name: None,
+                is_optional: false,
+                is_varargs: false,
+                is_keyword_only: false,
+                is_positional_only: false,
+                is_out: false,
+                is_ref: false,
+                is_inout: false,
+            }
+        }).collect();
+
+        // Create function type for lambda
+        let func_type = Type::Function {
+            params: param_infos,
+            return_type: Box::new(return_type),
+            is_varargs: false,
+            has_named_params: false,
+            has_default_params: false,
+            async_kind: zyntax_typed_ast::type_registry::AsyncKind::Sync,
+            calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+        };
+
+        Ok(TypedNode {
+            node: TypedExpression::Lambda(TypedLambda {
+                params,
+                body,
+                captures: vec![], // TODO: Detect captures from scope analysis
+            }),
+            ty: func_type,
+            span,
+        })
     }
 
     fn convert_binary_op(&mut self, op_str: &str) -> BuildResult<zyntax_typed_ast::BinaryOp> {

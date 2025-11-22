@@ -164,9 +164,19 @@ primary = {
   | struct_literal
   | switch_expr
   | try_expr
+  | lambda_expr
   | "(" ~ expr ~ ")"
   | identifier
 }
+
+// ===== Lambda/Closure Expression =====
+// Syntax: |params| body or |params| { block }
+lambda_expr = {
+    "|" ~ lambda_params? ~ "|" ~ (block | expr)
+}
+
+lambda_params = { lambda_param ~ ("," ~ lambda_param)* }
+lambda_param = { identifier ~ (":" ~ type_expr)? }
 
 // ===== Try Expression =====
 try_expr = { "try" ~ postfix }
