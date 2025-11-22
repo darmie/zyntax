@@ -1,0 +1,27 @@
+[package]
+name = "zyn_peg"
+version = "0.1.0"
+edition = "2021"
+description = "ZynPEG: Parser generator for multi-language Zyntax frontends"
+authors = ["Zyntax Team"]
+license = "Apache-2.0"
+
+[dependencies]
+# PEG parsing (we use pest to parse .zyn grammars)
+pest = "2.7"
+pest_derive = "2.7"
+
+# Code generation
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "parsing"] }
+
+# Error handling
+thiserror = "1.0"
+
+# Interned strings (shared with typed_ast)
+internment = "0.8"
+
+[dev-dependencies]
+# Testing
+pretty_assertions = "1.4"

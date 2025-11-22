@@ -1,0 +1,162 @@
+// ZynPEG Grammar Definition
+// This grammar parses .zyn files which extend pest PEG syntax with TypedAST action blocks
+
+program = { SOI ~ directive* ~ rule_def* ~ EOI }
+
+// ===== Directives =====
+
+directive = {
+    language_directive
+  | imports_directive
+  | context_directive
+  | type_helpers_directive
+  | error_messages_directive
+}
+
+// @language { name: "Zig", version: "0.11", file_extensions: [".zig", ".zyn"] }
+language_directive = {
+    "@language" ~ "{" ~ language_field ~ ("," ~ language_field)* ~ ","? ~ "}"
+}
+
+language_field = {
+    "name" ~ ":" ~ string_literal
+  | "version" ~ ":" ~ string_literal
+  | "file_extensions" ~ ":" ~ "[" ~ string_literal ~ ("," ~ string_literal)* ~ "]"
+}
+
+// @imports { use zyntax_typed_ast::*; }
+imports_directive = {
+    "@imports" ~ "{" ~ rust_code ~ "}"
+}
+
+// @context { arena: &mut AstArena, type_registry: &mut TypeRegistry }
+context_directive = {
+    "@context" ~ "{" ~ context_field ~ ("," ~ context_field)* ~ ","? ~ "}"
+}
+
+context_field = {
+    identifier ~ ":" ~ rust_type
+}
+
+// @type_helpers { fn infer_type(...) -> Type { ... } }
+type_helpers_directive = {
+    "@type_helpers" ~ "{" ~ rust_code ~ "}"
+}
+
+// @error_messages { type_mismatch(...) { message: "...", ... } }
+error_messages_directive = {
+    "@error_messages" ~ "{" ~ error_def* ~ "}"
+}
+
+error_def = {
+    identifier ~ "(" ~ error_params? ~ ")" ~ "{" ~ error_field* ~ "}"
+}
+
+error_params = { identifier ~ ":" ~ rust_type ~ ("," ~ identifier ~ ":" ~ rust_type)* }
+
+error_field = {
+    "message" ~ ":" ~ (string_literal | format_expr)
+  | "primary" ~ ":" ~ "(" ~ identifier ~ "," ~ (string_literal | format_expr) ~ ")"
+  | "hints" ~ ":" ~ "[" ~ (string_literal | format_expr) ~ ("," ~ (string_literal | format_expr))* ~ "]"
+}
+
+format_expr = { "format!" ~ "(" ~ string_literal ~ ("," ~ rust_expr)* ~ ")" }
+
+// ===== Rule Definitions =====
+
+// rule_name = { pattern } -> Type { action }
+rule_def = {
+    identifier ~ "=" ~ rule_modifier? ~ "{" ~ pattern ~ "}" ~ action_block?
+}
+
+rule_modifier = { "@" | "!" | "$" | "_" }
+
+// Action block: -> TypedExpression { expr: ..., ty: ..., span: ... }
+action_block = {
+    "->" ~ rust_type ~ "{" ~ action_body ~ "}"
+}
+
+action_body = {
+    action_field ~ ("," ~ action_field)* ~ ","?  // Structured fields: expr: ..., ty: ...
+}
+
+action_field = {
+    identifier ~ ":" ~ rust_expr
+}
+
+// ===== PEG Patterns (pest-compatible) =====
+
+pattern = { choice }
+
+choice = { sequence ~ ("|" ~ sequence)* }
+
+sequence = { prefix* }
+
+prefix = {
+    ("!" | "&")? ~ postfix
+}
+
+postfix = {
+    primary ~ ("*" | "+" | "?" | repeat)?
+}
+
+repeat = { "{" ~ integer ~ ("," ~ integer?)? ~ "}" }
+
+primary = {
+    "(" ~ pattern ~ ")"
+  | string_literal
+  | char_range
+  | rule_ref
+  | builtin_rule
+}
+
+rule_ref = { identifier }
+
+builtin_rule = {
+    "SOI" | "EOI" | "ANY"
+  | "ASCII_DIGIT" | "ASCII_ALPHA" | "ASCII_ALPHANUMERIC"
+  | "ASCII_HEX_DIGIT" | "ASCII_NONZERO_DIGIT"
+  | "NEWLINE" | "WHITESPACE" | "COMMENT"
+}
+
+char_range = { "'" ~ char_inner ~ "'" ~ ".." ~ "'" ~ char_inner ~ "'" }
+char_inner = { !("'" | "\\") ~ ANY | "\\" ~ ANY }
+
+// ===== Rust Code Embedding =====
+
+rust_code = { rust_code_inner* }
+rust_code_inner = {
+    !("{" | "}") ~ ANY
+  | "{" ~ rust_code_inner* ~ "}"
+}
+
+rust_type = { rust_type_ref? ~ rust_type_segment ~ ("::" ~ rust_type_segment)* ~ rust_type_generics? }
+rust_type_segment = @{ identifier }
+rust_type_generics = { "<" ~ rust_type ~ ("," ~ rust_type)* ~ ">" }
+rust_type_ref = { "&" ~ "mut"? }
+
+rust_expr = { rust_expr_inner+ }
+rust_expr_inner = {
+    !("," | "}") ~ ANY
+  | "{" ~ rust_expr_inner* ~ "}"
+  | "(" ~ rust_expr_inner* ~ ")"
+  | "[" ~ rust_expr_inner* ~ "]"
+}
+
+// ===== Capture References =====
+// $1, $2, $name - references to pattern captures
+capture_ref = { "$" ~ (integer | identifier) }
+
+// ===== Lexical Elements =====
+
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+string_literal = { "\"" ~ string_inner ~ "\"" }
+string_inner = @{ (!("\"" | "\\") ~ ANY | "\\" ~ ANY)* }
+
+integer = @{ ASCII_DIGIT+ }
+
+// ===== Whitespace and Comments =====
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n"? | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
