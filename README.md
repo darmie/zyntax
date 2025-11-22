@@ -557,22 +557,24 @@ Experiment with advanced type system features:
 
 See [BACKLOG.md](BACKLOG.md) for detailed tasks.
 
-### Q4 2025 (Current): Core Stabilization & Bug Fixes
+### Q4 2025 (Current): Core Stabilization ✅ COMPLETE
 
 - ✅ Zig parser with full control flow support (continue, break, while loops)
 - ✅ Fix SSA variable reads for unsealed blocks (continue statement bug)
 - ✅ Logical operators with short-circuit evaluation
-- 🔄 Complete array types and indexing
-- 🔄 String literals and string operations
-- 🔄 Fix remaining 4 test failures (280/284 passing)
+- ✅ Array types, indexing, and array index assignment
+- ✅ String literals (lowered to global `*i8`)
+- ✅ 71/71 Zig E2E tests passing (100%)
+- ✅ Zig-style error handling (try/catch/orelse on error unions)
+- ✅ Pattern matching (if let, switch, Some/None/Ok/Err)
+- ✅ Generic functions with monomorphization
 
 ### Q1 2026: Production Features
 
 - 🔄 LLVM AOT backend completion
-- 🔄 Exception handling support (try/catch/finally)
+- 🔄 Haxe-style exception handling (throw/catch/finally with stack unwinding)
 - 🔄 Complete I/O and networking standard library
-- 🔄 Advanced pattern matching features
-- ✅ Generic functions with type parameters (monomorphization complete)
+- 🔄 String operations (needs stdlib integration via plugin system)
 
 ### Q2 2026: Ecosystem & Integration
 
