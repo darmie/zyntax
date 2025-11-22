@@ -291,8 +291,11 @@ cargo test --package zyn_parser --test zig_e2e_jit
   - `defer` and `errdefer` syntax
 - [x] **Enum declarations** ✅ (Nov 2025)
   - `const Color = enum { red, green, blue };`
+- [x] **Generic functions** ✅ (Nov 2025)
+  - Comptime type parameters: `fn identity(comptime T: type, x: T) T`
+  - Full monomorphization pipeline
+  - Type-specialized function generation
 - [ ] Function overloading
-- [ ] Generic functions with type parameters (parsing complete, monomorphization pending)
 - [ ] Slice types (`[]T` - grammar exists, needs runtime support)
 - [ ] Comptime evaluation
 
@@ -569,7 +572,7 @@ See [BACKLOG.md](BACKLOG.md) for detailed tasks.
 - 🔄 Exception handling support (try/catch/finally)
 - 🔄 Complete I/O and networking standard library
 - 🔄 Advanced pattern matching features
-- 🔄 Generic functions with type parameters
+- ✅ Generic functions with type parameters (monomorphization complete)
 
 ### Q2 2026: Ecosystem & Integration
 
