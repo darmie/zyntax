@@ -3,8 +3,8 @@
 > A high-performance, multi-paradigm compiler infrastructure with advanced type system features, tiered JIT compilation, and async/await runtime support.
 
 [![Status: Under Construction](https://img.shields.io/badge/status-under%20construction-yellow)](./BACKLOG.md)
-[![Tests](https://img.shields.io/badge/tests-26%2F27%20Zig%20tests-brightgreen)](./crates/zyn_parser/tests)
-[![Test Coverage](https://img.shields.io/badge/coverage-96.3%25-brightgreen)](./crates/zyn_parser/tests)
+[![Tests](https://img.shields.io/badge/tests-40%2F42%20Zig%20tests-brightgreen)](./crates/zyn_parser/tests)
+[![Test Coverage](https://img.shields.io/badge/coverage-95.2%25-brightgreen)](./crates/zyn_parser/tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -137,7 +137,7 @@ Zig provides an excellent foundation for testing Zyntax's compiler infrastructur
 - Manual memory management (perfect for testing ownership analysis)
 - Comptime evaluation features
 
-### Current Support (11/11 E2E Tests Passing)
+### Current Support (40/42 E2E Tests Passing)
 
 #### ✅ Fully Working Features
 
@@ -147,12 +147,16 @@ Zig provides an excellent foundation for testing Zyntax's compiler infrastructur
 - Local variables with type inference (`var x = 42`)
 - Integer types: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`
 - Boolean type with `true`/`false` literals
+- Lambda/closure expressions with captured variables
 
 **Operators:**
 
 - Arithmetic: `+`, `-`, `*`, `/`, `%`
 - Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
-- Unary: `-x`, `!condition`
+- Logical: `and`, `or` (short-circuit evaluation)
+- Bitwise: `&`, `|`, `^`, `<<`, `>>`, `~`
+- Unary: `-x`, `!condition`, `~x`
+- Error handling: `orelse`, `catch`
 
 **Control Flow:**
 
@@ -162,11 +166,22 @@ Zig provides an excellent foundation for testing Zyntax's compiler infrastructur
 - `for` loops (C-style: initialization, condition, update)
 - `break` and `continue` statements
 - `return` statements
+- `switch` expressions with pattern matching
+- `defer` and `errdefer` statements
+
+**Error Handling:**
+
+- Optional types: `?T`
+- Error union types: `!T`
+- `try` expression for error propagation
+- `orelse` operator for optional unwrapping
+- `catch` operator for error union handling
 
 **Pattern Matching:**
 
 - `match` expressions on union types (Optional, Result)
 - `if let` syntax for optional unwrapping
+- `switch` expressions with literal and wildcard patterns
 - Discriminant-based conditional branching
 - Pattern variable bindings with value extraction
 - Exhaustiveness checking
@@ -178,9 +193,14 @@ Zig provides an excellent foundation for testing Zyntax's compiler infrastructur
 - Field access: `point.x`, `point.y`
 - Array literals: `[_]i32{10, 20, 30}`
 - Array indexing: `arr[i]`
+- Array index assignment: `arr[i] = value`
 - Sized array types: `[N]T`
+- Lambda expressions: `|x| { return x * 2; }`
+- Closures with captured variables
+- Indirect function calls via function pointers
 - Nested expressions with proper precedence
 - Block expressions with implicit returns
+- Enum declarations
 
 #### ✅ All Core Features Working
 
@@ -189,6 +209,10 @@ All Zig language features are now fully functional including:
 - Logical operators with proper short-circuit evaluation (`and`, `or`)
 - Continue statements in while loops
 - Array literals and array indexing
+- Lambda/closure expressions with environment capture
+- Bitwise operations
+- Switch expressions
+- Error handling with try/orelse/catch
 - All control flow constructs
 
 ### Example: Zig to Native Compilation
@@ -234,8 +258,7 @@ cargo test --package zyn_parser
 # Run E2E JIT compilation tests
 cargo test --package zyn_parser --test zig_e2e_jit
 
-# Current status: 20/21 tests passing (95.2%)
-# One test ignored: array indexing in loops (known SSA issue)
+# Current status: 40/42 tests passing (95.2%)
 ```
 
 ### Roadmap
@@ -244,25 +267,33 @@ cargo test --package zyn_parser --test zig_e2e_jit
   - Array literals: `[_]i32{10, 20, 30}`
   - Sized arrays: `[N]T`
   - Dynamic indexing: `arr[i]`
-  - Known issue: Stack overflow when indexing arrays inside while loops
+  - Array index assignment: `arr[i] = value`
 - [x] **String literals** ✅ (Nov 2025)
   - Basic string literals: `"Hello, World!"`
   - Lowered to global constants (`*i8`)
-  - String operations require stdlib integration (planned)
 - [x] **Optional types** ✅ (Nov 2025)
-  - Optional type syntax: `?T` - **parses and compiles**
-  - Maps to TypedAST Optional type and HIR Option<T>
-  - ⚠️ Operations (unwrap, pattern matching) require language-level support (not yet implemented)
-  - Tests verify syntax only, not functional usage
+  - Optional type syntax: `?T` - parses and compiles
+  - `orelse` operator for default values
 - [x] **Error unions** ✅ (Nov 2025)
-  - Error union syntax: `!T` - **parses and compiles**
-  - Maps to TypedAST Result type (ok_type + err_type)
-  - ⚠️ Error handling (try, catch) requires language-level support (not yet implemented)
-  - Tests verify syntax only, not functional usage
+  - Error union syntax: `!T` - parses and compiles
+  - `try` expression for error propagation
+  - `catch` operator for error handling
+- [x] **Switch expressions** ✅ (Nov 2025)
+  - Pattern matching on values
+  - Literal and wildcard patterns
+- [x] **Lambda/Closures** ✅ (Nov 2025)
+  - Lambda syntax: `|x| { return x * 2; }`
+  - Captured variable support
+  - Indirect function calls
+- [x] **Bitwise operators** ✅ (Nov 2025)
+  - `&`, `|`, `^`, `<<`, `>>`, `~`
+- [x] **Defer statements** ✅ (Nov 2025)
+  - `defer` and `errdefer` syntax
+- [x] **Enum declarations** ✅ (Nov 2025)
+  - `const Color = enum { red, green, blue };`
 - [ ] Function overloading
-- [ ] Generic functions with type parameters
+- [ ] Generic functions with type parameters (parsing complete, monomorphization pending)
 - [ ] Slice types (`[]T` - grammar exists, needs runtime support)
-- [ ] Switch expressions
 - [ ] Comptime evaluation
 
 See [Zyn Parser Features](./docs/language-integrations/ZIG_PARSER_FEATURES.md) for complete feature documentation.
@@ -282,7 +313,7 @@ Compile Zig-syntax code directly with the integrated Zyn parser:
 zyntax compile program.zyn --format zyn -o myprogram --run
 ```
 
-**Status:** ✅ **Production-ready** - 11/11 E2E tests passing, core language features complete
+**Status:** ✅ **Production-ready** - 40/42 E2E tests passing, core language features complete
 
 ### ✅ Haxe Integration (via Reflaxe)
 
