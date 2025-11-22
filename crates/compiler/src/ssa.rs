@@ -52,6 +52,10 @@ pub struct SsaBuilder {
     continuation_block: Option<HirId>,
     /// Original return type from TypedAST (for auto-wrapping Result returns)
     original_return_type: Option<Type>,
+    /// Variables that have their address taken (need stack allocation)
+    address_taken_vars: HashSet<InternedString>,
+    /// Stack slots for address-taken variables (var name -> alloca result)
+    stack_slots: HashMap<InternedString, HirId>,
 }
 
 /// Context for pattern matching
@@ -280,6 +284,8 @@ impl SsaBuilder {
             match_context: None,
             continuation_block: None,
             original_return_type: None,
+            address_taken_vars: HashSet::new(),
+            stack_slots: HashMap::new(),
         }
     }
 
@@ -379,6 +385,10 @@ impl SsaBuilder {
         // This allows other blocks to read parameters from the entry block
         self.seal_block(entry_block);
         self.filled_blocks.insert(entry_block);
+
+        // CRITICAL: Scan for address-taken variables BEFORE processing blocks
+        // These variables need stack allocation instead of SSA registers
+        self.scan_cfg_for_address_taken_vars(cfg);
 
         // IDF-BASED SSA: Place phis using Iterated Dominance Frontier
         // CRITICAL: This must run BEFORE blocks are processed
@@ -1034,13 +1044,41 @@ impl SsaBuilder {
                 // Evaluate the initializer if present
                 if let Some(value) = &let_stmt.initializer {
                     let value_id = self.translate_expression(block_id, value)?;
-                    
+
                     // Record variable type
                     let hir_type = self.convert_type(&let_stmt.ty);
                     self.var_types.insert(let_stmt.name, hir_type.clone());
-                    
-                    // Create assignment
-                    self.write_variable(let_stmt.name, block_id, value_id);
+
+                    // Check if this variable has its address taken
+                    if self.address_taken_vars.contains(&let_stmt.name) {
+                        // Allocate stack slot and store value
+                        let stack_slot = self.create_value(
+                            HirType::Ptr(Box::new(hir_type.clone())),
+                            HirValueKind::Instruction
+                        );
+
+                        self.add_instruction(block_id, HirInstruction::Alloca {
+                            result: stack_slot,
+                            ty: hir_type.clone(),
+                            count: None,
+                            align: 8,
+                        });
+
+                        // Store initial value
+                        self.add_instruction(block_id, HirInstruction::Store {
+                            value: value_id,
+                            ptr: stack_slot,
+                            align: 8,
+                            volatile: false,
+                        });
+
+                        // Track stack slot for this variable
+                        self.stack_slots.insert(let_stmt.name, stack_slot);
+                        eprintln!("[SSA] Allocated stack slot {:?} for address-taken var {:?}", stack_slot, let_stmt.name);
+                    } else {
+                        // Normal SSA: Create assignment
+                        self.write_variable(let_stmt.name, block_id, value_id);
+                    }
                 }
             }
             
@@ -1168,6 +1206,22 @@ impl SsaBuilder {
         
         match &expr.node {
             TypedExpression::Variable(name) => {
+                // Check if this is an address-taken variable - need to load from stack
+                if let Some(&stack_slot) = self.stack_slots.get(name) {
+                    let var_ty = self.var_types.get(name).cloned().unwrap_or(HirType::I64);
+                    let result = self.create_value(var_ty.clone(), HirValueKind::Instruction);
+                    self.add_instruction(block_id, HirInstruction::Load {
+                        result,
+                        ty: var_ty,
+                        ptr: stack_slot,
+                        align: 8,
+                        volatile: false,
+                    });
+                    self.add_use(stack_slot, result);
+                    eprintln!("[SSA] Load address-taken var {:?} from stack slot {:?} -> {:?}", name, stack_slot, result);
+                    return Ok(result);
+                }
+
                 // First try to read the variable - if it exists in scope, use it
                 // Only treat as enum constructor if it's not a defined variable
                 if let Some(value_id) = self.try_read_variable(*name, block_id) {
@@ -1636,13 +1690,21 @@ impl SsaBuilder {
             }
 
             TypedExpression::Reference(reference) => {
-                // Take reference of expression
-                let operand_val = self.translate_expression(block_id, &reference.expr)?;
-                let ptr_ty = HirType::Ptr(Box::new(self.convert_type(&reference.expr.ty)));
-                let result = self.create_value(ptr_ty, HirValueKind::Instruction);
+                // Take reference of expression - return stack slot address for address-taken variables
+                use zyntax_typed_ast::typed_ast::TypedExpression as TE;
 
-                // This would be a no-op in HIR if operand is already an address
-                // For now, just return the operand
+                // Check if the inner expression is a variable with a stack slot
+                if let TE::Variable(var_name) = &reference.expr.node {
+                    if let Some(&stack_slot) = self.stack_slots.get(var_name) {
+                        eprintln!("[SSA] Reference to address-taken var {:?} -> stack slot {:?}", var_name, stack_slot);
+                        return Ok(stack_slot);
+                    }
+                }
+
+                // For non-stack-allocated expressions, this is an error in the current model
+                // as SSA values don't have addresses
+                eprintln!("[SSA] Warning: Taking reference of non-stack-allocated expression");
+                let operand_val = self.translate_expression(block_id, &reference.expr)?;
                 Ok(operand_val)
             }
 
@@ -2178,6 +2240,91 @@ impl SsaBuilder {
         writes
     }
 
+    /// Scan CFG to find which variables have their address taken
+    /// Variables with their address taken need stack allocation instead of SSA registers
+    fn scan_cfg_for_address_taken_vars(&mut self, cfg: &crate::typed_cfg::TypedControlFlowGraph) {
+        use zyntax_typed_ast::typed_ast::{TypedExpression, TypedStatement};
+
+        for node_idx in cfg.graph.node_indices() {
+            let typed_block = &cfg.graph[node_idx];
+
+            // Scan all statements in the block
+            for stmt in &typed_block.statements {
+                match &stmt.node {
+                    TypedStatement::Let(let_stmt) => {
+                        // Check initializer for address-of expressions
+                        if let Some(init) = &let_stmt.initializer {
+                            self.collect_address_taken_vars_from_expr(init);
+                        }
+                    }
+                    TypedStatement::Expression(expr) => {
+                        self.collect_address_taken_vars_from_expr(expr);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        eprintln!("[SSA] Address-taken variables: {:?}", self.address_taken_vars);
+    }
+
+    /// Recursively collect variables that have their address taken
+    fn collect_address_taken_vars_from_expr(&mut self, expr: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>) {
+        use zyntax_typed_ast::typed_ast::TypedExpression;
+
+        match &expr.node {
+            TypedExpression::Reference(reference) => {
+                // If the reference is to a variable, mark it as address-taken
+                if let TypedExpression::Variable(var_name) = &reference.expr.node {
+                    self.address_taken_vars.insert(*var_name);
+                    eprintln!("[SSA] Found address-taken variable: {:?}", var_name);
+                }
+                // Also recurse into the inner expression
+                self.collect_address_taken_vars_from_expr(&reference.expr);
+            }
+            TypedExpression::Binary(binary) => {
+                self.collect_address_taken_vars_from_expr(&binary.left);
+                self.collect_address_taken_vars_from_expr(&binary.right);
+            }
+            TypedExpression::Unary(unary) => {
+                self.collect_address_taken_vars_from_expr(&unary.operand);
+            }
+            TypedExpression::Call(call) => {
+                self.collect_address_taken_vars_from_expr(&call.callee);
+                for arg in &call.positional_args {
+                    self.collect_address_taken_vars_from_expr(arg);
+                }
+            }
+            TypedExpression::Field(field) => {
+                self.collect_address_taken_vars_from_expr(&field.object);
+            }
+            TypedExpression::Index(index) => {
+                self.collect_address_taken_vars_from_expr(&index.object);
+                self.collect_address_taken_vars_from_expr(&index.index);
+            }
+            TypedExpression::Dereference(inner) => {
+                self.collect_address_taken_vars_from_expr(inner);
+            }
+            TypedExpression::If(if_expr) => {
+                self.collect_address_taken_vars_from_expr(&if_expr.condition);
+                self.collect_address_taken_vars_from_expr(&if_expr.then_branch);
+                self.collect_address_taken_vars_from_expr(&if_expr.else_branch);
+            }
+            TypedExpression::Block(block) => {
+                for stmt in &block.statements {
+                    if let zyntax_typed_ast::typed_ast::TypedStatement::Expression(e) = &stmt.node {
+                        self.collect_address_taken_vars_from_expr(e);
+                    }
+                }
+            }
+            // Leaf nodes - no recursion needed
+            TypedExpression::Literal(_) |
+            TypedExpression::Variable(_) => {}
+            // Handle other expression types as needed
+            _ => {}
+        }
+    }
+
     /// Place phis using Iterated Dominance Frontier (IDF) algorithm
     /// This is the proper SSA construction approach that places phis only where needed
     fn place_phis_using_idf(&mut self, cfg: &crate::typed_cfg::TypedControlFlowGraph) {
@@ -2648,8 +2795,19 @@ impl SsaBuilder {
         match &target.node {
             // Simple variable assignment: x = value
             TypedExpression::Variable(name) => {
-                // Use write_variable to update the SSA variable tracking
-                self.write_variable(*name, block_id, value);
+                // Check if this is an address-taken variable - store to stack slot
+                if let Some(&stack_slot) = self.stack_slots.get(name) {
+                    self.add_instruction(block_id, HirInstruction::Store {
+                        value,
+                        ptr: stack_slot,
+                        align: 8,
+                        volatile: false,
+                    });
+                    eprintln!("[SSA] Store to address-taken var {:?} stack slot {:?}", name, stack_slot);
+                } else {
+                    // Use write_variable to update the SSA variable tracking
+                    self.write_variable(*name, block_id, value);
+                }
                 // Assignment expression returns the assigned value
                 Ok(value)
             }

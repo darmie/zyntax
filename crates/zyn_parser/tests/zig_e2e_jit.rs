@@ -1263,6 +1263,143 @@ fn test_zig_parse_error_set_decl() {
     assert!(pairs.clone().next().is_some());
 }
 
+// ===== POINTER OPERATIONS =====
+// NOTE: Pointer operations parse and build TypedAST correctly.
+// However, JIT execution requires SSA to allocate address-taken variables on stack.
+// Current SSA uses virtual registers - variables don't have memory addresses.
+// This is a known limitation that requires SSA infrastructure changes.
+
+#[test]
+fn test_zig_parse_address_of_operator() {
+    // Test that address-of operator (&) parses and builds TypedAST correctly
+    let source = r#"
+        fn get_ptr(x: i32) *i32 {
+            return &x;
+        }
+    "#;
+
+    // Parse to TypedAST - should succeed
+    let pairs = ZigParser::parse(Rule::program, source)
+        .expect("Failed to parse Zig source with address-of operator");
+    let mut builder = ZigBuilder::new();
+    let program = builder.build_program(pairs)
+        .expect("Failed to build TypedAST with address-of operator");
+
+    assert!(!program.declarations.is_empty());
+    println!("[Zig E2E] ✓ address-of operator (&) parsing successful");
+}
+
+#[test]
+fn test_zig_parse_pointer_dereference() {
+    // Test that pointer dereference (.*) parses and builds TypedAST correctly
+    let source = r#"
+        fn deref_ptr(p: *i32) i32 {
+            return p.*;
+        }
+    "#;
+
+    let pairs = ZigParser::parse(Rule::program, source)
+        .expect("Failed to parse Zig source with pointer dereference");
+    let mut builder = ZigBuilder::new();
+    let program = builder.build_program(pairs)
+        .expect("Failed to build TypedAST with pointer dereference");
+
+    assert!(!program.declarations.is_empty());
+    println!("[Zig E2E] ✓ pointer dereference (.*) parsing successful");
+}
+
+#[test]
+fn test_zig_jit_pointer_deref() {
+    // Test pointer dereference with JIT execution
+    let source = r#"
+        fn deref_test() i32 {
+            var x = 42;
+            const ptr = &x;
+            return ptr.*;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "deref_test", vec![]);
+    assert_eq!(result, 42);
+    println!("[Zig E2E] ✓ deref_test() = {} (pointer dereference)", result);
+}
+
+#[test]
+fn test_zig_jit_pointer_modify() {
+    // Test modifying value through pointer
+    let source = r#"
+        fn modify_via_ptr() i32 {
+            var x = 10;
+            const ptr = &x;
+            x = 50;
+            return ptr.*;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "modify_via_ptr", vec![]);
+    assert_eq!(result, 50);
+    println!("[Zig E2E] ✓ modify_via_ptr() = {} (modified through alias)", result);
+}
+
+#[test]
+fn test_zig_jit_pointer_arithmetic() {
+    // Test reading and using pointer value in arithmetic
+    let source = r#"
+        fn ptr_add() i32 {
+            var a = 10;
+            var b = 20;
+            const pa = &a;
+            const pb = &b;
+            return pa.* + pb.*;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "ptr_add", vec![]);
+    assert_eq!(result, 30);
+    println!("[Zig E2E] ✓ ptr_add() = {} (pointer arithmetic)", result);
+}
+
+#[test]
+fn test_zig_jit_pointer_in_loop() {
+    // Test pointer operations inside a loop
+    let source = r#"
+        fn ptr_loop_sum() i32 {
+            var sum = 0;
+            var i = 0;
+            while (i < 5) {
+                const ptr = &sum;
+                sum = ptr.* + i;
+                i = i + 1;
+            }
+            return sum;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "ptr_loop_sum", vec![]);
+    assert_eq!(result, 10);  // 0+0+1+2+3+4 = 10
+    println!("[Zig E2E] ✓ ptr_loop_sum() = {} (pointer in loop)", result);
+}
+
+#[test]
+fn test_zig_jit_multiple_pointers() {
+    // Test multiple pointers to different variables
+    let source = r#"
+        fn multi_ptr() i32 {
+            var x = 5;
+            var y = 7;
+            const px = &x;
+            const py = &y;
+            x = 10;
+            y = 20;
+            return px.* * py.*;
+        }
+    "#;
+
+    let result = compile_and_execute_zig(source, "multi_ptr", vec![]);
+    assert_eq!(result, 200);  // 10 * 20 = 200
+    println!("[Zig E2E] ✓ multi_ptr() = {} (multiple pointers)", result);
+}
+
 // ===== COMPOUND ASSIGNMENT OPERATORS =====
 
 #[test]

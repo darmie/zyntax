@@ -1305,6 +1305,27 @@ impl ZigBuilder {
                     BuildError::Internal("Missing operand in unary expression".to_string())
                 })?;
                 let operand = self.build_unary(operand_pair)?;
+
+                // Handle address-of operator specially - creates Reference expression
+                if op_str == "&" {
+                    let span = Span::new(0, 0);
+                    let ref_type = Type::Reference {
+                        ty: Box::new(operand.ty.clone()),
+                        mutability: Mutability::Immutable,
+                        lifetime: None,
+                        nullability: NullabilityKind::NonNull,
+                    };
+                    let reference = zyntax_typed_ast::typed_ast::TypedReference {
+                        expr: Box::new(operand),
+                        mutability: Mutability::Immutable,
+                    };
+                    return Ok(TypedNode {
+                        node: TypedExpression::Reference(reference),
+                        ty: ref_type,
+                        span,
+                    });
+                }
+
                 let op = self.convert_unary_op(op_str)?;
                 let result_type = operand.ty.clone();
                 let span = Span::new(0, 0);
@@ -1340,6 +1361,25 @@ impl ZigBuilder {
     fn build_postfix_op(&mut self, base: TypedNode<TypedExpression>, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {
         let span_range = pair.as_span();
         let span = Span::new(span_range.start(), span_range.end());
+        let pair_str = pair.as_str();
+
+        // Check for pointer dereference (.*) - it has no inner elements
+        if pair_str == ".*" {
+            // Pointer dereference - extract inner type from reference type
+            let deref_type = match &base.ty {
+                Type::Reference { ty, .. } => (**ty).clone(),
+                _ => {
+                    // Not a reference type - default to i32 for robustness
+                    Type::Primitive(zyntax_typed_ast::PrimitiveType::I32)
+                }
+            };
+
+            return Ok(TypedNode {
+                node: TypedExpression::Dereference(Box::new(base)),
+                ty: deref_type,
+                span,
+            });
+        }
 
         let mut inner = pair.into_inner();
         let first_opt = inner.next();
@@ -3128,5 +3168,92 @@ mod tests {
 
         // Should succeed - loop variable should be in scope
         assert!(result.is_ok());
+    }
+
+    // ===== POINTER OPERATIONS TESTS =====
+
+    #[test]
+    fn test_address_of_operator_parsing() {
+        // Test that address-of operator parses correctly
+        let source = "&x";
+        let result = ZigParser::parse(Rule::unary, source);
+        assert!(result.is_ok(), "Failed to parse address-of operator");
+    }
+
+    #[test]
+    fn test_pointer_dereference_parsing() {
+        // Test that pointer dereference parses correctly
+        let source = "ptr.*";
+        let result = ZigParser::parse(Rule::postfix, source);
+        assert!(result.is_ok(), "Failed to parse pointer dereference");
+    }
+
+    #[test]
+    fn test_pointer_type_parsing() {
+        // Test that pointer type parses correctly
+        let source = "*i32";
+        let result = ZigParser::parse(Rule::pointer_type, source);
+        assert!(result.is_ok(), "Failed to parse pointer type");
+    }
+
+    #[test]
+    fn test_address_of_builds_reference() {
+        let mut builder = ZigBuilder::new();
+
+        // Function that takes address of parameter
+        let source = r#"
+            fn get_ptr() i32 {
+                var x = 42;
+                const ptr = &x;
+                return x;
+            }
+        "#;
+
+        let pairs = ZigParser::parse(Rule::program, source).unwrap();
+        let program = builder.build_program(pairs).unwrap();
+
+        // Should have one function declaration
+        assert_eq!(program.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_pointer_deref_builds_dereference() {
+        let mut builder = ZigBuilder::new();
+
+        // Function that dereferences a pointer
+        let source = r#"
+            fn deref_test() i32 {
+                var x = 42;
+                const ptr = &x;
+                return ptr.*;
+            }
+        "#;
+
+        let pairs = ZigParser::parse(Rule::program, source).unwrap();
+        let program = builder.build_program(pairs).unwrap();
+
+        // Should have one function declaration
+        assert_eq!(program.declarations.len(), 1);
+    }
+
+    #[test]
+    fn test_pointer_assign_through_deref() {
+        let mut builder = ZigBuilder::new();
+
+        // Function that assigns through pointer
+        let source = r#"
+            fn assign_test() i32 {
+                var x = 10;
+                const ptr = &x;
+                x = 50;
+                return ptr.*;
+            }
+        "#;
+
+        let pairs = ZigParser::parse(Rule::program, source).unwrap();
+        let program = builder.build_program(pairs).unwrap();
+
+        // Should have one function declaration
+        assert_eq!(program.declarations.len(), 1);
     }
 }
