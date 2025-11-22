@@ -896,6 +896,8 @@ impl TypeChecker {
             TypedLiteral::String(_) => Type::Primitive(PrimitiveType::String),
             TypedLiteral::Char(_) => Type::Primitive(PrimitiveType::Char),
             TypedLiteral::Unit => Type::Primitive(PrimitiveType::Unit),
+            TypedLiteral::Null => Type::Optional(Box::new(Type::Unknown)),
+            TypedLiteral::Undefined => Type::Unknown,
         }
     }
 

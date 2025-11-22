@@ -1,9 +1,14 @@
 # Zyntax Compiler - Development Backlog
 
 **Last Updated**: November 22, 2025
-**Current Status**: Production-Ready Core (95.2% tests passing, 40/42 Zig tests)
+**Current Status**: Production-Ready Core (93.8% tests passing, 60/64 Zig tests)
 
 **Recent Progress**:
+
+- ✅ **Compound assignment operators** (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`)
+- ✅ **Null/undefined literals** (parsing support for optional type values)
+- ✅ **Union declarations** (grammar: `union { }` and `union(enum) { }`)
+- ✅ **Error set declarations** (grammar: `error { NotFound, ... }`)
 - ✅ **Lambda/closure expressions** (full closure support with captured variables)
 - ✅ **Indirect function calls** (call_indirect via function pointers)
 - ✅ **Bitwise operators** (`&`, `|`, `^`, `<<`, `>>`, `~`)
@@ -16,7 +21,7 @@
 - ✅ **Pattern matching infrastructure complete** (Some/Ok/Err working)
 - ✅ All loop tests passing (for, while, continue, break)
 - ✅ Lambda tests passing (basic lambda, capture, calls in loops)
-- ✅ 40/42 Zig E2E JIT tests passing (95.2%)
+- ✅ 60/64 Zig E2E JIT tests passing (93.8%)
 
 ---
 
@@ -67,11 +72,15 @@
 - [x] **Orelse/catch operators** (error handling) ✅
 - [x] **Enum declarations** (grammar support) ✅
 - [x] **Array index assignment** (arr[i] = value syntax) ✅
+- [x] **Compound assignment operators** (`+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`) ✅
+- [x] **Null/undefined literals** (parsing support) ✅
+- [x] **Union declarations** (grammar: `union { }` and `union(enum) { }`) ✅
+- [x] **Error set declarations** (grammar: `error { NotFound, ... }`) ✅
 - [ ] Pattern matching - None literal (arena symbol resolution issue)
 - [ ] String operations (needs stdlib integration via plugin system)
 - [~] **Generic functions** (parsing complete, monomorphization pending)
 - [ ] Generic call site type inference
-- [x] 40/42 E2E JIT tests passing (95.2%) ✅
+- [x] 60/64 E2E JIT tests passing (93.8%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:

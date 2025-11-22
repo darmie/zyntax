@@ -1168,6 +1168,14 @@ impl LoweringContext {
                     // Unit type maps to null pointer type
                     Ok(HirConstant::Null(expected_ty.clone()))
                 }
+                TypedLiteral::Null => {
+                    // Null literal for optional types
+                    Ok(HirConstant::Null(expected_ty.clone()))
+                }
+                TypedLiteral::Undefined => {
+                    // Undefined - use zeroed memory as placeholder
+                    Ok(HirConstant::I32(0))
+                }
             }
 
             // Array literals

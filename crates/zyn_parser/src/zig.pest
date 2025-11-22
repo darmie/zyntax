@@ -20,6 +20,8 @@ declaration = {
   | fn_decl
   | struct_decl
   | enum_decl
+  | union_decl
+  | error_set_decl
 }
 
 // ===== Declarations =====
@@ -55,6 +57,23 @@ enum_decl = {
 
 // Enum variant: red, green = 1, blue
 enum_variant = { identifier ~ ("=" ~ expr)? }
+
+// Union declaration: const Result = union { ok: i32, err: void };
+// Tagged union: const Result = union(enum) { ok: i32, err: void };
+union_decl = {
+    "const" ~ identifier ~ "=" ~ "union" ~ ("(" ~ "enum" ~ ")")? ~ "{" ~
+    union_field ~ ("," ~ union_field)* ~ ","? ~
+    "}" ~ ";"
+}
+
+union_field = { identifier ~ ":" ~ type_expr }
+
+// Error set declaration: const FileError = error { NotFound, AccessDenied };
+error_set_decl = {
+    "const" ~ identifier ~ "=" ~ "error" ~ "{" ~
+    identifier ~ ("," ~ identifier)* ~ ","? ~
+    "}" ~ ";"
+}
 
 // ===== Type Expressions =====
 
@@ -104,8 +123,10 @@ defer_stmt = { "defer" ~ (block | expr_stmt) }
 errdefer_stmt = { "errdefer" ~ (block | expr_stmt) }
 
 // Assignment supports: identifier, array index (arr[i]), field access (obj.field)
-assignment = { assign_target ~ "=" ~ expr ~ ";" }
+// Also supports compound assignment: +=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=
+assignment = { assign_target ~ assign_op ~ expr ~ ";" }
 assign_target = { identifier ~ ("[" ~ expr ~ "]")* }
+assign_op = { "<<=" | ">>=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "=" }
 return_stmt = { "return" ~ expr? ~ ";" }
 expr_stmt = { expr ~ ";" }
 
@@ -183,7 +204,8 @@ postfix = {
 }
 
 postfix_op = {
-    "." ~ identifier          // Field access
+    ".*"                      // Pointer dereference
+  | "." ~ identifier          // Field access
   | "[" ~ expr ~ "]"          // Array indexing
   | "(" ~ args? ~ ")"         // Function call
 }
@@ -236,11 +258,16 @@ switch_else = { "else" }
 
 literal = {
     bool_literal
+  | null_literal
+  | undefined_literal
   | integer_literal
   | float_literal
   | string_literal
   | array_literal
 }
+
+null_literal      = { "null" }
+undefined_literal = { "undefined" }
 
 bool_literal    = { "true" | "false" }
 integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
@@ -307,8 +334,8 @@ shift_op   = { "<<" | ">>" }
 add_op     = { "+" | "-" }
 mul_op     = { "*" | "/" | "%" }
 
-// Unary operators
-unary_op   = { "-" | "!" | "~" }
+// Unary operators (including address-of &)
+unary_op   = { "-" | "!" | "~" | "&" }
 
 // ===== Whitespace and Comments =====
 

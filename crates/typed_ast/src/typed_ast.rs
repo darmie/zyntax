@@ -205,6 +205,10 @@ pub enum TypedLiteral {
     String(InternedString),
     Char(char),
     Unit,
+    /// Null literal for optional types (null in ?T)
+    Null,
+    /// Undefined literal for uninitialized memory
+    Undefined,
 }
 
 /// Binary operation

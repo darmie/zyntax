@@ -708,11 +708,17 @@ impl ZigBuilder {
     fn build_assignment(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedStatement>> {
         let mut inner = pair.into_inner();
 
-        // assign_target = expr ;
+        // assignment = assign_target ~ assign_op ~ expr ~ ";"
         // assign_target = identifier ~ ("[" ~ expr ~ "]")*
         let target_pair = inner.next().ok_or_else(|| {
             BuildError::Internal("Missing assignment target".to_string())
         })?;
+
+        // Get the assignment operator (=, +=, -=, etc.)
+        let op_pair = inner.next().ok_or_else(|| {
+            BuildError::Internal("Missing assignment operator".to_string())
+        })?;
+        let op_str = op_pair.as_str();
 
         let value_pair = inner.next().ok_or_else(|| {
             BuildError::Internal("Missing value in assignment".to_string())
@@ -762,10 +768,27 @@ impl ZigBuilder {
             current_type = elem_type;
         }
 
+        // Handle compound assignment operators (+=, -=, etc.)
+        // For compound assignments like x += 5, transform to x = x + 5
+        let final_value = match op_str {
+            "=" => value,
+            "+=" => self.builder.binary(zyntax_typed_ast::BinaryOp::Add, target.clone(), value, current_type.clone(), span),
+            "-=" => self.builder.binary(zyntax_typed_ast::BinaryOp::Sub, target.clone(), value, current_type.clone(), span),
+            "*=" => self.builder.binary(zyntax_typed_ast::BinaryOp::Mul, target.clone(), value, current_type.clone(), span),
+            "/=" => self.builder.binary(zyntax_typed_ast::BinaryOp::Div, target.clone(), value, current_type.clone(), span),
+            "%=" => self.builder.binary(zyntax_typed_ast::BinaryOp::Rem, target.clone(), value, current_type.clone(), span),
+            "&=" => self.builder.binary(zyntax_typed_ast::BinaryOp::BitAnd, target.clone(), value, current_type.clone(), span),
+            "|=" => self.builder.binary(zyntax_typed_ast::BinaryOp::BitOr, target.clone(), value, current_type.clone(), span),
+            "^=" => self.builder.binary(zyntax_typed_ast::BinaryOp::BitXor, target.clone(), value, current_type.clone(), span),
+            "<<=" => self.builder.binary(zyntax_typed_ast::BinaryOp::Shl, target.clone(), value, current_type.clone(), span),
+            ">>=" => self.builder.binary(zyntax_typed_ast::BinaryOp::Shr, target.clone(), value, current_type.clone(), span),
+            _ => return Err(BuildError::Internal(format!("Unknown assignment operator: {}", op_str))),
+        };
+
         let assign_expr = self.builder.binary(
             zyntax_typed_ast::BinaryOp::Assign,
             target,
-            value,
+            final_value,
             current_type,
             span,
         );
@@ -1790,6 +1813,8 @@ impl ZigBuilder {
 
         match inner.as_rule() {
             Rule::bool_literal => self.build_bool_literal(inner, span),
+            Rule::null_literal => self.build_null_literal(span),
+            Rule::undefined_literal => self.build_undefined_literal(span),
             Rule::integer_literal => self.build_integer_literal(inner, span),
             Rule::float_literal => self.build_float_literal(inner, span),
             Rule::string_literal => self.build_string_literal(inner, span),
@@ -1804,6 +1829,26 @@ impl ZigBuilder {
     fn build_bool_literal(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedExpression>> {
         let value = pair.as_str() == "true";
         Ok(self.builder.bool_literal(value, span))
+    }
+
+    fn build_null_literal(&mut self, span: Span) -> BuildResult<TypedNode<TypedExpression>> {
+        // null is used for optional types (?T) - represents None/null
+        // For now, represent as a special constant with Optional type
+        Ok(TypedNode {
+            node: TypedExpression::Literal(zyntax_typed_ast::typed_ast::TypedLiteral::Null),
+            ty: Type::Optional(Box::new(Type::Unknown)),
+            span,
+        })
+    }
+
+    fn build_undefined_literal(&mut self, span: Span) -> BuildResult<TypedNode<TypedExpression>> {
+        // undefined is used for uninitialized memory
+        // Represent as a special value - the compiler should handle it specially
+        Ok(TypedNode {
+            node: TypedExpression::Literal(zyntax_typed_ast::typed_ast::TypedLiteral::Undefined),
+            ty: Type::Unknown,
+            span,
+        })
     }
 
     fn build_integer_literal(&mut self, pair: Pair<Rule>, span: Span) -> BuildResult<TypedNode<TypedExpression>> {

@@ -3,8 +3,8 @@
 > A high-performance, multi-paradigm compiler infrastructure with advanced type system features, tiered JIT compilation, and async/await runtime support.
 
 [![Status: Under Construction](https://img.shields.io/badge/status-under%20construction-yellow)](./BACKLOG.md)
-[![Tests](https://img.shields.io/badge/tests-40%2F42%20Zig%20tests-brightgreen)](./crates/zyn_parser/tests)
-[![Test Coverage](https://img.shields.io/badge/coverage-95.2%25-brightgreen)](./crates/zyn_parser/tests)
+[![Tests](https://img.shields.io/badge/tests-60%2F64%20Zig%20tests-brightgreen)](./crates/zyn_parser/tests)
+[![Test Coverage](https://img.shields.io/badge/coverage-93.8%25-brightgreen)](./crates/zyn_parser/tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -137,7 +137,7 @@ Zig provides an excellent foundation for testing Zyntax's compiler infrastructur
 - Manual memory management (perfect for testing ownership analysis)
 - Comptime evaluation features
 
-### Current Support (40/42 E2E Tests Passing)
+### Current Support (43/47 E2E Tests Passing)
 
 #### ✅ Fully Working Features
 
@@ -258,7 +258,7 @@ cargo test --package zyn_parser
 # Run E2E JIT compilation tests
 cargo test --package zyn_parser --test zig_e2e_jit
 
-# Current status: 40/42 tests passing (95.2%)
+# Current status: 43/47 tests passing (91.5%)
 ```
 
 ### Roadmap
@@ -313,7 +313,7 @@ Compile Zig-syntax code directly with the integrated Zyn parser:
 zyntax compile program.zyn --format zyn -o myprogram --run
 ```
 
-**Status:** ✅ **Production-ready** - 40/42 E2E tests passing, core language features complete
+**Status:** ✅ **Production-ready** - 43/47 E2E tests passing, core language features complete
 
 ### ✅ Haxe Integration (via Reflaxe)
 
