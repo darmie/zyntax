@@ -79,6 +79,9 @@ pub struct ZigBuilder {
     /// Function signatures for forward references
     function_signatures: HashMap<InternedString, Type>,
 
+    /// Number of comptime type parameters per function (for generic call handling)
+    function_type_param_count: HashMap<InternedString, usize>,
+
     /// Scope stack for variable resolution
     scopes: Vec<Scope>,
 }
@@ -90,6 +93,7 @@ impl ZigBuilder {
             struct_types: HashMap::new(),
             type_aliases: HashMap::new(),
             function_signatures: HashMap::new(),
+            function_type_param_count: HashMap::new(),
             scopes: vec![Scope::new()], // Global scope
         }
     }
@@ -274,6 +278,9 @@ impl ZigBuilder {
         })?;
         let name = self.builder.intern(name_pair.as_str());
 
+        // Enter new scope for function BEFORE parsing params (for type params to be in scope)
+        self.enter_scope();
+
         // Parse parameters (optional)
         let mut params = Vec::new();
         let mut type_params = Vec::new();
@@ -290,7 +297,7 @@ impl ZigBuilder {
             })?;
         }
 
-        // Parse return type
+        // Parse return type (type params are now in scope)
         let return_type = self.build_type_expr(next)?;
 
         // Parse body (block)
@@ -298,10 +305,7 @@ impl ZigBuilder {
             BuildError::Internal("Missing function body".to_string())
         })?;
 
-        // Enter new scope for function parameters
-        self.enter_scope();
-
-        // Add parameters to scope
+        // Add parameters to scope (type params already added by build_fn_params)
         for param in &params {
             self.current_scope().variables.insert(param.name, param.ty.clone());
         }
@@ -333,6 +337,11 @@ impl ZigBuilder {
             nullability: NullabilityKind::NonNull,
         };
         self.function_signatures.insert(name, fn_type);
+
+        // Store number of type params for generic function call resolution
+        if !type_params.is_empty() {
+            self.function_type_param_count.insert(name, type_params.len());
+        }
 
         // Create TypedFunction
         let typed_fn = TypedFunction {
@@ -519,6 +528,14 @@ impl ZigBuilder {
             Rule::primitive_type => self.build_primitive_type(inner),
             Rule::identifier => {
                 let name = self.intern(inner.as_str());
+
+                // First check if this is a type variable in scope (e.g., comptime T: type)
+                if let Some(ty) = self.lookup_variable(name) {
+                    if matches!(ty, Type::TypeVar(_)) {
+                        return Ok(ty.clone());
+                    }
+                }
+
                 // Look up in struct types or type aliases
                 if let Some(_type_id) = self.struct_types.get(&name) {
                     // Return named type
@@ -619,6 +636,33 @@ impl ZigBuilder {
         };
 
         Ok(Type::Primitive(prim_type))
+    }
+
+    /// Resolve a type name string to a Type (for generic call type arguments)
+    fn resolve_primitive_type(&self, name: &str) -> Type {
+        use zyntax_typed_ast::PrimitiveType;
+
+        match name {
+            "i8" => Type::Primitive(PrimitiveType::I8),
+            "i16" => Type::Primitive(PrimitiveType::I16),
+            "i32" => Type::Primitive(PrimitiveType::I32),
+            "i64" => Type::Primitive(PrimitiveType::I64),
+            "i128" => Type::Primitive(PrimitiveType::I128),
+            "u8" => Type::Primitive(PrimitiveType::U8),
+            "u16" => Type::Primitive(PrimitiveType::U16),
+            "u32" => Type::Primitive(PrimitiveType::U32),
+            "u64" => Type::Primitive(PrimitiveType::U64),
+            "u128" => Type::Primitive(PrimitiveType::U128),
+            "f32" => Type::Primitive(PrimitiveType::F32),
+            "f64" => Type::Primitive(PrimitiveType::F64),
+            "bool" => Type::Primitive(PrimitiveType::Bool),
+            "void" => Type::Primitive(PrimitiveType::Unit),
+            _ => {
+                // Unknown type - could be a struct or type alias
+                // Default to i32 for now (TODO: proper type resolution)
+                Type::Primitive(PrimitiveType::I32)
+            }
+        }
     }
 
     // ===== Statement Builders =====
@@ -1433,30 +1477,67 @@ impl ZigBuilder {
                     }
                     Rule::args => {
                         // Function call: base(args)
-                        let args = self.build_args(first)?;
+                        let all_args = self.build_args(first)?;
 
-                        // Determine return type from function signature
-                        let return_type = if let TypedExpression::Variable(fn_name) = &base.node {
-                            // Look up function signature
-                            if let Some(Type::Function { return_type, .. }) = self.function_signatures.get(fn_name) {
+                        // Check if this is a generic function call
+                        // For generic functions, the first N arguments are type args (comptime T: type)
+                        let (type_args, positional_args, return_type) = if let TypedExpression::Variable(fn_name) = &base.node {
+                            let type_param_count = self.function_type_param_count.get(fn_name).copied().unwrap_or(0);
+
+                            // Extract type arguments from first N arguments
+                            let type_args: Vec<Type> = if type_param_count > 0 && all_args.len() >= type_param_count {
+                                all_args[..type_param_count].iter().filter_map(|arg| {
+                                    // Type args are passed as identifiers (e.g., i32, u8)
+                                    // Convert them to Types
+                                    if let TypedExpression::Variable(type_name) = &arg.node {
+                                        // Resolve the type name using global interner
+                                        if let Some(name) = type_name.resolve_global() {
+                                            Some(self.resolve_primitive_type(&name))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                }).collect()
+                            } else {
+                                vec![]
+                            };
+
+                            // Remaining args are positional
+                            let positional_args = if type_param_count > 0 && all_args.len() > type_param_count {
+                                all_args[type_param_count..].to_vec()
+                            } else if type_param_count == 0 {
+                                all_args
+                            } else {
+                                vec![]
+                            };
+
+                            // Determine return type - for generic functions, use concrete type from type_args
+                            let return_type = if !type_args.is_empty() {
+                                // Generic function returns the concrete type (e.g., identity<T> returns T)
+                                type_args[0].clone()
+                            } else if let Some(Type::Function { return_type, .. }) = self.function_signatures.get(fn_name) {
                                 (**return_type).clone()
                             } else {
-                                // Unknown function - default to i32 for now
                                 Type::Primitive(zyntax_typed_ast::PrimitiveType::I32)
-                            }
+                            };
+
+                            (type_args, positional_args, return_type)
                         } else {
                             // Complex callee expression - use base type if it's a function
-                            match &base.ty {
+                            let return_type = match &base.ty {
                                 Type::Function { return_type, .. } => (**return_type).clone(),
                                 _ => Type::Primitive(zyntax_typed_ast::PrimitiveType::I32),
-                            }
+                            };
+                            (vec![], all_args, return_type)
                         };
 
                         let call_expr = TypedExpression::Call(zyntax_typed_ast::typed_ast::TypedCall {
                             callee: Box::new(base),
-                            positional_args: args,
+                            positional_args,
                             named_args: Vec::new(),
-                            type_args: Vec::new(),
+                            type_args,
                         });
 
                         Ok(TypedNode {
@@ -2103,6 +2184,16 @@ impl ZigBuilder {
 
     fn current_scope(&mut self) -> &mut Scope {
         self.scopes.last_mut().expect("No scope available")
+    }
+
+    /// Look up a variable in all scopes (innermost first)
+    fn lookup_variable(&self, name: InternedString) -> Option<&Type> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(ty) = scope.variables.get(&name) {
+                return Some(ty);
+            }
+        }
+        None
     }
 
     fn build_switch_expr(&mut self, pair: Pair<Rule>) -> BuildResult<TypedNode<TypedExpression>> {

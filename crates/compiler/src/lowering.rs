@@ -711,22 +711,22 @@ impl LoweringContext {
         
         let returns = vec![self.convert_type(&func.return_type)];
         
+        // Convert type params from TypedFunction to HirTypeParam
+        let hir_type_params: Vec<crate::hir::HirTypeParam> = func.type_params.iter().map(|tp| {
+            crate::hir::HirTypeParam {
+                name: tp.name,
+                constraints: vec![], // TODO: Convert bounds to constraints
+            }
+        }).collect();
+
         Ok(HirFunctionSignature {
             params,
             returns,
-            // NOTE: TypedAST architectural limitation - generic/const/lifetime parameters not present.
-            // TypedFunction in zyntax_typed_ast doesn't include these fields - they exist only on TypedStruct/TypedEnum.
-            // This is a fundamental TypedAST design decision: type parameters are resolved during type checking,
-            // not preserved in the typed representation.
-            //
-            // WORKAROUND: Empty vecs (works because monomorphization happens at HIR level)
-            // FUTURE (v2.0): Extend TypedAST to preserve generic parameters OR extract from TypeRegistry
-            // Estimated effort: 15-20 hours (requires TypedAST changes across entire frontend)
-            type_params: vec![],
+            type_params: hir_type_params,
             const_params: vec![],
             lifetime_params: vec![],
             is_variadic: false,
-            is_async: func.is_async, // Track async from TypedFunction
+            is_async: func.is_async,
         })
     }
     

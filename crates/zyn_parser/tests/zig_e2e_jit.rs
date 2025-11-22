@@ -585,7 +585,6 @@ fn test_zig_jit_switch_expression() {
 }
 
 #[test]
-#[ignore] // Generic functions parse correctly, but monomorphization not yet connected
 fn test_zig_jit_generic_function() {
     // Test that generic function syntax parses correctly
     // Note: Full monomorphization support requires connecting the existing monomorphize.rs
@@ -1638,6 +1637,12 @@ fn lower_zig_program_to_hir(
     // Skip type checking for now
     std::env::set_var("SKIP_TYPE_CHECK", "1");
 
-    lowering_ctx.lower_program(&program)
-        .expect("Failed to lower TypedProgram to HIR")
+    let mut hir_module = lowering_ctx.lower_program(&program)
+        .expect("Failed to lower TypedProgram to HIR");
+
+    // Run monomorphization pass for generic functions
+    zyntax_compiler::monomorphize_module(&mut hir_module)
+        .expect("Failed to monomorphize module");
+
+    hir_module
 }

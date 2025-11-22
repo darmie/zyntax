@@ -103,15 +103,17 @@ impl MonomorphizationContext {
         let new_name = self.generate_instance_name(&func.name, type_args, const_args);
         let new_sig = self.substitute_signature(&func.signature, &type_subst, &const_subst)?;
         let mut new_func = HirFunction::new(new_name, new_sig);
-        
+
         // Copy and substitute function body
         new_func.locals = func.locals.clone();
         new_func.values = func.values.clone();
         new_func.blocks = func.blocks.clone();
-        
+        // Important: copy the original entry_block ID since we're copying all blocks
+        new_func.entry_block = func.entry_block;
+
         // Substitute types in the function body
         self.substitute_function_body(&mut new_func, &type_subst, &const_subst)?;
-        
+
         Ok(new_func)
     }
     
