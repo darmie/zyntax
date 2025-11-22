@@ -275,11 +275,11 @@ fn test_zig_jit_continue() {
     let program = builder.build_program(pairs)
         .expect("Failed to build TypedAST");
 
-    // Lower to HIR
-    let hir_module = lower_zig_program_to_hir(program, &builder);
-
-    // Find the function
+    // Intern function name BEFORE lowering (lowering takes the arena)
     let func_name_interned = builder.intern("sum_odd_numbers");
+
+    // Lower to HIR
+    let hir_module = lower_zig_program_to_hir(program, &mut builder);
     let func = hir_module.functions.values()
         .find(|f| f.name == func_name_interned)
         .expect("Function 'sum_odd_numbers' not found");
@@ -754,7 +754,6 @@ fn test_zig_jit_catch_operator() {
 }
 
 #[test]
-#[ignore] // TODO: Multiple try expressions in same function causes Ok() argument issue
 fn test_zig_jit_chained_try() {
     // Test two try expressions in sequence
     let source = r#"
@@ -1580,15 +1579,17 @@ fn compile_and_execute_zig(source: &str, func_name: &str, args: Vec<i32>) -> i32
     let program = builder.build_program(pairs)
         .expect("Failed to build TypedAST");
 
+    // Intern function name BEFORE lowering (lowering takes the arena)
+    let func_name_interned = builder.intern(func_name);
+
     // Lower to HIR using official API
-    let hir_module = lower_zig_program_to_hir(program, &builder);
+    let hir_module = lower_zig_program_to_hir(program, &mut builder);
 
     // Compile with Cranelift
     let mut backend = CraneliftBackend::new().expect("Failed to create backend");
     backend.compile_module(&hir_module).expect("Failed to compile module");
 
     // Find the function and execute it
-    let func_name_interned = builder.intern(func_name);
     let func_id = hir_module.functions.values()
         .find(|f| f.name == func_name_interned)
         .map(|f| f.id)
@@ -1622,9 +1623,11 @@ fn compile_and_execute_zig(source: &str, func_name: &str, args: Vec<i32>) -> i32
 /// Lower TypedProgram to HIR using the official lowering API
 fn lower_zig_program_to_hir(
     program: TypedProgram,
-    builder: &ZigBuilder,
+    builder: &mut ZigBuilder,
 ) -> zyntax_compiler::hir::HirModule {
-    let mut arena = AstArena::new();
+    // CRITICAL: Use the builder's arena to share string interning
+    // This ensures InternedString symbols match between parsing and lowering
+    let mut arena = builder.take_arena();
     let module_name = arena.intern_string("zig_module");
 
     let mut lowering_ctx = LoweringContext::new(

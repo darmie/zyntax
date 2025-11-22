@@ -542,7 +542,9 @@ impl CraneliftBackend {
 
                 // Map phi node results to block parameters
                 let block_params = builder.block_params(cranelift_block).to_vec();
+                eprintln!("[Cranelift] Block {:?} has {} phis and {} block_params", hir_block_id, hir_block.phis.len(), block_params.len());
                 for (i, phi) in hir_block.phis.iter().enumerate() {
+                    eprintln!("[Cranelift]   phi[{}]: result={:?}, block_params[{}]={:?}", i, phi.result, i, block_params.get(i));
                     if let Some(&param_val) = block_params.get(i) {
                         self.value_map.insert(phi.result, param_val);
                     }

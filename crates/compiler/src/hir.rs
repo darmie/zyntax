@@ -492,6 +492,163 @@ pub enum HirTerminator {
     },
 }
 
+impl HirInstruction {
+    /// Replace uses of old values with new values according to the replacement map
+    pub fn replace_uses(&mut self, replacements: &std::collections::HashMap<HirId, HirId>) {
+        fn replace(id: &mut HirId, map: &std::collections::HashMap<HirId, HirId>) {
+            if let Some(&new_id) = map.get(id) {
+                *id = new_id;
+            }
+        }
+
+        match self {
+            HirInstruction::Binary { left, right, .. } => {
+                replace(left, replacements);
+                replace(right, replacements);
+            }
+            HirInstruction::Unary { operand, .. } => {
+                replace(operand, replacements);
+            }
+            HirInstruction::Alloca { count, .. } => {
+                if let Some(c) = count {
+                    replace(c, replacements);
+                }
+            }
+            HirInstruction::Load { ptr, .. } => {
+                replace(ptr, replacements);
+            }
+            HirInstruction::Store { value, ptr, .. } => {
+                replace(value, replacements);
+                replace(ptr, replacements);
+            }
+            HirInstruction::GetElementPtr { ptr, indices, .. } => {
+                replace(ptr, replacements);
+                for idx in indices {
+                    replace(idx, replacements);
+                }
+            }
+            HirInstruction::Call { args, .. } => {
+                for arg in args {
+                    replace(arg, replacements);
+                }
+            }
+            HirInstruction::IndirectCall { func_ptr, args, .. } => {
+                replace(func_ptr, replacements);
+                for arg in args {
+                    replace(arg, replacements);
+                }
+            }
+            HirInstruction::Cast { operand, .. } => {
+                replace(operand, replacements);
+            }
+            HirInstruction::Select { condition, true_val, false_val, .. } => {
+                replace(condition, replacements);
+                replace(true_val, replacements);
+                replace(false_val, replacements);
+            }
+            HirInstruction::ExtractValue { aggregate, .. } => {
+                replace(aggregate, replacements);
+            }
+            HirInstruction::InsertValue { aggregate, value, .. } => {
+                replace(aggregate, replacements);
+                replace(value, replacements);
+            }
+            HirInstruction::Atomic { ptr, value, .. } => {
+                replace(ptr, replacements);
+                if let Some(v) = value {
+                    replace(v, replacements);
+                }
+            }
+            HirInstruction::Fence { .. } => {}
+            HirInstruction::CreateUnion { value, .. } => {
+                replace(value, replacements);
+            }
+            HirInstruction::GetUnionDiscriminant { union_val, .. } => {
+                replace(union_val, replacements);
+            }
+            HirInstruction::ExtractUnionValue { union_val, .. } => {
+                replace(union_val, replacements);
+            }
+            HirInstruction::CreateTraitObject { data_ptr, vtable_id, .. } => {
+                replace(data_ptr, replacements);
+                replace(vtable_id, replacements);
+            }
+            HirInstruction::UpcastTraitObject { sub_trait_object, super_vtable_id, .. } => {
+                replace(sub_trait_object, replacements);
+                replace(super_vtable_id, replacements);
+            }
+            HirInstruction::TraitMethodCall { trait_object, args, .. } => {
+                replace(trait_object, replacements);
+                for arg in args {
+                    replace(arg, replacements);
+                }
+            }
+            HirInstruction::CreateClosure { function, captures, .. } => {
+                replace(function, replacements);
+                for cap in captures {
+                    replace(cap, replacements);
+                }
+            }
+            HirInstruction::CallClosure { closure, args, .. } => {
+                replace(closure, replacements);
+                for arg in args {
+                    replace(arg, replacements);
+                }
+            }
+            HirInstruction::CreateRef { value, .. } => {
+                replace(value, replacements);
+            }
+            HirInstruction::Deref { reference, .. } => {
+                replace(reference, replacements);
+            }
+            HirInstruction::Move { source, .. } => {
+                replace(source, replacements);
+            }
+            HirInstruction::Copy { source, .. } => {
+                replace(source, replacements);
+            }
+            HirInstruction::BeginLifetime { .. } |
+            HirInstruction::EndLifetime { .. } |
+            HirInstruction::LifetimeConstraint { .. } => {}
+        }
+    }
+}
+
+impl HirTerminator {
+    /// Replace uses of old values with new values according to the replacement map
+    pub fn replace_uses(&mut self, replacements: &std::collections::HashMap<HirId, HirId>) {
+        fn replace(id: &mut HirId, map: &std::collections::HashMap<HirId, HirId>) {
+            if let Some(&new_id) = map.get(id) {
+                *id = new_id;
+            }
+        }
+
+        match self {
+            HirTerminator::Return { values } => {
+                for v in values {
+                    replace(v, replacements);
+                }
+            }
+            HirTerminator::Branch { .. } => {}
+            HirTerminator::CondBranch { condition, .. } => {
+                replace(condition, replacements);
+            }
+            HirTerminator::Switch { value, .. } => {
+                replace(value, replacements);
+            }
+            HirTerminator::Unreachable => {}
+            HirTerminator::Invoke { args, .. } => {
+                for arg in args {
+                    replace(arg, replacements);
+                }
+            }
+            HirTerminator::PatternMatch { value, .. } => {
+                replace(value, replacements);
+            }
+        }
+    }
+}
+
 /// HIR value in SSA form
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HirValue {

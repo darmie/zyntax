@@ -428,10 +428,12 @@ impl SsaBuilder {
         for node_idx in cfg.graph.node_indices() {
             let typed_block = &cfg.graph[node_idx];
             if typed_block.id == entry_block {
+                // Track current block - try expressions may create continuation blocks
+                let mut current_block = entry_block;
                 for stmt in &typed_block.statements {
-                    self.process_statement(entry_block, stmt)?;
+                    current_block = self.process_statement(current_block, stmt)?;
                 }
-                self.process_typed_terminator(entry_block, &typed_block.terminator, &typed_block.pattern_check)?;
+                self.process_typed_terminator(current_block, &typed_block.terminator, &typed_block.pattern_check)?;
                 break;
             }
         }
@@ -477,12 +479,14 @@ impl SsaBuilder {
                 }
 
                 // Process each TypedStatement in this block
+                // Track current block - try expressions may create continuation blocks
+                let mut current_block = block_id;
                 for stmt in &typed_block.statements {
-                    self.process_statement(block_id, stmt).unwrap();
+                    current_block = self.process_statement(current_block, stmt).unwrap();
                 }
 
                 // Process the terminator
-                self.process_typed_terminator(block_id, &typed_block.terminator, &typed_block.pattern_check).unwrap();
+                self.process_typed_terminator(current_block, &typed_block.terminator, &typed_block.pattern_check).unwrap();
 
                 // Mark block as filled
                 self.filled_blocks.insert(block_id);
@@ -514,10 +518,12 @@ impl SsaBuilder {
                         }
                     }
 
+                    // Track current block - try expressions may create continuation blocks
+                    let mut current_block = block_id;
                     for stmt in &typed_block.statements {
-                        self.process_statement(block_id, stmt)?;
+                        current_block = self.process_statement(current_block, stmt)?;
                     }
-                    self.process_typed_terminator(block_id, &typed_block.terminator, &typed_block.pattern_check)?;
+                    self.process_typed_terminator(current_block, &typed_block.terminator, &typed_block.pattern_check)?;
                     self.filled_blocks.insert(block_id);
                     if !self.sealed_blocks.contains(&block_id) {
                         self.seal_block(block_id);
@@ -654,6 +660,28 @@ impl SsaBuilder {
                         HirTerminator::Branch { target: *target }
                     }
                 } else {
+                    // Check if a try expression created a continuation block
+                    // If so, the Jump should be placed on the continuation block
+                    if let Some(continuation) = self.continuation_block.take() {
+                        // Update predecessor relationship: continuation -> target
+                        {
+                            let target_block = self.function.blocks.get_mut(target).unwrap();
+                            // Replace block_id with continuation in predecessors
+                            if let Some(pos) = target_block.predecessors.iter().position(|&p| p == block_id) {
+                                target_block.predecessors[pos] = continuation;
+                            } else {
+                                target_block.predecessors.push(continuation);
+                            }
+                        }
+                        // Update successor relationship
+                        {
+                            let cont_block = self.function.blocks.get_mut(&continuation).unwrap();
+                            cont_block.successors.push(*target);
+                            cont_block.terminator = HirTerminator::Branch { target: *target };
+                        }
+                        // Return early - don't set terminator on original block
+                        return Ok(());
+                    }
                     // Regular jump, no pattern check
                     HirTerminator::Branch { target: *target }
                 }
@@ -881,6 +909,7 @@ impl SsaBuilder {
             "Ok" => {
                 // Ok(value): Result<T,E> with discriminant 0
                 if args.len() != 1 {
+                    eprintln!("[SSA] ERROR: Ok() called with {} args, result_ty={:?}", args.len(), result_ty);
                     return Err(crate::CompilerError::Analysis(
                         format!("Ok() requires exactly 1 argument, got {}", args.len())
                     ));
@@ -1015,13 +1044,17 @@ impl SsaBuilder {
             .ok_or_else(|| crate::CompilerError::Analysis("Block not found in CFG".into()))?;
         
         // Process each statement
-        for stmt in &cfg_node.statements {
-            self.process_statement(block_id, stmt)?;
+        // Track current block - may change if try expressions split the block
+        let mut current_block = block_id;
+        for (i, stmt) in cfg_node.statements.iter().enumerate() {
+            eprintln!("[SSA] process_block: stmt {} with current_block={:?}", i, current_block);
+            current_block = self.process_statement(current_block, stmt)?;
+            eprintln!("[SSA] process_block: after stmt {}, current_block={:?}", i, current_block);
         }
-        
-        // Process terminator
+
+        // Process terminator on the final current block
         if let Some(term) = &cfg_node.terminator {
-            self.process_terminator(block_id, term)?;
+            self.process_terminator(current_block, term)?;
         }
         
         self.filled_blocks.insert(block_id);
@@ -1029,21 +1062,29 @@ impl SsaBuilder {
     }
     
     /// Process a statement
+    /// Returns the current block ID (may be different if a try expression created a continuation block)
     fn process_statement(
         &mut self,
         block_id: HirId,
         stmt: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedStatement>
-    ) -> CompilerResult<()> {
+    ) -> CompilerResult<HirId> {
         use zyntax_typed_ast::typed_ast::TypedStatement;
 
         eprintln!("[SSA] process_statement: block={:?}, stmt_variant={:?}",
                  block_id, std::mem::discriminant(&stmt.node));
+
+        // NOTE: Don't clear continuation_block here - it should persist across statements
+        // and be consumed by the terminator. Only try expressions set it.
 
         match &stmt.node {
             TypedStatement::Let(let_stmt) => {
                 // Evaluate the initializer if present
                 if let Some(value) = &let_stmt.initializer {
                     let value_id = self.translate_expression(block_id, value)?;
+
+                    // Check if a try expression set a continuation block
+                    // If so, subsequent writes should go to that block
+                    let write_block = self.continuation_block.unwrap_or(block_id);
 
                     // Record variable type
                     let hir_type = self.convert_type(&let_stmt.ty);
@@ -1057,7 +1098,7 @@ impl SsaBuilder {
                             HirValueKind::Instruction
                         );
 
-                        self.add_instruction(block_id, HirInstruction::Alloca {
+                        self.add_instruction(write_block, HirInstruction::Alloca {
                             result: stack_slot,
                             ty: hir_type.clone(),
                             count: None,
@@ -1065,7 +1106,7 @@ impl SsaBuilder {
                         });
 
                         // Store initial value
-                        self.add_instruction(block_id, HirInstruction::Store {
+                        self.add_instruction(write_block, HirInstruction::Store {
                             value: value_id,
                             ptr: stack_slot,
                             align: 8,
@@ -1076,8 +1117,8 @@ impl SsaBuilder {
                         self.stack_slots.insert(let_stmt.name, stack_slot);
                         eprintln!("[SSA] Allocated stack slot {:?} for address-taken var {:?}", stack_slot, let_stmt.name);
                     } else {
-                        // Normal SSA: Create assignment
-                        self.write_variable(let_stmt.name, block_id, value_id);
+                        // Normal SSA: Create assignment in the continuation block if set
+                        self.write_variable(let_stmt.name, write_block, value_id);
                     }
                 }
             }
@@ -1141,9 +1182,15 @@ impl SsaBuilder {
             }
         }
 
-        Ok(())
+        // Return the continuation block if set (try expression), otherwise the original block
+        let result_block = self.continuation_block.unwrap_or(block_id);
+        if self.continuation_block.is_some() {
+            eprintln!("[SSA] process_statement: returning continuation_block {:?} instead of {:?}",
+                     result_block, block_id);
+        }
+        Ok(result_block)
     }
-    
+
     /// Process a terminator
     fn process_terminator(
         &mut self,
@@ -1191,10 +1238,10 @@ impl SsaBuilder {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Translate expression to SSA value
     fn translate_expression(
         &mut self,
@@ -1240,9 +1287,17 @@ impl SsaBuilder {
 
                 // Check for known enum constructors
                 match name_str.as_str() {
-                    "None" | "Some" | "Ok" | "Err" => {
+                    "None" => {
                         eprintln!("[SSA] Recognized as enum constructor: {}", name_str);
                         return self.translate_enum_constructor(block_id, &name_str, &[], &expr.ty);
+                    }
+                    "Some" | "Ok" | "Err" => {
+                        // These constructors require args - shouldn't appear as bare variables
+                        // They should be Call expressions, not Variable expressions
+                        // This likely means the Zig builder is producing the wrong AST
+                        eprintln!("[SSA] ERROR: {} found as bare variable without args, type={:?}", name_str, expr.ty);
+                        // Read as undefined variable (will likely fail later)
+                        Ok(self.read_variable(*name, block_id))
                     }
                     _ => {
                         // If not an enum constructor, reading as undefined variable
@@ -3273,13 +3328,14 @@ impl SsaBuilder {
             };
 
         // CONTINUE BLOCK: This block continues normal execution
-        // For now, leave its terminator as Unreachable - it will be set by the caller
-        // or the CFG processing based on what comes next.
-        //
-        // NOTE: We don't set continuation_block here because it interferes with
-        // loop exit handling. The try expression just branches to continue_block
-        // on success, and the original CFG flow continues from there.
-        //
+        // Set continuation_block so that subsequent statements in the same
+        // logical block are added to continue_block instead of the original block.
+        // This enables chained try expressions like:
+        //   const a = try get_a();
+        //   const b = try get_b();
+        // where the second try needs to be in continue_block from the first.
+        self.continuation_block = Some(continue_block_id);
+
         // Since ok_value was extracted in block_id (before the branch),
         // we return ok_value directly. This works because:
         // 1. If control flows to continue_block (is_ok == true), ok_value is valid
@@ -4433,43 +4489,71 @@ impl SsaForm {
     }
     
     /// Optimize trivial phis
+    ///
+    /// A trivial phi has only one unique non-self incoming value, meaning all
+    /// paths merge with the same value. We can safely replace uses of the phi
+    /// result with this single value.
     pub fn optimize_trivial_phis(&mut self) {
-        let mut changed = true;
-        
-        while changed {
-            changed = false;
-            
-            for (_, block) in &mut self.function.blocks {
-                let mut phis_to_remove = Vec::new();
-                
-                for (i, phi) in block.phis.iter().enumerate() {
-                    // Check if phi is trivial
-                    let non_self_values: HashSet<_> = phi.incoming.iter()
-                        .map(|(val, _)| val)
-                        .filter(|&&v| v != phi.result)
-                        .collect();
-                    
-                    if non_self_values.len() == 1 {
-                        // Trivial phi - can be replaced
-                        let replacement = **non_self_values.iter().next().unwrap();
-                        phis_to_remove.push((i, phi.result, replacement));
-                        changed = true;
+        // First pass: identify trivial phis and build replacement map
+        let mut replacements: HashMap<HirId, HirId> = HashMap::new();
+
+        // Collect all phi results to identify self-referential chains
+        let all_phi_results: HashSet<HirId> = self.function.blocks.values()
+            .flat_map(|b| b.phis.iter().map(|p| p.result))
+            .collect();
+
+        for (_, block) in &self.function.blocks {
+            for phi in &block.phis {
+                // Check if phi is trivial: all non-self values must be the same
+                // A phi referencing itself or other phis doesn't make it trivial
+                let non_self_values: HashSet<_> = phi.incoming.iter()
+                    .map(|(val, _)| *val)
+                    .filter(|&v| v != phi.result)
+                    .collect();
+
+                // Check if this phi has a self-reference (indicates a loop header phi)
+                let has_self_reference = phi.incoming.iter().any(|(val, _)| *val == phi.result);
+
+                // Only trivial if:
+                // 1. There's exactly one non-self value
+                // 2. That value is NOT another phi (otherwise it might be updated in a loop)
+                // 3. The phi does NOT have a self-reference (loop header phis are not trivial!)
+                if non_self_values.len() == 1 && !has_self_reference {
+                    let replacement = *non_self_values.iter().next().unwrap();
+                    // Don't remove phis that reference other phis - they might form loop-carried dependencies
+                    if !all_phi_results.contains(&replacement) {
+                        replacements.insert(phi.result, replacement);
                     }
                 }
-                
-                // Remove trivial phis
-                for (i, _, _) in phis_to_remove.iter().rev() {
-                    block.phis.remove(*i);
-                }
-
-                // NOTE: Use-replacement requires def-use chains to find all uses.
-                // Current SsaBuilder tracks uses in `uses` HashMap, but this method
-                // operates on SsaForm (which doesn't have that data).
-                //
-                // WORKAROUND: Skips use-replacement (optimization incomplete but safe)
-                // FUTURE (v2.0): Add def-use chain walking or store use info in SsaForm
-                // Estimated effort: 6-8 hours (requires use-tracking infrastructure in SsaForm)
             }
+        }
+
+        if replacements.is_empty() {
+            return;
+        }
+
+        // Second pass: replace uses in all instructions
+        for (_, block) in &mut self.function.blocks {
+            for inst in &mut block.instructions {
+                inst.replace_uses(&replacements);
+            }
+
+            // Replace uses in terminators
+            block.terminator.replace_uses(&replacements);
+
+            // Replace uses in other phi nodes' incoming values
+            for phi in &mut block.phis {
+                for (val, _) in &mut phi.incoming {
+                    if let Some(&replacement) = replacements.get(val) {
+                        *val = replacement;
+                    }
+                }
+            }
+        }
+
+        // Third pass: remove trivial phis
+        for (_, block) in &mut self.function.blocks {
+            block.phis.retain(|phi| !replacements.contains_key(&phi.result));
         }
     }
 }

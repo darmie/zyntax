@@ -108,6 +108,18 @@ impl ZigBuilder {
         self.builder.intern(s)
     }
 
+    /// Get a mutable reference to the arena for string interning
+    pub fn arena(&mut self) -> &mut zyntax_typed_ast::AstArena {
+        self.builder.arena()
+    }
+
+    /// Take ownership of the arena (consumes the arena from the builder)
+    /// This is useful when the arena needs to be passed to another component
+    /// that needs to share the same string interner.
+    pub fn take_arena(&mut self) -> zyntax_typed_ast::AstArena {
+        std::mem::take(self.builder.arena())
+    }
+
     // ===== Top-Level Building =====
 
     /// Build a complete program from pest pairs

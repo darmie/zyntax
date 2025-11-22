@@ -1,10 +1,11 @@
 # Zyntax Compiler - Development Backlog
 
 **Last Updated**: November 22, 2025
-**Current Status**: Production-Ready Core (99% tests passing, 70/71 Zig tests)
+**Current Status**: Production-Ready Core (100% tests passing, 71/71 Zig tests)
 
 **Recent Progress**:
 
+- ✅ **Try expressions in loops fixed** (SSA continuation_block handling for Jump terminators)
 - ✅ **Generic function monomorphization** (comptime type params, type_args extraction, full pipeline)
 - ✅ **Pointer JIT execution** (address-taken variables allocated on stack, full load/store support)
 - ✅ **Address-of operator** (`&expr` creates Reference expression)
@@ -25,8 +26,7 @@
 - ✅ **Pattern matching infrastructure complete** (Some/Ok/Err working)
 - ✅ All loop tests passing (for, while, continue, break)
 - ✅ Lambda tests passing (basic lambda, capture, calls in loops)
-- ✅ **Try expressions in loops** (fixed SSA value_map issue with simplified control flow)
-- ✅ 70/71 Zig E2E JIT tests passing (99%)
+- ✅ **71/71 Zig E2E JIT tests passing (100%)**
 
 ---
 
@@ -88,7 +88,7 @@
 - [x] **Address-of operator** (`&expr` creates reference) ✅
 - [x] **Pointer dereference** (`ptr.*` dereferences pointer) ✅
 - [x] **Pointer JIT execution** (SSA stack allocation for address-taken vars) ✅
-- [x] 70/71 E2E JIT tests passing (99%) ✅
+- [x] 71/71 E2E JIT tests passing (100%) ✅
 - [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
 
 **Documents**:

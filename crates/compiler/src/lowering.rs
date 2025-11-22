@@ -609,9 +609,22 @@ impl LoweringContext {
         // Verify SSA properties
         ssa.verify()?;
 
+        // Debug: print phi count before optimization
+        let total_phis_before: usize = ssa.function.blocks.values().map(|b| b.phis.len()).sum();
+        eprintln!("[Lowering] Before optimize_trivial_phis: {} total phis", total_phis_before);
+        for (block_id, block) in &ssa.function.blocks {
+            if !block.phis.is_empty() {
+                eprintln!("[Lowering]   Block {:?} has {} phis", block_id, block.phis.len());
+            }
+        }
+
         // Optimize trivial phis
         let mut ssa = ssa;
         ssa.optimize_trivial_phis();
+
+        // Debug: print phi count after optimization
+        let total_phis_after: usize = ssa.function.blocks.values().map(|b| b.phis.len()).sum();
+        eprintln!("[Lowering] After optimize_trivial_phis: {} total phis", total_phis_after);
 
         hir_func = ssa.function;
 
