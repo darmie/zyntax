@@ -79,10 +79,10 @@ if_stmt = { if_let_stmt
   | if_regular_stmt
  }
 if_let_stmt = { "if" ~ "(" ~ "let" ~ pattern ~ "=" ~ expr ~ ")" ~ block ~
-    ("else" ~ (if_stmt | block))?
+    ("else" ~ block)?
  }
 if_regular_stmt = { "if" ~ "(" ~ expr ~ ")" ~ block ~
-    ("else" ~ (if_stmt | block))?
+    ("else" ~ block)?
  }
 while_stmt = { "while" ~ "(" ~ expr ~ ")" ~ block
  }

@@ -1113,12 +1113,33 @@ fn generate_dispatch_method(rule: &RuleDef, grammar: &ZynGrammar) -> TokenStream
     // Parse the pattern to find child rules
     let child_rules = extract_child_rules(&rule.pattern);
 
-    // Filter to rules that have build methods
+    // Filter to rules that exist in grammar AND have build methods
+    // (i.e., rules with actions OR non-atomic rules without actions that get dispatch methods)
     let dispatchable: Vec<_> = child_rules.iter()
         .filter(|name| {
-            grammar.rules.iter().any(|r| &r.name == *name)
+            grammar.rules.iter().any(|r| {
+                &r.name == *name && (
+                    // Has an action - will have a build method
+                    r.action.is_some() ||
+                    // Non-atomic rule without action - will get a dispatch method
+                    (r.modifier != Some(RuleModifier::Atomic) && r.modifier != Some(RuleModifier::Silent))
+                )
+            })
         })
         .collect();
+
+    // Determine return type based on first child with an action
+    let return_type_str = dispatchable.iter()
+        .find_map(|name| {
+            grammar.rules.iter()
+                .find(|r| &r.name == *name)
+                .and_then(|r| r.action.as_ref())
+                .map(|a| a.return_type.clone())
+        })
+        .unwrap_or_else(|| "TypedExpression".to_string());
+
+    let return_type: TokenStream = return_type_str.parse()
+        .unwrap_or_else(|_| quote! { TypedExpression });
 
     if dispatchable.is_empty() {
         // No child rules to dispatch to - return a default/passthrough
@@ -1175,16 +1196,12 @@ fn generate_dispatch_method(rule: &RuleDef, grammar: &ZynGrammar) -> TokenStream
         }).collect();
 
         quote! {
-            pub fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<TypedExpression, ParseError> {
+            pub fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<#return_type, ParseError> {
                 let span = Span::from_pest(pair.as_span());
                 if let Some(inner) = pair.into_inner().next() {
                     match inner.as_rule() {
                         #(#match_arms)*
-                        _ => Ok(TypedExpression {
-                            expr: Expression::Identifier(inner.as_str().to_string()),
-                            ty: Type::Unknown,
-                            span,
-                        }),
+                        _ => Err(ParseError(format!("Unexpected rule in {}: {:?}", stringify!(#method_name), inner.as_rule()))),
                     }
                 } else {
                     Err(ParseError(format!("Empty {} rule", stringify!(#method_name))))
@@ -1299,8 +1316,9 @@ fn generate_build_method(rule: &RuleDef, _grammar: &ZynGrammar) -> Result<TokenS
 
     Ok(quote! {
         /// Build a #return_type from a parsed rule
-        fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<#return_type, ParseError> {
+        pub fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<#return_type, ParseError> {
             let span = Span::from_pest(pair.as_span());
+            let pair_str = pair.as_str();  // Capture text before consuming pair
             let mut children = pair.into_inner().peekable();
 
             #child_extraction_tokens
@@ -1384,22 +1402,28 @@ fn analyze_pattern(pattern: &str) -> Vec<PatternElement> {
     let branches = split_top_level_alternation(pattern);
     let pattern = branches.first().map(|s| s.as_str()).unwrap_or(pattern);
 
-    // Split by ~ at the top level (respecting parentheses depth)
+    // Split by ~ at the top level (respecting parentheses depth AND quoted strings)
     let mut depth = 0;
+    let mut in_string = false;
     let mut current = String::new();
     let mut parts = Vec::new();
+    let mut prev_char = ' ';
 
     for ch in pattern.chars() {
         match ch {
-            '(' => {
+            '"' if prev_char != '\\' => {
+                in_string = !in_string;
+                current.push(ch);
+            }
+            '(' if !in_string => {
                 depth += 1;
                 current.push(ch);
             }
-            ')' => {
+            ')' if !in_string => {
                 depth -= 1;
                 current.push(ch);
             }
-            '~' if depth == 0 => {
+            '~' if depth == 0 && !in_string => {
                 if !current.trim().is_empty() {
                     parts.push(current.trim().to_string());
                 }
@@ -1409,6 +1433,7 @@ fn analyze_pattern(pattern: &str) -> Vec<PatternElement> {
                 current.push(ch);
             }
         }
+        prev_char = ch;
     }
     if !current.trim().is_empty() {
         parts.push(current.trim().to_string());
@@ -1674,6 +1699,38 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
                 result = result.replace(&unwrap_pattern, &replacement);
             }
 
+            // Handle $N.map(|...|...) - general map patterns with custom closures
+            // e.g., $2.map(|s| parse_int(s)) -> build the value and apply the closure
+            let general_map_pattern = format!("{}.map(|", pattern_str);
+            while result.contains(&general_map_pattern) {
+                let start = result.find(&general_map_pattern).unwrap();
+                // Find the closing paren of the map call
+                let after_map = start + general_map_pattern.len();
+                let mut depth = 1;
+                let mut end = after_map;
+                for (i, ch) in result[after_map..].chars().enumerate() {
+                    match ch {
+                        '(' => depth += 1,
+                        ')' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                end = after_map + i + 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Extract the closure body: "|arg| body)"
+                let closure_full = &result[after_map..end];
+                // Replace $N.map(|x| ...) with build_value.map(|x| ...)
+                let replacement = format!(
+                    "{}.as_ref().and_then(|p| self.build_{}(p.clone()).ok()).map(|{}",
+                    var_name, rule_name, closure_full
+                );
+                result = format!("{}{}{}", &result[..start], replacement, &result[end..]);
+            }
+
             // Replace $N.field patterns (e.g., $7.statements) with building and field access
             let dot_pattern = format!("{}.", pattern_str);
             while let Some(start) = result.find(&dot_pattern) {
@@ -1685,6 +1742,10 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
                     .count();
                 if field_end > 0 {
                     let field_name = &result[after_dot..after_dot + field_end];
+                    // Skip if it's "map" - that's handled above
+                    if field_name == "map" {
+                        break;
+                    }
                     let full_match_len = dot_pattern.len() + field_end;
                     let replacement = format!(
                         "{}.as_ref().and_then(|p| self.build_{}(p.clone()).ok()).map(|v| v.{}).unwrap_or_default()",
@@ -1721,23 +1782,19 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
             }
         } else if let Some(None) = position_to_rule.get(i - 1) {
             // This position is a literal - it doesn't produce a child, so $N refers to the text
-            if result.contains(&format!("span({}", pattern_str)) || result.contains(&format!(", {})", pattern_str)) {
-                // For span calculations involving literals, use pair.as_span()
-                result = result.replace(&pattern_str, "pair");
-            } else if i == 1 {
-                // For $1 referring to a literal (e.g., the matched keyword), use pair.as_str()
-                result = result.replace(&pattern_str, "pair.as_str()");
+            // Note: pair_str is captured before pair.into_inner() consumes it
+            if i == 1 {
+                // For $1 referring to a literal (e.g., the matched keyword), use pair_str
+                result = result.replace(&pattern_str, "pair_str");
             } else {
-                // Other literal positions - use a placeholder
-                result = result.replace(&pattern_str, "pair.as_str() /* literal position */");
+                // Other literal positions - use pair_str
+                result = result.replace(&pattern_str, "pair_str");
             }
         } else {
             // Position not found in pattern analysis - use a placeholder
             // This happens when the pattern has more elements than we parsed
             // (e.g., complex nested patterns or alternations)
-            if result.contains(&format!("span({}", pattern_str)) || result.contains(&format!(", {})", pattern_str)) {
-                result = result.replace(&pattern_str, "pair");
-            } else if result.contains(&format!("{}.unwrap_or_default()", pattern_str)) {
+            if result.contains(&format!("{}.unwrap_or_default()", pattern_str)) {
                 result = result.replace(&format!("{}.unwrap_or_default()", pattern_str), "Default::default()");
             } else if result.contains(&format!("{}.span", pattern_str)) {
                 // $1.span -> span (the local span variable)
@@ -1745,10 +1802,10 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
             } else if i == 1 {
                 // $1 with no matching rule often means "the whole match" (the pair's text)
                 // This happens when pattern is all literals, or when $1 refers to the matched string
-                result = result.replace(&pattern_str, "pair.as_str()");
+                result = result.replace(&pattern_str, "pair_str");
             } else {
-                // Replace with a TODO placeholder that will at least compile
-                result = result.replace(&pattern_str, "Default::default() /* TODO: unresolved capture */");
+                // Replace with pair_str as fallback
+                result = result.replace(&pattern_str, "pair_str");
             }
         }
     }
@@ -1830,6 +1887,34 @@ mod tests {
         assert!(transform_captures_to_vars("$1", &pattern).contains("child_identifier"));
         assert!(transform_captures_to_vars("$1 + $2", &pattern).contains("child_identifier"));
         assert!(transform_captures_to_vars("$1 + $2", &pattern).contains("child_expr"));
+    }
+
+    #[test]
+    fn test_analyze_fn_decl_pattern() {
+        // This pattern is from fn_decl in zig.zyn
+        let pattern = r#""fn" ~ identifier ~
+    "(" ~ fn_params? ~ ")" ~ type_expr ~
+    block"#;
+
+        let elements = analyze_pattern(pattern);
+
+        // Debug: print what was parsed
+        for elem in &elements {
+            println!("index={}, kind={:?}, optional={}", elem.index, elem.kind, elem.optional);
+        }
+
+        // There should be 7 elements total
+        assert_eq!(elements.len(), 7, "Expected 7 pattern elements");
+
+        // Check each element
+        assert!(matches!(elements[0].kind, PatternKind::Literal(_)), "Element 0 should be 'fn' literal");
+        assert!(matches!(elements[1].kind, PatternKind::Rule(ref n) if n == "identifier"), "Element 1 should be identifier");
+        assert!(matches!(elements[2].kind, PatternKind::Literal(_)), "Element 2 should be '(' literal");
+        assert!(matches!(elements[3].kind, PatternKind::Rule(ref n) if n == "fn_params"), "Element 3 should be fn_params");
+        assert!(elements[3].optional, "fn_params should be optional");
+        assert!(matches!(elements[4].kind, PatternKind::Literal(_)), "Element 4 should be ')' literal");
+        assert!(matches!(elements[5].kind, PatternKind::Rule(ref n) if n == "type_expr"), "Element 5 should be type_expr");
+        assert!(matches!(elements[6].kind, PatternKind::Rule(ref n) if n == "block"), "Element 6 should be block");
     }
 
     #[test]
