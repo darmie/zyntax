@@ -302,32 +302,13 @@ zyntax compile out/*.json -o myprogram --run
 
 See [Haxe Integration Guide](./docs/HAXE_INTEGRATION.md) for details.
 
-### 🔜 Other Integrations
+### ✅ HIR Builder API - Programmatic Code Generation
 
-- **Whirlwind** - Direct AST adapter (in progress)
-- **Custom JSON** - Generate TypedAST JSON directly from any toolchain
-
----
-
-## 🚀 Quick Start
-
-```bash
-# Clone the repository
-git clone https://github.com/darmie/zyntax.git
-cd zyntax
-
-# Run tests
-cargo test
-
-# Run comprehensive end-to-end tests
-cargo test --test end_to_end_comprehensive
-cargo test --test end_to_end_simple
-
-# Build the compiler
-cargo build --release
-```
-
-### Hello World with HIR Builder
+Build HIR modules directly from Rust code. Perfect for:
+- **Code generators** that emit Zyntax IR from other tools
+- **DSL implementations** that construct code at runtime
+- **Compiler backends** for languages with existing parsers
+- **Testing and prototyping** new language features
 
 ```rust
 use zyntax_compiler::hir_builder::HirBuilder;
@@ -362,6 +343,33 @@ let result = unsafe {
     f()
 };
 assert_eq!(result, 42);
+```
+
+**Status:** ✅ **Production-ready** - Full SSA-based IR construction with type system integration
+
+### 🔜 Other Integrations
+
+- **Whirlwind** - Direct AST adapter (in progress)
+- **Custom JSON** - Generate TypedAST JSON directly from any toolchain
+
+---
+
+## 🚀 Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/darmie/zyntax.git
+cd zyntax
+
+# Run tests
+cargo test
+
+# Run comprehensive end-to-end tests
+cargo test --test end_to_end_comprehensive
+cargo test --test end_to_end_simple
+
+# Build the compiler
+cargo build --release
 ```
 
 ---
