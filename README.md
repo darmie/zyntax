@@ -124,16 +124,16 @@ See [Bytecode Format Specification](./docs/BYTECODE_FORMAT_SPEC.md) for complete
 
 ---
 
-## 📝 ZynPEG Grammar Format
+## 📝 Zyn Grammar Format
 
-**ZynPEG** is Zyntax's domain-specific language for defining custom programming language frontends. It extends PEG (Parsing Expression Grammar) syntax with JSON-based semantic actions that construct TypedAST nodes directly from parsed syntax.
+**Zyn** is Zyntax's domain-specific language for defining custom programming language frontends. It extends PEG (Parsing Expression Grammar) syntax with JSON-based semantic actions that construct TypedAST nodes directly from parsed syntax.
 
-### How ZynPEG Works with Zyntax
+### How Zyn Works with Zyntax
 
 ```text
 ┌─────────────────┐      ┌───────────────┐      ┌──────────────┐      ┌──────────────┐
-│  Source Code    │  →   │  ZynPEG       │  →   │  TypedAST    │  →   │   Native     │
-│  (your_lang.x)  │      │  Grammar      │      │  (JSON)      │      │   Binary     │
+│  Source Code    │  →   │     Zyn       │  →   │  TypedAST    │  →   │   Native     │
+│  (your_lang.x)  │      │   Grammar     │      │   (JSON)     │      │   Binary     │
 └─────────────────┘      └───────────────┘      └──────────────┘      └──────────────┘
                               ↓
                          ┌───────────────┐
@@ -142,7 +142,7 @@ See [Bytecode Format Specification](./docs/BYTECODE_FORMAT_SPEC.md) for complete
                          └───────────────┘
 ```
 
-ZynPEG grammars define both syntax (what patterns to match) and semantics (what AST nodes to create). This enables:
+Zyn grammars define both syntax (what patterns to match) and semantics (what AST nodes to create). This enables:
 
 - **Custom Language Frontends**: Define your own language syntax and compile to native code
 - **Runtime Grammar Loading**: No Rust recompilation needed—load grammars dynamically
@@ -252,7 +252,7 @@ Goodbye!
 - **Declarations**: `function`, `param`, `program`
 - **Types**: `primitive_type`, `pointer_type`, `array_type`, `named_type`, `function_type`
 
-See [ZynPEG Grammar Specification](./docs/ZYN_GRAMMAR_SPEC.md) for complete documentation.
+See [Zyn Grammar Specification](./docs/ZYN_GRAMMAR_SPEC.md) for complete documentation.
 
 ---
 
