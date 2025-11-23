@@ -77,9 +77,12 @@ action_block = {
     "->" ~ rust_type ~ "{" ~ action_body ~ "}"
 }
 
+// action_body: Tries raw code FIRST since it's more general.
+// Only falls back to structured fields if raw code doesn't match.
+// Raw code is anything with function calls, struct literals, match, etc.
 action_body = {
-    action_field ~ ("," ~ action_field)* ~ ","?  // Structured fields: expr: ..., ty: ...
-  | action_code                                   // Direct Rust code
+    action_code                                   // Direct Rust code (function calls, struct literals, etc.)
+  | action_field ~ ("," ~ action_field)* ~ ","?  // Simple structured fields: expr: ..., ty: ...
 }
 
 // Field assignment in action block - colon must NOT be followed by another colon (::)

@@ -870,6 +870,10 @@ impl TypedExpressionConverter {
             BinaryOp::Assign => {
                 right.ty.clone()
             }
+            // Zig error handling operators - return the type of the right side (default value)
+            BinaryOp::Orelse | BinaryOp::Catch => {
+                right.ty.clone()
+            }
         };
         let span = Span::default();
 

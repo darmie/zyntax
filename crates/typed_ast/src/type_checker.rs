@@ -949,6 +949,20 @@ impl TypeChecker {
                 self.inference.unify(left_ty, right_ty)?;
                 Ok(Type::Primitive(PrimitiveType::Unit))
             }
+
+            // Zig error handling operators
+            Orelse => {
+                // `a orelse b` - unwrap optional or use default
+                // Left should be optional type, right is the default value
+                // Result type is the unwrapped type
+                Ok(right_ty)
+            }
+            Catch => {
+                // `a catch b` - unwrap error union or use default
+                // Left should be error union type, right is the default value
+                // Result type is the success type
+                Ok(right_ty)
+            }
         }
     }
 

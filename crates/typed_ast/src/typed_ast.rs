@@ -28,10 +28,21 @@ impl<T> TypedNode<T> {
     }
 }
 
+impl<T: Default> Default for TypedNode<T> {
+    fn default() -> Self {
+        Self {
+            node: T::default(),
+            ty: Type::Never,
+            span: Span::default(),
+        }
+    }
+}
+
 /// Typed program - the root of the AST
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TypedProgram {
     pub declarations: Vec<TypedNode<TypedDeclaration>>,
+    #[serde(default)]
     pub span: Span,
 }
 
@@ -64,21 +75,28 @@ pub struct TypedFunction {
 }
 
 /// Function parameter with mutability and advanced features
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TypedParameter {
+    #[serde(default)]
     pub name: InternedString,
+    #[serde(default)]
     pub ty: Type,
+    #[serde(default)]
     pub mutability: Mutability,
+    #[serde(default)]
     pub kind: ParameterKind,
     pub default_value: Option<Box<TypedNode<TypedExpression>>>,
+    #[serde(default)]
     pub attributes: Vec<ParameterAttribute>,
+    #[serde(default)]
     pub span: Span,
 }
 
 /// Parameter kinds for different argument passing conventions
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum ParameterKind {
     /// Regular parameter: func(x: int)
+    #[default]
     Regular,
     /// Out parameter (C#): func(out int x)
     Out,
@@ -117,6 +135,7 @@ pub struct TypedVariable {
 /// Typed statements - all carry span information
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TypedStatement {
+    Continue,
     Expression(Box<TypedNode<TypedExpression>>),
     Let(TypedLet),
     Return(Option<Box<TypedNode<TypedExpression>>>),
@@ -130,10 +149,15 @@ pub enum TypedStatement {
     Try(TypedTry),
     Throw(Box<TypedNode<TypedExpression>>),
     Break(Option<Box<TypedNode<TypedExpression>>>),
-    Continue,
     Coroutine(TypedCoroutine),
     Defer(TypedDefer),
     Select(TypedSelect),
+}
+
+impl Default for TypedStatement {
+    fn default() -> Self {
+        TypedStatement::Block(TypedBlock::default())
+    }
 }
 
 /// Let statement with mutability
@@ -164,9 +188,10 @@ pub struct TypedWhile {
 }
 
 /// Block of statements
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TypedBlock {
     pub statements: Vec<TypedNode<TypedStatement>>,
+    #[serde(default)]
     pub span: Span,
 }
 
@@ -196,14 +221,21 @@ pub enum TypedExpression {
     Block(TypedBlock),
 }
 
+impl Default for TypedExpression {
+    fn default() -> Self {
+        TypedExpression::Block(TypedBlock::default())
+    }
+}
+
 /// Literal values
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum TypedLiteral {
     Integer(i128),
     Float(f64),
     Bool(bool),
     String(InternedString),
     Char(char),
+    #[default]
     Unit,
     /// Null literal for optional types (null in ?T)
     Null,
@@ -232,6 +264,9 @@ pub enum BinaryOp {
     BitAnd, BitOr, BitXor, Shl, Shr,
     // Assignment (with mutability check)
     Assign,
+    // Zig-specific error handling
+    Orelse,  // `a orelse b` - unwrap optional or use default
+    Catch,   // `a catch b` - unwrap error union or use default
 }
 
 /// Unary operation
@@ -640,9 +675,10 @@ pub struct TypedCatch {
 }
 
 /// Pattern matching - Advanced system supporting Rust/Haxe-style patterns
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub enum TypedPattern {
     /// Wildcard pattern: _
+    #[default]
     Wildcard,
     
     /// Variable binding: x, mut y

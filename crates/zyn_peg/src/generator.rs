@@ -8,7 +8,7 @@ use proc_macro2::TokenStream;
 use quote::{quote, format_ident};
 use std::process::{Command, Stdio};
 use std::io::Write;
-use crate::{ZynGrammar, RuleDef, RuleModifier};
+use crate::{ZynGrammar, RuleDef, RuleModifier, ActionBlock};
 use crate::error::{Result, ZynPegError};
 
 /// Generate complete Rust code from a ZynGrammar
@@ -1256,10 +1256,44 @@ fn generate_dispatch_method(rule: &RuleDef, grammar: &ZynGrammar) -> TokenStream
                 .and_then(|r| r.action.as_ref())
                 .map(|a| a.return_type.clone())
         })
-        .unwrap_or_else(|| "TypedExpression".to_string());
+        .unwrap_or_else(|| "TypedNode<TypedExpression>".to_string());
+
+    // Filter dispatchable to only include rules with compatible return types
+    // Rules with actions must have a return type that matches the dispatch method's return type
+    let dispatchable: Vec<_> = dispatchable.into_iter()
+        .filter(|name| {
+            if let Some(rule) = grammar.rules.iter().find(|r| &r.name == *name) {
+                if let Some(action) = &rule.action {
+                    // If the action returns a different type (e.g., String vs TypedNode<TypedExpression>),
+                    // exclude it from the dispatch
+                    let child_return = &action.return_type;
+                    // Check if return types are compatible
+                    // Simple types like String, bool, i64 are incompatible with TypedNode<...>
+                    let is_simple_type = child_return == "String" || child_return == "bool"
+                        || child_return == "i64" || child_return == "i32"
+                        || child_return == "f64" || child_return == "f32";
+                    let expected_is_typed_node = return_type_str.contains("TypedNode")
+                        || return_type_str.contains("TypedExpression")
+                        || return_type_str.contains("TypedDeclaration")
+                        || return_type_str.contains("TypedStatement")
+                        || return_type_str == "Type";
+
+                    // Exclude if child returns simple type but we expect complex type
+                    if is_simple_type && expected_is_typed_node {
+                        return false;
+                    }
+                    // Exclude if return types are explicitly different
+                    if child_return != &return_type_str && !return_type_str.contains(child_return) && !child_return.contains(&return_type_str) {
+                        return false;
+                    }
+                }
+            }
+            true
+        })
+        .collect();
 
     let return_type: TokenStream = return_type_str.parse()
-        .unwrap_or_else(|_| quote! { TypedExpression });
+        .unwrap_or_else(|_| quote! { TypedNode<TypedExpression> });
 
     if dispatchable.is_empty() {
         // No child rules to dispatch to - return a default/passthrough
@@ -1426,11 +1460,27 @@ fn generate_zyntax_ast_builder(grammar: &ZynGrammar) -> Result<TokenStream> {
             Type, PrimitiveType, TypedNode, TypedProgram, TypedDeclaration,
             TypedFunction, TypedVariable, TypedStatement, TypedExpression,
             TypedLiteral, TypedBlock, TypedLet, TypedIf, TypedWhile, TypedFor,
-            TypedBinary, TypedUnary, TypedCall, TypedParameter, TypedMatch,
+            TypedBinary, TypedUnary, TypedCall, TypedParameter, TypedMatch, TypedMatchExpr, TypedMatchArm,
+            TypedFieldAccess, TypedIndex, TypedLambda, TypedLambdaBody, TypedMethodCall, TypedRange,
+            TypedStructLiteral, TypedFieldInit, TypedPattern, TypedLiteralPattern,
+            TypedReference, TypedCast, TypedIfExpr,
+            TypedDefer, TypedClass, TypedEnum, TypedField, TypedVariant, TypedTypeParam,
             BinaryOp, UnaryOp, Span, InternedString, Mutability, Visibility,
-            CallingConvention, ParameterKind, typed_node,
+            CallingConvention, ParameterKind, typed_node, NullabilityKind, AsyncKind,
+            TypeId, ConstValue, Variance,
         };
         use super::Rule;
+
+        /// Postfix operation for expression building
+        #[derive(Debug, Clone)]
+        pub enum PostfixOp {
+            Deref,
+            Field(InternedString),
+            Index(TypedNode<TypedExpression>),
+            Call(Vec<TypedNode<TypedExpression>>),
+            OptionalUnwrap,
+            TryUnwrap,
+        }
 
         /// Parse error type
         #[derive(Debug)]
@@ -1550,34 +1600,50 @@ fn generate_zyntax_build_method(rule: &RuleDef, _grammar: &ZynGrammar) -> Result
     let pattern_info = analyze_pattern(&rule.pattern);
     let child_extraction = generate_child_extraction(&pattern_info);
 
+    // Check if we need to wrap with typed_node()
+    let needs_typed_node_wrap = needs_typed_node_wrapper(&action.return_type);
+
     let body = if let Some(ref raw_code) = action.raw_code {
         let code = transform_zyntax_captures(raw_code, &pattern_info);
-        let code_tokens: TokenStream = code.parse()
-            .unwrap_or_else(|_| quote! { todo!("Failed to parse raw code") });
-        quote! { { #code_tokens } }
+        // Parse as syn::Block or syn::Expr to get proper token spacing
+        let code_tokens: TokenStream = if code.trim().starts_with('{') {
+            syn::parse_str::<syn::Block>(&code)
+                .map(|b| quote! { #b })
+                .unwrap_or_else(|_| {
+                    // Fallback: try as expression
+                    syn::parse_str::<syn::Expr>(&code)
+                        .map(|e| quote! { { #e } })
+                        .unwrap_or_else(|_| quote! { todo!("Failed to parse raw code") })
+                })
+        } else {
+            // Try parsing as expression first
+            syn::parse_str::<syn::Expr>(&code)
+                .map(|e| quote! { { #e } })
+                .unwrap_or_else(|_| {
+                    // Fallback: try as statement(s) wrapped in block
+                    syn::parse_str::<syn::Block>(&format!("{{ {} }}", code))
+                        .map(|b| quote! { #b })
+                        .unwrap_or_else(|_| quote! { todo!("Failed to parse raw code") })
+                })
+        };
+        code_tokens
     } else {
-        let field_assignments: Vec<TokenStream> = action.fields.iter()
-            .map(|f| {
-                let name = format_ident!("{}", f.name);
-                let value = transform_zyntax_captures(&f.value, &pattern_info);
-                let value_tokens: TokenStream = value.parse()
-                    .unwrap_or_else(|_| quote! { todo!("Failed to parse field value") });
-                quote! { #name: #value_tokens }
-            })
-            .collect();
-
-        let return_type_mapped: TokenStream = syn::parse_str::<syn::Type>(&return_type_str)
-            .map(|t| quote! { #t })
-            .unwrap_or_else(|_| return_type_str.parse().unwrap_or_else(|_| quote! { () }));
-        quote! {
-            #return_type_mapped {
-                #(#field_assignments,)*
-            }
-        }
+        // For structured field actions, we need to build the appropriate type
+        generate_zyntax_struct_body(action, &pattern_info, needs_typed_node_wrap)
     };
 
-    let child_extraction_tokens: TokenStream = child_extraction.parse()
-        .unwrap_or_else(|_| quote! {});
+    // Parse child extraction as a block of statements
+    let child_extraction_tokens: TokenStream = if child_extraction.trim().is_empty() {
+        quote! {}
+    } else {
+        syn::parse_str::<syn::Block>(&format!("{{ {} }}", child_extraction))
+            .map(|b| {
+                // Extract inner statements without the braces
+                let stmts = &b.stmts;
+                quote! { #(#stmts)* }
+            })
+            .unwrap_or_else(|_| child_extraction.parse().unwrap_or_else(|_| quote! {}))
+    };
 
     Ok(quote! {
         pub fn #method_name(&mut self, pair: pest::iterators::Pair<Rule>) -> Result<#return_type, ParseError> {
@@ -1590,6 +1656,182 @@ fn generate_zyntax_build_method(rule: &RuleDef, _grammar: &ZynGrammar) -> Result
             Ok(#body)
         }
     })
+}
+
+/// Check if a return type needs typed_node() wrapping
+fn needs_typed_node_wrapper(type_str: &str) -> bool {
+    matches!(type_str, "TypedDeclaration" | "TypedStatement" | "TypedExpression")
+}
+
+/// Generate struct body for zyntax_typed_ast, handling typed_node wrapping
+fn generate_zyntax_struct_body(action: &ActionBlock, pattern_info: &[PatternElement], needs_wrap: bool) -> TokenStream {
+    // Check if this is a TypedDeclaration with "decl" field - needs special handling
+    let has_decl_field = action.fields.iter().any(|f| f.name == "decl");
+    let has_stmt_field = action.fields.iter().any(|f| f.name == "stmt");
+    let has_expr_field = action.fields.iter().any(|f| f.name == "expr" && action.return_type.contains("Expression"));
+
+    if needs_wrap && has_decl_field {
+        // TypedDeclaration with decl field - extract the inner declaration and wrap
+        let decl_field = action.fields.iter().find(|f| f.name == "decl").unwrap();
+        let decl_value = transform_zyntax_captures(&decl_field.value, pattern_info);
+
+        // Parse and convert the declaration value to proper enum variant
+        let inner_expr = convert_declaration_to_zyntax(&decl_value, pattern_info);
+
+        quote! {
+            typed_node(#inner_expr, Type::Never, span)
+        }
+    } else if needs_wrap && has_stmt_field {
+        // TypedStatement with stmt field - convert to enum variant
+        let stmt_field = action.fields.iter().find(|f| f.name == "stmt").unwrap();
+        let stmt_value = transform_zyntax_captures(&stmt_field.value, pattern_info);
+
+        let inner_expr = convert_statement_to_zyntax(&stmt_value, pattern_info);
+
+        quote! {
+            typed_node(#inner_expr, Type::Never, span)
+        }
+    } else if needs_wrap && has_expr_field {
+        // TypedExpression with expr field - convert to enum variant
+        let expr_field = action.fields.iter().find(|f| f.name == "expr").unwrap();
+        let expr_value = transform_zyntax_captures(&expr_field.value, pattern_info);
+        let ty_field = action.fields.iter().find(|f| f.name == "ty");
+
+        let inner_expr = convert_expression_to_zyntax(&expr_value, pattern_info);
+        let ty_expr = if let Some(ty) = ty_field {
+            let ty_value = transform_zyntax_captures(&ty.value, pattern_info);
+            syn::parse_str::<syn::Expr>(&ty_value)
+                .map(|e| quote! { #e })
+                .unwrap_or_else(|_| quote! { Type::Never })
+        } else {
+            quote! { Type::Never }
+        };
+
+        quote! {
+            typed_node(#inner_expr, #ty_expr, span)
+        }
+    } else {
+        // Regular struct - build normally
+        let field_assignments: Vec<TokenStream> = action.fields.iter()
+            .map(|f| {
+                let name = format_ident!("{}", f.name);
+                let value = transform_zyntax_captures(&f.value, pattern_info);
+                let value_tokens: TokenStream = syn::parse_str::<syn::Expr>(&value)
+                    .map(|e| quote! { #e })
+                    .unwrap_or_else(|_| quote! { todo!("Failed to parse field value") });
+                quote! { #name: #value_tokens }
+            })
+            .collect();
+
+        let return_type_str = map_to_zyntax_type(&action.return_type);
+        let return_type_mapped: TokenStream = syn::parse_str::<syn::Type>(&return_type_str)
+            .map(|t| quote! { #t })
+            .unwrap_or_else(|_| return_type_str.parse().unwrap_or_else(|_| quote! { () }));
+
+        if field_assignments.is_empty() {
+            quote! {
+                #return_type_mapped::default()
+            }
+        } else {
+            let result: TokenStream = quote! {
+                #return_type_mapped {
+                    #(#field_assignments,)*
+                }
+            };
+            result
+        }
+    }
+}
+
+/// Convert a Declaration::* construct to TypedDeclaration::* for zyntax_typed_ast
+fn convert_declaration_to_zyntax(decl_str: &str, _pattern_info: &[PatternElement]) -> TokenStream {
+    // The grammar uses patterns like "Declaration::Const(ConstDecl { ... })"
+    // We need to convert to "TypedDeclaration::Variable(TypedVariable { ... })"
+
+    // For now, we'll parse and transform the string
+    // This is a simplistic transformation - a full solution would properly parse the AST
+
+    let transformed = decl_str
+        .replace("Declaration::Const(ConstDecl", "TypedDeclaration::Variable(TypedVariable")
+        .replace("Declaration::Var(VarDecl", "TypedDeclaration::Variable(TypedVariable")
+        .replace("Declaration::Function(FnDecl", "TypedDeclaration::Function(TypedFunction")
+        .replace("Declaration::Struct(StructDecl", "TypedDeclaration::Class(TypedClass")  // Map to Class for now
+        .replace("Declaration::Enum(EnumDecl", "TypedDeclaration::Enum(TypedEnum")
+        .replace("Declaration::Union(UnionDecl", "TypedDeclaration::Class(TypedClass")  // Map union to class
+        .replace("Declaration::ErrorSet(ErrorSetDecl", "TypedDeclaration::Enum(TypedEnum")  // Map to enum
+        // Field name mappings
+        .replace("is_pub:", "visibility: if is_pub { Visibility::Public } else { Visibility::Private },\n        //")
+        .replace("name: intern(", "name: InternedString::new_global(")
+        .replace("value:", "initializer: Some(Box::new(")
+        .replace("is_export:", "is_external:")
+        .replace("is_extern:", "is_external:");
+
+    syn::parse_str::<syn::Expr>(&transformed)
+        .map(|e| quote! { #e })
+        .unwrap_or_else(|_| {
+            // Fallback: return a placeholder
+            quote! {
+                TypedDeclaration::Variable(TypedVariable {
+                    name: InternedString::new_global("unknown"),
+                    ty: Type::Never,
+                    mutability: Mutability::Immutable,
+                    initializer: None,
+                    visibility: Visibility::Private,
+                })
+            }
+        })
+}
+
+/// Convert a Statement::* construct to TypedStatement::* for zyntax_typed_ast
+fn convert_statement_to_zyntax(stmt_str: &str, _pattern_info: &[PatternElement]) -> TokenStream {
+    // Transform statement patterns
+    let transformed = stmt_str
+        .replace("Statement::Const(", "TypedStatement::Let(TypedLet { name: ")
+        .replace("Statement::Let(", "TypedStatement::Let(TypedLet { name: ")
+        .replace("Statement::Return(", "TypedStatement::Return(")
+        .replace("Statement::If(", "TypedStatement::If(TypedIf { condition: Box::new(")
+        .replace("Statement::While(", "TypedStatement::While(TypedWhile { condition: Box::new(")
+        .replace("Statement::For(", "TypedStatement::For(TypedFor { ")
+        .replace("Statement::Break(", "TypedStatement::Break(")
+        .replace("Statement::Continue", "TypedStatement::Continue")
+        .replace("Statement::Expression(", "TypedStatement::Expression(Box::new(")
+        .replace("Statement::Block(", "TypedStatement::Block(TypedBlock { statements: ")
+        .replace("Statement::Defer(", "TypedStatement::Defer(TypedDefer { body: ")
+        .replace("Statement::Assign(", "TypedStatement::Expression(Box::new(typed_node(TypedExpression::Binary(TypedBinary { op: BinaryOp::Assign, left: Box::new(");
+
+    syn::parse_str::<syn::Expr>(&transformed)
+        .map(|e| quote! { #e })
+        .unwrap_or_else(|_| {
+            quote! { TypedStatement::Continue }
+        })
+}
+
+/// Convert an Expression::* construct to TypedExpression::* for zyntax_typed_ast
+fn convert_expression_to_zyntax(expr_str: &str, _pattern_info: &[PatternElement]) -> TokenStream {
+    let transformed = expr_str
+        .replace("Expression::IntLiteral(", "TypedExpression::Literal(TypedLiteral::Integer(")
+        .replace("Expression::FloatLiteral(", "TypedExpression::Literal(TypedLiteral::Float(")
+        .replace("Expression::BoolLiteral(", "TypedExpression::Literal(TypedLiteral::Bool(")
+        .replace("Expression::StringLiteral(", "TypedExpression::Literal(TypedLiteral::String(InternedString::new_global(")
+        .replace("Expression::NullLiteral", "TypedExpression::Literal(TypedLiteral::Null)")
+        .replace("Expression::UndefinedLiteral", "TypedExpression::Literal(TypedLiteral::Undefined)")
+        .replace("Expression::BinaryOp(", "TypedExpression::Binary(TypedBinary { op: ")
+        .replace("Expression::UnaryOp(", "TypedExpression::Unary(TypedUnary { op: ")
+        .replace("Expression::Call(", "TypedExpression::Call(TypedCall { callee: ")
+        .replace("Expression::FieldAccess(", "TypedExpression::Field(TypedFieldAccess { object: ")
+        .replace("Expression::Index(", "TypedExpression::Index(TypedIndex { array: ")
+        .replace("Expression::Deref(", "TypedExpression::Dereference(")
+        .replace("Expression::Array(", "TypedExpression::Array(")
+        .replace("Expression::Lambda(", "TypedExpression::Lambda(TypedLambda ")
+        .replace("Expression::Try(", "TypedExpression::Try(")
+        .replace("Expression::Switch(", "TypedExpression::Match(TypedMatchExpr ")
+        .replace("Expression::StructLiteral(", "TypedExpression::Struct(TypedStructLiteral ");
+
+    syn::parse_str::<syn::Expr>(&transformed)
+        .map(|e| quote! { #e })
+        .unwrap_or_else(|_| {
+            quote! { TypedExpression::Literal(TypedLiteral::Unit) }
+        })
 }
 
 /// Generate a dispatch method using zyntax_typed_ast types
@@ -1713,7 +1955,9 @@ fn map_to_zyntax_type(type_str: &str) -> String {
 fn transform_zyntax_captures(value: &str, pattern: &[PatternElement]) -> String {
     let mut result = transform_captures_to_vars(value, pattern);
 
-    // Replace Type::I32 with Type::Primitive(PrimitiveType::I32)
+    // Replace Type::I32 with Type::Primitive(PrimitiveType::I32) etc.
+    // BUT only if not already wrapped in Type::Primitive(...)
+    // This prevents double-wrapping when the grammar already uses the correct form
     let type_mappings = [
         ("Type::I8", "Type::Primitive(PrimitiveType::I8)"),
         ("Type::I16", "Type::Primitive(PrimitiveType::I16)"),
@@ -1734,7 +1978,28 @@ fn transform_zyntax_captures(value: &str, pattern: &[PatternElement]) -> String 
     ];
 
     for (from, to) in type_mappings {
-        result = result.replace(from, to);
+        // Only replace if it's a standalone Type::X (not already wrapped)
+        // Use word boundary detection by checking character before "Type::"
+        let mut new_result = String::new();
+        let mut remaining = result.as_str();
+        while let Some(idx) = remaining.find(from) {
+            // Check if preceded by a word character (letter, digit, _, or ::)
+            // If so, it's likely already wrapped (e.g., PrimitiveType::Bool)
+            let before = &result[..result.len() - remaining.len() + idx];
+            let is_part_of_longer_ident = before.ends_with("Primitive") ||
+                                           before.ends_with("::");
+            if is_part_of_longer_ident {
+                // Skip this match, it's part of a longer identifier
+                new_result.push_str(&remaining[..idx + from.len()]);
+                remaining = &remaining[idx + from.len()..];
+            } else {
+                new_result.push_str(&remaining[..idx]);
+                new_result.push_str(to);
+                remaining = &remaining[idx + from.len()..];
+            }
+        }
+        new_result.push_str(remaining);
+        result = new_result;
     }
 
     // Replace intern() with InternedString::new_global()
@@ -1762,16 +2027,34 @@ fn generate_build_method(rule: &RuleDef, _grammar: &ZynGrammar) -> Result<TokenS
     let body = if let Some(ref raw_code) = action.raw_code {
         // Raw code action - transform captures to proper variable access
         let code = transform_captures_to_vars(raw_code, &pattern_info);
-        let code_tokens: TokenStream = code.parse()
-            .unwrap_or_else(|_| quote! { todo!("Failed to parse raw code") });
-        quote! { { #code_tokens } }
+        // Parse as syn::Block or syn::Expr to get proper token spacing
+        let code_tokens: TokenStream = if code.trim().starts_with('{') {
+            syn::parse_str::<syn::Block>(&code)
+                .map(|b| quote! { #b })
+                .unwrap_or_else(|_| {
+                    syn::parse_str::<syn::Expr>(&code)
+                        .map(|e| quote! { { #e } })
+                        .unwrap_or_else(|_| quote! { todo!("Failed to parse raw code") })
+                })
+        } else {
+            syn::parse_str::<syn::Expr>(&code)
+                .map(|e| quote! { { #e } })
+                .unwrap_or_else(|_| {
+                    syn::parse_str::<syn::Block>(&format!("{{ {} }}", code))
+                        .map(|b| quote! { #b })
+                        .unwrap_or_else(|_| quote! { todo!("Failed to parse raw code") })
+                })
+        };
+        code_tokens
     } else {
         // Structured field assignments
         let field_assignments: Vec<TokenStream> = action.fields.iter()
             .map(|f| {
                 let name = format_ident!("{}", f.name);
                 let value = transform_captures_to_vars(&f.value, &pattern_info);
-                let value_tokens: TokenStream = value.parse()
+                // Parse field value as syn::Expr for proper spacing
+                let value_tokens: TokenStream = syn::parse_str::<syn::Expr>(&value)
+                    .map(|e| quote! { #e })
                     .unwrap_or_else(|_| quote! { todo!("Failed to parse field value") });
                 quote! { #name: #value_tokens }
             })
@@ -1784,8 +2067,17 @@ fn generate_build_method(rule: &RuleDef, _grammar: &ZynGrammar) -> Result<TokenS
         }
     };
 
-    let child_extraction_tokens: TokenStream = child_extraction.parse()
-        .unwrap_or_else(|_| quote! {});
+    // Parse child extraction as a block of statements
+    let child_extraction_tokens: TokenStream = if child_extraction.trim().is_empty() {
+        quote! {}
+    } else {
+        syn::parse_str::<syn::Block>(&format!("{{ {} }}", child_extraction))
+            .map(|b| {
+                let stmts = &b.stmts;
+                quote! { #(#stmts)* }
+            })
+            .unwrap_or_else(|_| child_extraction.parse().unwrap_or_else(|_| quote! {}))
+    };
 
     Ok(quote! {
         /// Build a #return_type from a parsed rule
@@ -2135,10 +2427,10 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
         if let Some(Some((rule_name, optional, repeated))) = position_to_rule.get(i - 1) {
             let var_name = format!("child_{}", rule_name);
 
-            // Replace intern($N) with getting text from the child
+            // Replace intern($N) with getting text from the child as InternedString
             let intern_pattern = format!("intern({})", pattern_str);
             if result.contains(&intern_pattern) {
-                let replacement = format!("{}.as_ref().map(|p| p.as_str().to_string()).unwrap_or_default()", var_name);
+                let replacement = format!("InternedString::new_global({}.as_ref().map(|p| p.as_str()).unwrap_or(\"\"))", var_name);
                 result = result.replace(&intern_pattern, &replacement);
             }
 
@@ -2150,6 +2442,19 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
                     var_name, rule_name
                 );
                 result = result.replace(&collect_pattern, &replacement);
+            }
+
+            // Replace $N.into_iter().map(|...|...) with proper iteration
+            // e.g., $2.into_iter().map(|(_, p)| p) -> child_X.iter().filter_map(|p| self.build_X(p.clone()).ok()).map(|(_, p)| p)
+            let into_iter_map_pattern = format!("{}.into_iter().map(|", pattern_str);
+            if result.contains(&into_iter_map_pattern) {
+                // For repeated elements with into_iter, build each element first
+                // The result is something like: child_fn_param.iter().filter_map(...).collect()
+                let replacement = format!(
+                    "{}.iter().filter_map(|p| self.build_{}(p.clone()).ok()).collect::<Vec<_>>().into_iter().map(|",
+                    var_name, rule_name
+                );
+                result = result.replace(&into_iter_map_pattern, &replacement);
             }
 
             // Replace $N.map(|t| t) with proper optional handling
@@ -2215,8 +2520,10 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
                     .count();
                 if field_end > 0 {
                     let field_name = &result[after_dot..after_dot + field_end];
-                    // Skip if it's a method call (map, and_then, etc.) - these are handled specially
-                    if field_name == "map" || field_name == "and_then" || field_name == "unwrap_or" {
+                    // Skip if it's a method call (map, and_then, into_iter, etc.) - these are handled specially
+                    if field_name == "map" || field_name == "and_then" || field_name == "unwrap_or"
+                        || field_name == "into_iter" || field_name == "iter" || field_name == "collect"
+                        || field_name == "ok" || field_name == "unwrap_or_default" || field_name == "clone" {
                         break;
                     }
                     let full_match_len = dot_pattern.len() + field_end;

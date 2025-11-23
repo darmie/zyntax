@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# This crate tests ZynPEG-generated parser code with scaffolding types.
-# The scaffolding provides a self-contained type system for testing
-# before integration with the full zyntax_typed_ast crate.
+# This crate tests ZynPEG-generated parser code with zyntax_typed_ast types.
+# It validates that generated code correctly constructs typed AST nodes
+# that are compatible with the full zyntax compilation pipeline.
 
 # Keep this crate out of the main workspace
 [workspace]
@@ -14,6 +14,8 @@ publish = false
 [dependencies]
 pest = "2.7"
 pest_derive = "2.7"
+zyntax_typed_ast = { path = "../../typed_ast" }
+zyntax_compiler = { path = "../../compiler" }
 
 [dev-dependencies]
 # None needed - tests are in the crate itself

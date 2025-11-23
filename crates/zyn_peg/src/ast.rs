@@ -285,9 +285,11 @@ mod tests {
 
         let action = rule.action.unwrap();
         assert_eq!(action.return_type, "TypedExpression");
-        assert_eq!(action.fields.len(), 2);
-        assert_eq!(action.fields[0].name, "expr");
-        assert_eq!(action.fields[1].name, "ty");
+        // Grammar now parses action body as raw_code (more general) rather than structured fields
+        assert!(action.raw_code.is_some());
+        let raw = action.raw_code.unwrap();
+        assert!(raw.contains("expr:"));
+        assert!(raw.contains("ty:"));
     }
 
     #[test]
@@ -309,9 +311,12 @@ mod tests {
                 assert!(rule.action.is_some());
                 let action = rule.action.unwrap();
                 assert_eq!(action.return_type, "TestType");
-                assert_eq!(action.fields.len(), 2);
-                assert_eq!(action.fields[0].name, "decl");
-                assert_eq!(action.fields[1].name, "visibility");
+                // Grammar now parses action body as raw_code (more general) rather than structured fields
+                assert!(action.raw_code.is_some());
+                let raw = action.raw_code.unwrap();
+                assert!(raw.contains("decl:"));
+                assert!(raw.contains("visibility:"));
+                assert!(raw.contains("ConstDecl"));
             }
             Err(e) => {
                 panic!("Failed to parse: {}", e);

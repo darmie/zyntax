@@ -79,7 +79,8 @@ fn generate_zyntax_parser_files() -> (String, String, String) {
 #[test]
 #[ignore = "Overwrites hand-crafted ast_builder.rs - run manually when generator is fixed"]
 fn test_write_generated_files() {
-    let (pest_grammar, ast_builder, parser_impl) = generate_parser_files();
+    // Use zyntax parser generator for integration_test compatibility
+    let (pest_grammar, ast_builder, parser_impl) = generate_zyntax_parser_files();
 
     // Ensure generated directory exists
     let gen_dir = Path::new(GENERATED_DIR);
@@ -444,8 +445,13 @@ fn test_zyntax_parser_generation() {
     println!("✓ Zyntax parser generation produces correct code structure");
 }
 
+/// Test that the generated zyntax AST builder produces valid Rust syntax.
+/// The generator now properly transforms grammar actions to use zyntax_typed_ast types:
+///   - Wraps declarations/statements/expressions with typed_node()
+///   - Converts Declaration::* to TypedDeclaration::*
+///   - Converts Statement::* to TypedStatement::*
+///   - Converts Expression::* to TypedExpression::*
 #[test]
-#[ignore = "Generated code has comparison chaining issue from actions - needs action code transformation"]
 fn test_zyntax_ast_builder_syntax_valid() {
     let (_, ast_builder, parser_impl) = generate_zyntax_parser_files();
 
@@ -456,8 +462,9 @@ fn test_zyntax_ast_builder_syntax_valid() {
             println!("  - {} items in file", file.items.len());
         }
         Err(e) => {
-            println!("Generated code (first 1000 chars):");
-            println!("{}", &ast_builder[..1000.min(ast_builder.len())]);
+            // Write to temp file for debugging
+            std::fs::write("/tmp/generated_ast_builder.rs", &ast_builder).unwrap();
+            println!("Generated code written to /tmp/generated_ast_builder.rs");
             panic!("Zyntax AST builder failed to parse: {}", e);
         }
     }
@@ -502,4 +509,44 @@ fn test_zyntax_parser_type_mappings() {
         "Should construct Type::Primitive(PrimitiveType::I64)");
 
     println!("✓ All type mappings use correct zyntax_typed_ast format");
+}
+
+/// Write zyntax parser files to the generated directory.
+/// These files use zyntax_typed_ast types and are used by the integration test.
+#[test]
+fn test_write_zyntax_parser_files() {
+    let (pest_grammar, ast_builder, parser_impl) = generate_zyntax_parser_files();
+
+    // Ensure generated directory exists
+    let gen_dir = Path::new(GENERATED_DIR);
+    fs::create_dir_all(gen_dir).expect("Failed to create generated directory");
+
+    // Write pest grammar
+    let pest_path = gen_dir.join("zig.pest");
+    fs::write(&pest_path, &pest_grammar).expect("Failed to write zig.pest");
+    println!("✓ Wrote {} ({} bytes)", pest_path.display(), pest_grammar.len());
+
+    // Write AST builder (zyntax version)
+    let ast_path = gen_dir.join("ast_builder.rs");
+    fs::write(&ast_path, &ast_builder).expect("Failed to write ast_builder.rs");
+    println!("✓ Wrote {} ({} bytes)", ast_path.display(), ast_builder.len());
+
+    // Write parser implementation (zyntax version)
+    let parser_path = gen_dir.join("parser_impl.rs");
+    fs::write(&parser_path, &parser_impl).expect("Failed to write parser_impl.rs");
+    println!("✓ Wrote {} ({} bytes)", parser_path.display(), parser_impl.len());
+
+    // Verify files exist
+    assert!(pest_path.exists(), "zig.pest not created");
+    assert!(ast_path.exists(), "ast_builder.rs not created");
+    assert!(parser_path.exists(), "parser_impl.rs not created");
+
+    // Verify the generated files use zyntax_typed_ast
+    let ast_content = fs::read_to_string(&ast_path).unwrap();
+    assert!(ast_content.contains("use zyntax_typed_ast"), "ast_builder should use zyntax_typed_ast");
+
+    let parser_content = fs::read_to_string(&parser_path).unwrap();
+    assert!(parser_content.contains("use zyntax_typed_ast"), "parser_impl should use zyntax_typed_ast");
+
+    println!("✓ All zyntax parser files written successfully");
 }

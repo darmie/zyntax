@@ -19,6 +19,12 @@ pub type Symbol = string_interner::DefaultSymbol;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InternedString(Symbol);
 
+impl Default for InternedString {
+    fn default() -> Self {
+        InternedString::new_global("")
+    }
+}
+
 impl InternedString {
     /// Create a new interned string symbol (internal use only)
     pub(crate) fn new(symbol: Symbol) -> Self {

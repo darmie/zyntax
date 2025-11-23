@@ -113,6 +113,30 @@ pub use typed_ast::{
     TypedNode, TypedProgram, TypedDeclaration, TypedFunction, TypedVariable,
     TypedStatement, TypedExpression, TypedLiteral, BinaryOp, UnaryOp,
     typed_node,
+    // Additional types for parser generation
+    TypedParameter, TypedLet, TypedIf, TypedWhile, TypedBlock,
+    TypedBinary, TypedUnary, TypedCall, TypedFieldAccess, TypedIndex,
+    TypedFor, TypedMatch, TypedMatchExpr, TypedMatchArm, ParameterKind,
+    // Lambda types
+    TypedLambda, TypedLambdaBody,
+    // Method types
+    TypedMethodCall,
+    // Range type
+    TypedRange,
+    // Struct type
+    TypedStructLiteral, TypedFieldInit,
+    // Pattern types
+    TypedPattern, TypedLiteralPattern, TypedFieldPattern,
+    // Reference type
+    TypedReference,
+    // Cast type
+    TypedCast,
+    // If expression type
+    TypedIfExpr,
+    // Defer type
+    TypedDefer,
+    // Class/Struct/Enum types
+    TypedClass, TypedEnum, TypedField, TypedVariant, TypedTypeParam,
 };
 
 pub use type_inference::{

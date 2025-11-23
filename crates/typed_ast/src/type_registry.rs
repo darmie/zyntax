@@ -278,10 +278,14 @@ impl Default for CallingConvention {
 }
 
 /// Core type representation that is language-agnostic and supports all paradigms
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum Type {
     /// Primitive types (int, float, bool, etc.)
     Primitive(PrimitiveType),
+
+    /// The bottom type (never/empty) - default for uninitialized types
+    #[default]
+    Never,
     
     /// A type registered in the type registry by ID
     Named {
@@ -370,9 +374,6 @@ pub enum Type {
         base: Box<Type>,
         index: Box<Type>,
     },
-    
-    /// The bottom type (never/empty)
-    Never,
     
     /// The top type (any/unknown)
     Any,
@@ -757,8 +758,9 @@ pub enum Variance {
 }
 
 /// Mutability annotation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum Mutability {
+    #[default]
     Immutable,
     Mutable,
 }
