@@ -124,6 +124,83 @@ See [Bytecode Format Specification](./docs/BYTECODE_FORMAT_SPEC.md) for complete
 
 ---
 
+## 📝 ZynPEG Grammar Format
+
+**ZynPEG** is a parser generator that extends PEG syntax with JSON-based action blocks for constructing TypedAST nodes. It enables runtime grammar interpretation without Rust compilation.
+
+### Quick Example
+
+```zyn
+@language {
+    name: "Calculator",
+    version: "1.0",
+    file_extensions: [".calc"],
+    entry_point: "main",
+}
+
+// Build a program: expression → return → function → program
+program = { SOI ~ expr ~ EOI }
+  -> TypedProgram {
+      "commands": [
+          { "define": "return_stmt", "args": { "value": "$1" }, "store": "ret" },
+          { "define": "function", "args": { "name": "main", "params": [], "body": "$ret" } },
+          { "define": "program", "args": { "declarations": ["$result"] } }
+      ]
+  }
+
+// Binary expression with left-associative folding
+expr = { term ~ ((add_op | sub_op) ~ term)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "term", "operator": "add_op|sub_op" }
+  }
+
+// Integer literal: get text, parse, create AST node
+number = @{ ASCII_DIGIT+ }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_int": true,
+      "define": "int_literal",
+      "args": { "value": "$result" }
+  }
+
+add_op = { "+" } -> String { "get_text": true }
+sub_op = { "-" } -> String { "get_text": true }
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+```
+
+### CLI Usage
+
+```bash
+# Compile and run with grammar
+zyntax compile --source input.calc --grammar calc.zyn --format zyn --run
+
+# Verbose mode shows compilation steps
+zyntax compile -v --source code.mylang --grammar mylang.zyn --format zyn -o output
+```
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **`define`** | Create AST nodes with named arguments: `"define": "int_literal", "args": { "value": 42 }` |
+| **`commands`** | Sequential command execution with `$result` chaining |
+| **`store`** | Save intermediate results: `"store": "myvar"` → access as `"$myvar"` |
+| **`fold_binary`** | Left-associative binary operator folding |
+| **`get_text`** | Extract matched text content |
+| **`get_child`** | Access child nodes by index or name |
+
+### Available Node Types
+
+- **Literals**: `int_literal`, `float_literal`, `string_literal`, `bool_literal`, `char_literal`
+- **Expressions**: `variable`, `binary_op`, `unary_op`, `call_expr`, `method_call`, `field_access`, `index`, `array`, `struct_literal`, `cast`, `lambda`
+- **Statements**: `let_stmt`, `assignment`, `return_stmt`, `if_stmt`, `while_stmt`, `for_stmt`, `break_stmt`, `continue_stmt`, `expression_stmt`, `block`
+- **Declarations**: `function`, `param`, `program`
+- **Types**: `primitive_type`, `pointer_type`, `array_type`, `named_type`, `function_type`
+
+See [ZynPEG Grammar Specification](./docs/ZYN_GRAMMAR_SPEC.md) for complete documentation.
+
+---
+
 ## 🔌 Zyn Parser - Zig Language Integration
 
 **Zyn** is Zyntax's parser framework for integrating existing programming languages. The first integration is with the **Zig programming language**, providing a PEG-based parser that compiles Zig code to native executables.
