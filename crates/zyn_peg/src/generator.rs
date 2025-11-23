@@ -283,6 +283,18 @@ fn generate_typed_ast_types(grammar: &ZynGrammar) -> Result<TokenStream> {
             If(Box<TypedExpression>, Box<TypedExpression>, Option<Box<TypedExpression>>),
             Block(Vec<TypedStatement>),
 
+            // Lambda/closures
+            Lambda(Lambda),
+
+            // Try expression
+            Try(Try),
+
+            // Switch expression
+            Switch(Switch),
+
+            // Struct literal expression
+            StructLiteral(StructLiteral),
+
             // Special
             Unit,
             Error(String),
@@ -485,6 +497,28 @@ fn generate_typed_ast_types(grammar: &ZynGrammar) -> Result<TokenStream> {
         /// Parse float from string
         pub fn parse_float(s: &str) -> f64 {
             s.parse().unwrap_or(0.0)
+        }
+
+        /// Unwrap a result type to get the inner type
+        pub fn unwrap_result_type(ty: Type) -> Type {
+            match ty {
+                Type::Result(inner, _) => *inner,
+                _ => ty,
+            }
+        }
+
+        /// Convert a TypedExpression to TypedLiteral (for pattern matching)
+        pub fn expr_to_literal(expr: TypedExpression) -> TypedLiteral {
+            match expr.expr {
+                Expression::IntLiteral(n) => TypedLiteral::Int(n),
+                Expression::FloatLiteral(f) => TypedLiteral::Float(f),
+                Expression::StringLiteral(s) => TypedLiteral::String(s),
+                Expression::CharLiteral(c) => TypedLiteral::Char(c),
+                Expression::BoolLiteral(b) => TypedLiteral::Bool(b),
+                Expression::NullLiteral => TypedLiteral::Null,
+                Expression::UndefinedLiteral => TypedLiteral::Undefined,
+                _ => TypedLiteral::Null, // Fallback for non-literal expressions
+            }
         }
 
         // ============================================================
@@ -1742,8 +1776,8 @@ fn transform_captures_to_vars(value: &str, pattern: &[PatternElement]) -> String
                     .count();
                 if field_end > 0 {
                     let field_name = &result[after_dot..after_dot + field_end];
-                    // Skip if it's "map" - that's handled above
-                    if field_name == "map" {
+                    // Skip if it's a method call (map, and_then, etc.) - these are handled specially
+                    if field_name == "map" || field_name == "and_then" || field_name == "unwrap_or" {
                         break;
                     }
                     let full_match_len = dot_pattern.len() + field_end;

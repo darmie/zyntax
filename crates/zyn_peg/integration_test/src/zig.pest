@@ -55,8 +55,8 @@ array_type = { "[" ~ integer_literal? ~ "]" ~ type_expr  }
 pointer_type = { "*" ~ type_expr  }
 optional_type = { "?" ~ type_expr  }
 error_union_type = { "!" ~ type_expr  }
-statement = { local_const
-  | local_var
+statement = { const_decl
+  | var_decl
   | assignment
   | if_stmt
   | while_stmt
@@ -68,10 +68,8 @@ statement = { local_const
   | errdefer_stmt
   | expr_stmt
  }
-local_const = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";"  }
-local_var = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";"  }
-defer_stmt = { "defer" ~ block  }
-errdefer_stmt = { "errdefer" ~ block  }
+defer_stmt = { "defer" ~ (block | expr_stmt)  }
+errdefer_stmt = { "errdefer" ~ (block | expr_stmt)  }
 assignment = { assign_target ~ assign_op ~ expr ~ ";"  }
 assign_target = { identifier ~ ("[" ~ expr ~ "]")*  }
 assign_op = { "<<=" | ">>=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "="  }
@@ -106,7 +104,9 @@ bitwise_and = { bit_shift ~ (bit_and_op ~ bit_shift)*  }
 bit_shift = { addition ~ (shift_op ~ addition)*  }
 addition = { multiplication ~ (add_op ~ multiplication)*  }
 multiplication = { unary ~ (mul_op ~ unary)*  }
-unary = { unary_op? ~ postfix  }
+unary = { unary_op ~ unary
+  | postfix
+ }
 postfix = { primary ~ postfix_op*
  }
 postfix_op = { ".*"
@@ -123,9 +123,8 @@ primary = { literal
   | "(" ~ expr ~ ")"
   | identifier
  }
-lambda_expr = { lambda_start ~ lambda_params? ~ lambda_end ~ block  }
-lambda_start = { "|"  }
-lambda_end = { "|"  }
+lambda_expr = { "|" ~ lambda_params? ~ "|" ~ (block | expr)
+ }
 lambda_params = { lambda_param ~ ("," ~ lambda_param)*  }
 lambda_param = { identifier ~ (":" ~ type_expr)?  }
 try_expr = { "try" ~ postfix  }
@@ -153,7 +152,7 @@ undefined_literal = { "undefined"  }
 bool_literal = { "true" | "false"  }
 integer_literal = @{ "-"? ~ ASCII_DIGIT+  }
 float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+  }
-string_literal = @{ "\"" ~ string_inner ~ "\""  }
+string_literal = { "\"" ~ string_inner ~ "\""  }
 string_inner = @{ (!("\"" | "\\") ~ ANY)*  }
 array_literal = { "[" ~ "_" ~ "]" ~ type_expr ~ "{" ~ (expr ~ ("," ~ expr)*)? ~ "}"  }
 struct_literal = { identifier ~ "{" ~ struct_field_init? ~ ("," ~ struct_field_init)* ~ ","? ~ "}"

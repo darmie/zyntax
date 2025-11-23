@@ -183,10 +183,6 @@ pub enum Expression {
         Option<Box<TypedExpression>>,
     ),
     Block(Vec<TypedStatement>),
-    Lambda(Lambda),
-    Try(Try),
-    Switch(Switch),
-    StructLiteral(StructLiteral),
     Unit,
     Error(String),
 }
@@ -357,26 +353,6 @@ pub fn parse_int(s: &str) -> i64 {
 #[doc = r" Parse float from string"]
 pub fn parse_float(s: &str) -> f64 {
     s.parse().unwrap_or(0.0)
-}
-#[doc = r" Unwrap a result type to get the inner type"]
-pub fn unwrap_result_type(ty: Type) -> Type {
-    match ty {
-        Type::Result(inner, _) => *inner,
-        _ => ty,
-    }
-}
-#[doc = r" Convert a TypedExpression to TypedLiteral (for pattern matching)"]
-pub fn expr_to_literal(expr: TypedExpression) -> TypedLiteral {
-    match expr.expr {
-        Expression::IntLiteral(n) => TypedLiteral::Int(n),
-        Expression::FloatLiteral(f) => TypedLiteral::Float(f),
-        Expression::StringLiteral(s) => TypedLiteral::String(s),
-        Expression::CharLiteral(c) => TypedLiteral::Char(c),
-        Expression::BoolLiteral(b) => TypedLiteral::Bool(b),
-        Expression::NullLiteral => TypedLiteral::Null,
-        Expression::UndefinedLiteral => TypedLiteral::Undefined,
-        _ => TypedLiteral::Null,
-    }
 }
 #[doc = r" Parse error"]
 #[derive(Debug)]

@@ -221,6 +221,14 @@ enum_decl = {
     enum_variant ~ ("," ~ enum_variant)* ~ ","? ~
     "}" ~ ";"
 }
+  -> TypedDeclaration {
+      decl: Declaration::Enum(EnumDecl {
+          name: intern($2),
+          tag_type: $5,
+          variants: vec![],  // TODO: properly collect variants
+      }),
+      span: span($1, $11),
+  }
 
 enum_variant = { identifier ~ ("=" ~ expr)? }
 
@@ -229,14 +237,34 @@ union_decl = {
     union_field ~ ("," ~ union_field)* ~ ","? ~
     "}" ~ ";"
 }
+  -> TypedDeclaration {
+      decl: Declaration::Union(UnionDecl {
+          name: intern($2),
+          is_tagged: false,  // TODO: detect if union is enum-tagged
+          fields: vec![],  // TODO: properly collect union fields
+      }),
+      span: span,
+  }
 
 union_field = { identifier ~ ":" ~ type_expr }
+  -> FieldDecl {
+      name: intern($1),
+      ty: $3,
+      default: None,
+  }
 
 error_set_decl = {
     "const" ~ identifier ~ "=" ~ "error" ~ "{" ~
     identifier ~ ("," ~ identifier)* ~ ","? ~
     "}" ~ ";"
 }
+  -> TypedDeclaration {
+      decl: Declaration::ErrorSet(ErrorSetDecl {
+          name: intern($2),
+          errors: vec![],  // TODO: properly collect error names
+      }),
+      span: span,
+  }
 
 // ===== Type Expressions =====
 
@@ -276,7 +304,7 @@ primitive_type = {
 
 array_type = { "[" ~ integer_literal? ~ "]" ~ type_expr }
   -> Type {
-      Type::Array(Box::new($4), $2.map(|s| parse_int(s)))
+      Type::Array(Box::new($4), $2.and_then(|e| match e.expr { Expression::IntLiteral(n) => Some(n as usize), _ => None }))
   }
 
 pointer_type = { "*" ~ type_expr }
@@ -297,8 +325,8 @@ error_union_type = { "!" ~ type_expr }
 // ===== Statements =====
 
 statement = {
-    const_decl
-  | var_decl
+    local_const
+  | local_var
   | assignment
   | if_stmt
   | while_stmt
@@ -311,8 +339,36 @@ statement = {
   | expr_stmt
 }
 
-defer_stmt = { "defer" ~ (block | expr_stmt) }
-errdefer_stmt = { "errdefer" ~ (block | expr_stmt) }
+// Local const/var declarations (return TypedStatement for use in blocks)
+local_const = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
+  -> TypedStatement {
+      stmt: Statement::Const(intern($2), $3, $5),
+      span: span($1, $6),
+  }
+
+local_var = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
+  -> TypedStatement {
+      stmt: Statement::Let(intern($2), $3, Some($5)),
+      span: span($1, $6),
+  }
+
+defer_stmt = { "defer" ~ block }
+  -> TypedStatement {
+      stmt: Statement::Defer(Box::new(TypedStatement {
+          stmt: Statement::Block($2.statements),
+          span: $2.span,
+      })),
+      span: span($1, $2),
+  }
+
+errdefer_stmt = { "errdefer" ~ block }
+  -> TypedStatement {
+      stmt: Statement::Defer(Box::new(TypedStatement {
+          stmt: Statement::Block($2.statements),
+          span: $2.span,
+      })),
+      span: span($1, $2),
+  }
 
 assignment = { assign_target ~ assign_op ~ expr ~ ";" }
   -> TypedStatement {
@@ -369,6 +425,10 @@ while_stmt = {
 for_stmt = {
     "for" ~ "(" ~ identifier ~ "in" ~ expr ~ ")" ~ block
 }
+  -> TypedStatement {
+      stmt: Statement::For(intern($3), $5, $7.statements),
+      span: span($1, $7),
+  }
 
 break_stmt = { "break" ~ ";" }
   -> TypedStatement {
@@ -414,12 +474,12 @@ logical_and = { equality ~ (log_and_op ~ equality)* }
 
 equality = { comparison ~ (eq_op ~ comparison)* }
   -> TypedExpression {
-      fold_binary($1, $2, parse_eq_op)
+      fold_binary($1, $2, BinaryOp::Eq)
   }
 
 comparison = { bitwise_or ~ (cmp_op ~ bitwise_or)* }
   -> TypedExpression {
-      fold_binary($1, $2, parse_cmp_op)
+      fold_binary($1, $2, BinaryOp::Lt)
   }
 
 bitwise_or = { bitwise_xor ~ (bit_or_op ~ bitwise_xor)* }
@@ -439,29 +499,26 @@ bitwise_and = { bit_shift ~ (bit_and_op ~ bit_shift)* }
 
 bit_shift = { addition ~ (shift_op ~ addition)* }
   -> TypedExpression {
-      fold_binary($1, $2, parse_shift_op)
+      fold_binary($1, $2, BinaryOp::Shl)
   }
 
 addition = { multiplication ~ (add_op ~ multiplication)* }
   -> TypedExpression {
-      fold_binary($1, $2, parse_add_op)
+      fold_binary($1, $2, BinaryOp::Add)
   }
 
 multiplication = { unary ~ (mul_op ~ unary)* }
   -> TypedExpression {
-      fold_binary($1, $2, parse_mul_op)
+      fold_binary($1, $2, BinaryOp::Mul)
   }
 
-unary = {
-    unary_op ~ unary
-  | postfix
-}
+unary = { unary_op? ~ postfix }
   -> TypedExpression {
       match $1 {
           Some(op) => TypedExpression {
-              expr: UnaryOp(parse_unary_op(op), Box::new($2)),
+              expr: Expression::UnaryOp(parse_unary_op(op), Box::new($2)),
               ty: $2.ty.clone(),
-              span: span($1, $2),
+              span: span,
           },
           None => $2,
       }
@@ -495,28 +552,35 @@ primary = {
 
 // ===== Lambda/Closure Expression =====
 
-lambda_expr = {
-    "|" ~ lambda_params? ~ "|" ~ (block | expr)
-}
+lambda_expr = { lambda_start ~ lambda_params? ~ lambda_end ~ block }
   -> TypedExpression {
-      expr: Lambda {
-          params: $2.unwrap_or_default(),
+      expr: Expression::Lambda(Lambda {
+          params: vec![],  // TODO: properly parse lambda params
           body: $4,
           captures: vec![],
-      },
+      }),
       ty: Type::Function(vec![], Box::new(Type::Unknown)),
       span: span($1, $4),
   }
 
+// Helper rules for lambda delimiters
+lambda_start = { "|" }
+lambda_end = { "|" }
+
 lambda_params = { lambda_param ~ ("," ~ lambda_param)* }
 lambda_param = { identifier ~ (":" ~ type_expr)? }
+  -> Param {
+      name: intern($1),
+      ty: $2.unwrap_or(Type::Unknown),
+      is_comptime: false,
+  }
 
 // ===== Try Expression =====
 
 try_expr = { "try" ~ postfix }
   -> TypedExpression {
-      expr: Try { expr: Box::new($2) },
-      ty: unwrap_result_type($2.ty),
+      expr: Expression::Try(Try { expr: Box::new($2) }),
+      ty: unwrap_result_type($2.ty.clone()),
       span: span($1, $2),
   }
 
@@ -528,10 +592,10 @@ switch_expr = {
     "}"
 }
   -> TypedExpression {
-      expr: Switch {
+      expr: Expression::Switch(Switch {
           scrutinee: Box::new($3),
           cases: collect_cases($6, $7),
-      },
+      }),
       ty: infer_switch_type($6, $7),
       span: span($1, $9),
   }
@@ -595,11 +659,11 @@ float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
       span: span,
   }
 
-string_literal = { "\"" ~ string_inner ~ "\"" }
+string_literal = @{ "\"" ~ string_inner ~ "\"" }
   -> TypedExpression {
-      expr: Expression::StringLiteral($2.to_string()),
+      expr: Expression::StringLiteral(pair_str.trim_matches('"').to_string()),
       ty: Type::Pointer(Box::new(Type::I8)),
-      span: span($1, $3),
+      span: span,
   }
 
 string_inner = @{ (!("\"" | "\\") ~ ANY)* }
@@ -615,10 +679,10 @@ struct_literal = {
     identifier ~ "{" ~ struct_field_init? ~ ("," ~ struct_field_init)* ~ ","? ~ "}"
 }
   -> TypedExpression {
-      expr: StructLiteral {
+      expr: Expression::StructLiteral(StructLiteral {
           name: intern($1),
           fields: collect_fields($3, $4),
-      },
+      }),
       ty: Type::Named(intern($1)),
       span: span($1, $6),
   }
@@ -646,7 +710,7 @@ identifier_pattern = { ("mut" ~ identifier) | identifier }
 
 literal_pattern = { literal }
   -> Pattern {
-      Pattern::Literal($1)
+      Pattern::Literal(expr_to_literal($1))
   }
 
 enum_pattern = {
