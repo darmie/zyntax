@@ -126,7 +126,28 @@ See [Bytecode Format Specification](./docs/BYTECODE_FORMAT_SPEC.md) for complete
 
 ## 📝 ZynPEG Grammar Format
 
-**ZynPEG** is a parser generator that extends PEG syntax with JSON-based action blocks for constructing TypedAST nodes. It enables runtime grammar interpretation without Rust compilation.
+**ZynPEG** is Zyntax's domain-specific language for defining custom programming language frontends. It extends PEG (Parsing Expression Grammar) syntax with JSON-based semantic actions that construct TypedAST nodes directly from parsed syntax.
+
+### How ZynPEG Works with Zyntax
+
+```text
+┌─────────────────┐      ┌───────────────┐      ┌──────────────┐      ┌──────────────┐
+│  Source Code    │  →   │  ZynPEG       │  →   │  TypedAST    │  →   │   Native     │
+│  (your_lang.x)  │      │  Grammar      │      │  (JSON)      │      │   Binary     │
+└─────────────────┘      └───────────────┘      └──────────────┘      └──────────────┘
+                              ↓
+                         ┌───────────────┐
+                         │  Cranelift/   │
+                         │  LLVM Backend │
+                         └───────────────┘
+```
+
+ZynPEG grammars define both syntax (what patterns to match) and semantics (what AST nodes to create). This enables:
+
+- **Custom Language Frontends**: Define your own language syntax and compile to native code
+- **Runtime Grammar Loading**: No Rust recompilation needed—load grammars dynamically
+- **Seamless Integration**: Output TypedAST that flows through Zyntax's HIR and backend pipeline
+- **Interactive Development**: Test grammar changes instantly with the built-in REPL
 
 ### Quick Example
 
@@ -232,185 +253,6 @@ Goodbye!
 - **Types**: `primitive_type`, `pointer_type`, `array_type`, `named_type`, `function_type`
 
 See [ZynPEG Grammar Specification](./docs/ZYN_GRAMMAR_SPEC.md) for complete documentation.
-
----
-
-## 🔌 Zyn Parser - Zig Language Integration
-
-**Zyn** is Zyntax's parser framework for integrating existing programming languages. The first integration is with the **Zig programming language**, providing a PEG-based parser that compiles Zig code to native executables.
-
-### Why Zig?
-
-Zig provides an excellent foundation for testing Zyntax's compiler infrastructure:
-
-- Modern syntax with explicit control flow
-- Strong static typing without hidden allocations
-- Manual memory management (perfect for testing ownership analysis)
-- Comptime evaluation features
-
-### Current Support (71/71 E2E Tests Passing)
-
-#### ✅ Fully Working Features
-
-**Core Language:**
-
-- Function definitions with typed parameters and return types
-- Local variables with type inference (`var x = 42`)
-- Integer types: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`
-- Boolean type with `true`/`false` literals
-- Lambda/closure expressions with captured variables
-
-**Operators:**
-
-- Arithmetic: `+`, `-`, `*`, `/`, `%`
-- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`
-- Logical: `and`, `or` (short-circuit evaluation)
-- Bitwise: `&`, `|`, `^`, `<<`, `>>`, `~`
-- Unary: `-x`, `!condition`, `~x`
-- Error handling: `orelse`, `catch`
-
-**Control Flow:**
-
-- `if`/`else` statements and expressions
-- `else if` chains
-- `while` loops with conditions
-- `for` loops (C-style: initialization, condition, update)
-- `break` and `continue` statements
-- `return` statements
-- `switch` expressions with pattern matching
-- `defer` and `errdefer` statements
-
-**Error Handling:**
-
-- Optional types: `?T`
-- Error union types: `!T`
-- `try` expression for error propagation
-- `orelse` operator for optional unwrapping
-- `catch` operator for error union handling
-
-**Pattern Matching:**
-
-- `match` expressions on union types (Optional, Result)
-- `if let` syntax for optional unwrapping
-- `switch` expressions with literal and wildcard patterns
-- Discriminant-based conditional branching
-- Pattern variable bindings with value extraction
-- Exhaustiveness checking
-
-**Advanced Features:**
-
-- Struct definitions with typed fields
-- Struct literal initialization: `Point { x: 10, y: 20 }`
-- Field access: `point.x`, `point.y`
-- Array literals: `[_]i32{10, 20, 30}`
-- Array indexing: `arr[i]`
-- Array index assignment: `arr[i] = value`
-- Sized array types: `[N]T`
-- Lambda expressions: `|x| { return x * 2; }`
-- Closures with captured variables
-- Indirect function calls via function pointers
-- Nested expressions with proper precedence
-- Block expressions with implicit returns
-- Enum declarations
-
-#### ✅ All Core Features Working
-
-All Zig language features are now fully functional including:
-
-- Logical operators with proper short-circuit evaluation (`and`, `or`)
-- Continue statements in while loops
-- Array literals and array indexing
-- Lambda/closure expressions with environment capture
-- Bitwise operations
-- Switch expressions
-- Error handling with try/orelse/catch
-- All control flow constructs
-
-### Example: Zig to Native Compilation
-
-**Input Zig Code** (`fibonacci.zyn`):
-
-```zig
-fn fibonacci(n: i32) i32 {
-    if (n <= 1) {
-        return n;
-    }
-    return fibonacci(n - 1) + fibonacci(n - 2);
-}
-
-fn main() i32 {
-    return fibonacci(10);
-}
-```
-
-**Compile and Run:**
-
-```bash
-# Parse Zig → Generate TypedAST → Compile to native → Execute
-zyntax compile fibonacci.zyn --format zyn --run
-# Output: 55
-```
-
-### Parser Architecture
-
-The Zyn parser uses **ZynPEG**, a PEG (Parsing Expression Grammar) framework built on Rust's Pest library:
-
-1. **Grammar Definition** (`zig.pest`): Defines Zig syntax rules
-2. **AST Construction**: Pest parse tree → Zyntax TypedAST
-3. **Type Resolution**: Type inference and checking
-4. **HIR Lowering**: TypedAST → HIR for compilation
-
-### Testing
-
-```bash
-# Run all Zyn parser tests
-cargo test --package zyn_parser
-
-# Run E2E JIT compilation tests
-cargo test --package zyn_parser --test zig_e2e_jit
-
-# Current status: 71/71 tests passing (100%)
-```
-
-### Roadmap
-
-- [x] **Array types and indexing** ✅ (Nov 2025)
-  - Array literals: `[_]i32{10, 20, 30}`
-  - Sized arrays: `[N]T`
-  - Dynamic indexing: `arr[i]`
-  - Array index assignment: `arr[i] = value`
-- [x] **String literals** ✅ (Nov 2025)
-  - Basic string literals: `"Hello, World!"`
-  - Lowered to global constants (`*i8`)
-- [x] **Optional types** ✅ (Nov 2025)
-  - Optional type syntax: `?T` - parses and compiles
-  - `orelse` operator for default values
-- [x] **Error unions** ✅ (Nov 2025)
-  - Error union syntax: `!T` - parses and compiles
-  - `try` expression for error propagation
-  - `catch` operator for error handling
-- [x] **Switch expressions** ✅ (Nov 2025)
-  - Pattern matching on values
-  - Literal and wildcard patterns
-- [x] **Lambda/Closures** ✅ (Nov 2025)
-  - Lambda syntax: `|x| { return x * 2; }`
-  - Captured variable support
-  - Indirect function calls
-- [x] **Bitwise operators** ✅ (Nov 2025)
-  - `&`, `|`, `^`, `<<`, `>>`, `~`
-- [x] **Defer statements** ✅ (Nov 2025)
-  - `defer` and `errdefer` syntax
-- [x] **Enum declarations** ✅ (Nov 2025)
-  - `const Color = enum { red, green, blue };`
-- [x] **Generic functions** ✅ (Nov 2025)
-  - Comptime type parameters: `fn identity(comptime T: type, x: T) T`
-  - Full monomorphization pipeline
-  - Type-specialized function generation
-- [ ] Function overloading
-- [ ] Slice types (`[]T` - grammar exists, needs runtime support)
-- [ ] Comptime evaluation
-
-See [Zyn Parser Features](./docs/language-integrations/ZIG_PARSER_FEATURES.md) for complete feature documentation.
 
 ---
 
