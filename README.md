@@ -201,6 +201,13 @@ REPL Commands:
   :quit, :q, :exit Exit the REPL
   :verbose, :v     Toggle verbose mode
   :clear, :c       Clear the screen
+  :{              Start multi-line input (end with :})
+
+Multi-line Input:
+  - End a line with \ to continue on the next line
+  - Lines with unclosed { automatically continue
+  - Use :{ to start explicit multi-line mode, :} to execute
+  - Press Ctrl+C to cancel multi-line input
 Calculator> :quit
 Goodbye!
 ```

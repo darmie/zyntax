@@ -129,22 +129,26 @@ pub fn repl(
     let _ = rl.load_history(&history_file);
 
     let prompt = format!("{}> ", lang_name.cyan());
+    let continuation_prompt = format!("{}| ", "...".dimmed());
     let mut verbose_mode = verbose;
     let mut line_number = 1;
+    let mut input_buffer = String::new();
+    let mut in_multiline = false;
 
     loop {
-        let readline = rl.readline(&prompt);
+        let current_prompt = if in_multiline { &continuation_prompt } else { &prompt };
+        let readline = rl.readline(current_prompt);
         match readline {
             Ok(line) => {
                 let trimmed = line.trim();
 
-                // Handle empty input
-                if trimmed.is_empty() {
+                // Handle empty input in single-line mode
+                if trimmed.is_empty() && !in_multiline {
                     continue;
                 }
 
-                // Handle REPL commands
-                if trimmed.starts_with(':') {
+                // Handle REPL commands (only in single-line mode)
+                if !in_multiline && trimmed.starts_with(':') {
                     match trimmed {
                         ":quit" | ":q" | ":exit" => {
                             println!("Goodbye!");
@@ -164,12 +168,109 @@ pub fn repl(
                             print!("\x1B[2J\x1B[1;1H");
                             continue;
                         }
+                        ":{" => {
+                            // Start explicit multi-line input
+                            in_multiline = true;
+                            input_buffer.clear();
+                            continue;
+                        }
                         _ => {
                             println!("{} Unknown command: {}", "error:".red(), trimmed);
                             println!("Type :help for available commands");
                             continue;
                         }
                     }
+                }
+
+                // Handle multi-line input
+                if in_multiline {
+                    // Check for end of multi-line block
+                    if trimmed == ":}" || trimmed == "}" && is_block_complete(&input_buffer) {
+                        in_multiline = false;
+                        let input = std::mem::take(&mut input_buffer);
+
+                        // Add complete input to history
+                        let _ = rl.add_history_entry(&input);
+
+                        // Compile and run the multi-line input
+                        match eval_input(&zpeg_module, &input, &backend, opt_level, verbose_mode) {
+                            Ok(result) => {
+                                if let Some(value) = result {
+                                    println!("{} = {}", format!("[{}]", line_number).dimmed(), value.to_string().yellow());
+                                }
+                                line_number += 1;
+                            }
+                            Err(e) => {
+                                println!("{} {}", "error:".red(), e);
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Handle backslash continuation in multi-line mode
+                    let line_to_append = if trimmed.ends_with('\\') {
+                        // Continue on next line, strip the backslash
+                        &trimmed[..trimmed.len()-1]
+                    } else {
+                        &line
+                    };
+
+                    // Append line to buffer
+                    if !input_buffer.is_empty() {
+                        input_buffer.push('\n');
+                    }
+                    input_buffer.push_str(line_to_append);
+
+                    // If line ended with backslash, continue collecting
+                    if trimmed.ends_with('\\') {
+                        continue;
+                    }
+
+                    // Check if we should auto-complete (balanced braces)
+                    if is_block_complete(&input_buffer) && !trimmed.is_empty() {
+                        // Auto-complete if braces are balanced and we're not starting a new block
+                        let open_count = input_buffer.chars().filter(|&c| c == '{').count();
+                        let close_count = input_buffer.chars().filter(|&c| c == '}').count();
+
+                        if open_count > 0 && open_count == close_count {
+                            in_multiline = false;
+                            let input = std::mem::take(&mut input_buffer);
+
+                            let _ = rl.add_history_entry(&input);
+
+                            match eval_input(&zpeg_module, &input, &backend, opt_level, verbose_mode) {
+                                Ok(result) => {
+                                    if let Some(value) = result {
+                                        println!("{} = {}", format!("[{}]", line_number).dimmed(), value.to_string().yellow());
+                                    }
+                                    line_number += 1;
+                                }
+                                Err(e) => {
+                                    println!("{} {}", "error:".red(), e);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Check for backslash continuation (line ends with \)
+                if trimmed.ends_with('\\') {
+                    in_multiline = true;
+                    // Remove the trailing backslash
+                    input_buffer = trimmed[..trimmed.len()-1].to_string();
+                    continue;
+                }
+
+                // Check if input starts a multi-line block (has unclosed braces)
+                let open_count = trimmed.chars().filter(|&c| c == '{').count();
+                let close_count = trimmed.chars().filter(|&c| c == '}').count();
+
+                if open_count > close_count {
+                    // Start multi-line mode
+                    in_multiline = true;
+                    input_buffer = line.clone();
+                    continue;
                 }
 
                 // Add to history
@@ -189,7 +290,14 @@ pub fn repl(
                 }
             }
             Err(ReadlineError::Interrupted) => {
-                println!("^C");
+                if in_multiline {
+                    // Cancel multi-line input
+                    println!("^C (cancelled multi-line input)");
+                    in_multiline = false;
+                    input_buffer.clear();
+                } else {
+                    println!("^C");
+                }
                 continue;
             }
             Err(ReadlineError::Eof) => {
@@ -215,9 +323,40 @@ fn print_repl_help() {
     println!("  :quit, :q, :exit Exit the REPL");
     println!("  :verbose, :v     Toggle verbose mode");
     println!("  :clear, :c       Clear the screen");
+    println!("  :{{              Start multi-line input (end with :}})");
+    println!();
+    println!("{}", "Multi-line Input:".green().bold());
+    println!("  - End a line with \\ to continue on the next line");
+    println!("  - Lines with unclosed {{ automatically continue");
+    println!("  - Use :{{ to start explicit multi-line mode, :}} to execute");
+    println!("  - Press Ctrl+C to cancel multi-line input");
     println!();
     println!("Enter expressions to evaluate them.");
     println!("The result will be compiled and executed with JIT.");
+}
+
+/// Check if braces are balanced in the input
+fn is_block_complete(input: &str) -> bool {
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for ch in input.chars() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => depth += 1,
+            '}' if !in_string => depth -= 1,
+            _ => {}
+        }
+    }
+
+    depth == 0
 }
 
 /// Compile grammar for REPL use
