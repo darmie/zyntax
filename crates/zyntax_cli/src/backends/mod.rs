@@ -40,3 +40,16 @@ pub fn compile(
         Backend::LlvmAot => compile_llvm(module, output, opt_level, verbose),
     }
 }
+
+/// Compile and run HIR module for REPL, returning the result value
+pub fn compile_and_run_repl(
+    module: HirModule,
+    backend: &Backend,
+    opt_level: u8,
+    verbose: bool,
+) -> Result<i64, Box<dyn std::error::Error>> {
+    match backend {
+        Backend::CraneliftJit => cranelift_jit::compile_and_run_repl(module, opt_level, verbose),
+        Backend::LlvmAot => Err("LLVM backend does not support REPL mode".into()),
+    }
+}

@@ -57,6 +57,21 @@ pub enum Commands {
         run: bool,
     },
 
+    /// Start an interactive REPL with a ZynPEG grammar
+    Repl {
+        /// ZynPEG grammar file (.zyn) defining the language parser
+        #[arg(short, long, value_name = "GRAMMAR")]
+        grammar: PathBuf,
+
+        /// Backend to use (jit only for REPL)
+        #[arg(short, long, default_value = "jit")]
+        backend: String,
+
+        /// Optimization level (0-3)
+        #[arg(short = 'O', long, default_value = "0")]
+        opt_level: u8,
+    },
+
     /// Display version information
     Version,
 }
@@ -86,6 +101,21 @@ impl Commands {
             _ => None,
         }
     }
+
+    pub fn repl_args(&self) -> Option<ReplArgs> {
+        match self {
+            Commands::Repl {
+                grammar,
+                backend,
+                opt_level,
+            } => Some(ReplArgs {
+                grammar: grammar.clone(),
+                backend: backend.clone(),
+                opt_level: *opt_level,
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -98,4 +128,11 @@ pub struct CompileArgs {
     pub opt_level: u8,
     pub format: String,
     pub run: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplArgs {
+    pub grammar: PathBuf,
+    pub backend: String,
+    pub opt_level: u8,
 }

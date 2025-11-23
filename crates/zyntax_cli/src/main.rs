@@ -44,6 +44,19 @@ fn main() {
             }
         }
 
+        Commands::Repl { .. } => {
+            if let Some(args) = cli.command.repl_args() {
+                commands::repl(
+                    args.grammar,
+                    args.backend,
+                    args.opt_level,
+                    cli.verbose,
+                )
+            } else {
+                unreachable!("Repl command should have repl args")
+            }
+        }
+
         Commands::Version => commands::version(),
     };
 

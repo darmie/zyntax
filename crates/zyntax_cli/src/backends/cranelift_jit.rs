@@ -155,3 +155,102 @@ fn execute_main(
 
     Ok(())
 }
+
+/// Compile and run for REPL mode - returns the result value directly
+pub fn compile_and_run_repl(
+    module: HirModule,
+    _opt_level: u8,
+    verbose: bool,
+) -> Result<i64, Box<dyn std::error::Error>> {
+    // Create plugin registry (minimal for REPL)
+    let mut registry = zyntax_compiler::plugin::PluginRegistry::new();
+    registry.register(zyntax_runtime::get_plugin())
+        .map_err(|e| format!("Failed to register stdlib plugin: {}", e))?;
+    registry.register(haxe_zyntax_runtime::get_plugin())
+        .map_err(|e| format!("Failed to register Haxe plugin: {}", e))?;
+
+    let runtime_symbols = registry.collect_symbols();
+
+    let mut backend = CraneliftBackend::with_runtime_symbols(&runtime_symbols)
+        .map_err(|e| format!("Failed to initialize backend: {}", e))?;
+
+    backend
+        .compile_module(&module)
+        .map_err(|e| format!("Compilation failed: {}", e))?;
+
+    backend
+        .finalize_definitions()
+        .map_err(|e| format!("Failed to finalize: {}", e))?;
+
+    // Find and execute main function, returning the result
+    execute_main_repl(&backend, &module, verbose)
+}
+
+/// Execute main function for REPL and return the result value
+fn execute_main_repl(
+    backend: &CraneliftBackend,
+    module: &HirModule,
+    verbose: bool,
+) -> Result<i64, Box<dyn std::error::Error>> {
+    // Find main function by name
+    let (main_id, main_fn) = module
+        .functions
+        .iter()
+        .find(|(_, func)| {
+            func.name.resolve_global()
+                .map(|name| name == "main")
+                .unwrap_or(false)
+        })
+        .ok_or("No 'main' function found in module")?;
+
+    let main_id = *main_id;
+
+    let fn_ptr = backend
+        .get_function_ptr(main_id)
+        .ok_or("Failed to get main function pointer")?;
+
+    if verbose {
+        println!("{} Executing at {:?}...", "info:".cyan(), fn_ptr);
+    }
+
+    // Execute and return value
+    let result = unsafe {
+        if main_fn.signature.returns.is_empty() {
+            let f: fn() = std::mem::transmute(fn_ptr);
+            f();
+            0
+        } else {
+            match &main_fn.signature.returns[0] {
+                zyntax_compiler::hir::HirType::I32 => {
+                    let f: fn() -> i32 = std::mem::transmute(fn_ptr);
+                    f() as i64
+                }
+                zyntax_compiler::hir::HirType::I64 => {
+                    let f: fn() -> i64 = std::mem::transmute(fn_ptr);
+                    f()
+                }
+                zyntax_compiler::hir::HirType::F32 => {
+                    let f: fn() -> f32 = std::mem::transmute(fn_ptr);
+                    f() as i64
+                }
+                zyntax_compiler::hir::HirType::F64 => {
+                    let f: fn() -> f64 = std::mem::transmute(fn_ptr);
+                    f() as i64
+                }
+                zyntax_compiler::hir::HirType::Void => {
+                    let f: fn() = std::mem::transmute(fn_ptr);
+                    f();
+                    0
+                }
+                _ => {
+                    return Err(format!(
+                        "Unsupported return type: {:?}",
+                        main_fn.signature.returns[0]
+                    ).into());
+                }
+            }
+        }
+    };
+
+    Ok(result)
+}
