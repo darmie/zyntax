@@ -1,10 +1,14 @@
 # Zyntax Compiler - Development Backlog
 
-**Last Updated**: November 22, 2025
+**Last Updated**: November 23, 2025
 **Current Status**: Production-Ready Core (100% tests passing, 71/71 Zig tests)
 
 **Recent Progress**:
 
+- ✅ **ZynPEG Integration Test with JIT** (Full pipeline: ZynPEG grammar → pest + AST builder → TypedAST → HIR → Cranelift JIT → Execution)
+- ✅ **Grammar Conventions Documentation** (`crates/zyn_peg/GRAMMAR_CONVENTIONS.md` - best practices for .zyn files)
+- ✅ **Fixed fn_params bug** (all_children iteration instead of .find() to collect ALL parameters)
+- ✅ **Fixed binary expressions** (fold_binary pattern for proper left-associative parsing)
 - ✅ **Try expressions in loops fixed** (SSA continuation_block handling for Jump terminators)
 - ✅ **Generic function monomorphization** (comptime type params, type_args extraction, full pipeline)
 - ✅ **Pointer JIT execution** (address-taken variables allocated on stack, full load/store support)
@@ -32,11 +36,11 @@
 
 ## 🎯 Active Development
 
-### 0. ZynPEG Parser Generator (HIGHEST PRIORITY) ✅ PHASE 1 COMPLETE
+### 0. ZynPEG Parser Generator (HIGHEST PRIORITY) ✅ PHASE 3 COMPLETE
 
 **Goal**: Build multi-language frontend infrastructure using PEG parser generator
 
-**Status**: Phase 1 Complete (100%), Phase 2 Planned
+**Status**: Phase 1-3 Complete, Phase 4 (Multi-language) Planned
 
 **Phase 1: Calculator POC** ✅ **COMPLETE**
 - [x] Create `crates/zyn_parser` workspace crate
@@ -57,7 +61,7 @@
 ✅ 5 TypedAST validation tests
 ```
 
-**Phase 2: Zig Subset** 🚧 **IN PROGRESS** (Est. 4-6 weeks)
+**Phase 2: Zig Subset** ✅ **COMPLETE**
 - [x] Implement zig.pest grammar (350+ lines) ✅
 - [x] Support: structs, functions, control flow ✅
 - [x] Variables, operators, type system ✅
@@ -81,15 +85,29 @@
 - [x] **Null/undefined literals** (parsing support) ✅
 - [x] **Union declarations** (grammar: `union { }` and `union(enum) { }`) ✅
 - [x] **Error set declarations** (grammar: `error { NotFound, ... }`) ✅
-- [ ] Pattern matching - None literal (arena symbol resolution issue)
-- [ ] String operations (needs stdlib integration via plugin system)
 - [x] **Generic functions** (parsing + monomorphization complete) ✅
 - [x] Generic call site type inference ✅
 - [x] **Address-of operator** (`&expr` creates reference) ✅
 - [x] **Pointer dereference** (`ptr.*` dereferences pointer) ✅
 - [x] **Pointer JIT execution** (SSA stack allocation for address-taken vars) ✅
 - [x] 71/71 E2E JIT tests passing (100%) ✅
-- [ ] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
+- [x] Documentation: [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)
+
+**Phase 3: TypedAST Integration** ✅ **COMPLETE**
+
+- [x] ZynPEG grammar generates pest + AST builder code
+- [x] Generated code builds `zyntax_typed_ast::TypedProgram` directly
+- [x] Full JIT compilation test (parse → TypedAST → HIR → Cranelift → Execute)
+- [x] `add(10, 20) = 30` works in integration test
+- [x] **Grammar Conventions Documentation** (`crates/zyn_peg/GRAMMAR_CONVENTIONS.md`)
+- [x] Fixed `fn_params` bug (use `all_children.filter()` not `.find()`)
+- [x] Fixed binary expression rules (use `fold_binary` pattern)
+- [x] **NOTE**: JIT tests require `--test-threads=1` (Cranelift not thread-safe)
+
+**Remaining Items** (deferred):
+
+- [ ] Pattern matching - None literal (arena symbol resolution issue)
+- [ ] String operations (needs stdlib integration via plugin system)
 
 **Documents**:
 - [Implementation Plan](docs/ZYN_PARSER_IMPLEMENTATION.md)

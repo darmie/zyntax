@@ -1,6 +1,12 @@
 //! End-to-End JIT Execution Tests for ZynPEG Phase 1 POC
 //!
 //! Tests: Source → TypedAST → HIR → Cranelift JIT → Execution
+//!
+//! NOTE: These tests must run with `--test-threads=1` because Cranelift JIT
+//! compilation and execution is not thread-safe. Running in parallel causes
+//! segmentation faults when multiple tests try to execute JIT-compiled code.
+//!
+//! Run with: `cargo test --package zyn_parser --test e2e_jit -- --test-threads=1`
 
 use zyn_parser::{CalculatorParser, TypedAstBuilder};
 use pest::Parser;
