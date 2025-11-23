@@ -258,18 +258,31 @@ See [ZynPEG Grammar Specification](./docs/ZYN_GRAMMAR_SPEC.md) for complete docu
 
 ## 🔌 Frontend Integrations
 
-Zyntax supports multiple language frontends through its TypedAST intermediate representation:
+Zyntax supports multiple language frontends through its TypedAST intermediate representation. Create your own programming language or integrate existing ones:
 
-### ✅ Zyn - Zig Language Parser (Native Integration)
+### ✅ Zyn - Create Your Own Language
 
-Compile Zig-syntax code directly with the integrated Zyn parser:
+Define a custom language with Zyn grammar and compile to native code:
 
 ```bash
-# Compile Zig code to native executable
-zyntax compile program.zyn --format zyn -o myprogram --run
+# Write your language grammar (mylang.zyn)
+# Then compile source files written in your language
+zyntax compile --source program.mylang --grammar mylang.zyn --format zyn --run
+
+# Or use interactive REPL to test your language
+zyntax repl --grammar mylang.zyn
 ```
 
-**Status:** ✅ **Production-ready** - 71/71 E2E tests passing, all core language features complete
+**Output Targets:**
+
+| Target | Description |
+|--------|-------------|
+| **TypedAST** | JSON intermediate representation for tooling integration |
+| **Bytecode** | Portable `.zbc` format for distribution and caching |
+| **JIT** | Cranelift-powered just-in-time compilation |
+| **AOT** | LLVM-based ahead-of-time native executables |
+
+**Status:** ✅ **Production-ready** - Full compilation pipeline with REPL support
 
 ### ✅ Haxe Integration (via Reflaxe)
 
@@ -289,10 +302,10 @@ zyntax compile out/*.json -o myprogram --run
 
 See [Haxe Integration Guide](./docs/HAXE_INTEGRATION.md) for details.
 
-### 🔜 Planned Integrations
+### 🔜 Other Integrations
 
 - **Whirlwind** - Direct AST adapter (in progress)
-- **Custom Languages** - Use TypedAST builder API or JSON format
+- **Custom JSON** - Generate TypedAST JSON directly from any toolchain
 
 ---
 
