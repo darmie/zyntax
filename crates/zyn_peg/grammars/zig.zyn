@@ -178,7 +178,7 @@ fn_decl = {
 
 fn_params = { fn_param ~ ("," ~ fn_param)* }
   -> Vec<Param> {
-      $1.collect()
+      collect_params($1, $2)
   }
 fn_param  = { comptime_param | regular_param }
 comptime_param = { "comptime" ~ identifier ~ ":" ~ "type" }
@@ -532,11 +532,36 @@ postfix = {
   }
 
 postfix_op = {
-    ".*"
-  | "." ~ identifier
-  | "[" ~ expr ~ "]"
-  | "(" ~ args? ~ ")"
+    deref_op
+  | field_op
+  | index_op
+  | call_op
 }
+
+deref_op = { ".*" }
+  -> PostfixOp {
+      PostfixOp::Deref
+  }
+
+field_op = { "." ~ identifier }
+  -> PostfixOp {
+      PostfixOp::Field(intern($2))
+  }
+
+index_op = { "[" ~ expr ~ "]" }
+  -> PostfixOp {
+      PostfixOp::Index($2)
+  }
+
+call_op = { "(" ~ arg_list? ~ ")" }
+  -> PostfixOp {
+      PostfixOp::Call($2.unwrap_or_default())
+  }
+
+arg_list = { expr ~ ("," ~ expr)* }
+  -> Vec<TypedExpression> {
+      collect_exprs($1, $2)
+  }
 
 args = { expr ~ ("," ~ expr)* }
 

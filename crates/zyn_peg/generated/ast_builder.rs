@@ -307,17 +307,17 @@ impl AstBuilderContext {
         let pair_str = pair.as_str();
         let mut children = pair.into_inner().peekable();
         let all_children: Vec<_> = children.collect();
-        let mut child_iter = all_children.iter();
-        let child_fn_param = all_children
+        // Collect ALL fn_param children, not just the first one
+        let all_fn_params: Vec<_> = all_children
             .iter()
-            .find(|p| p.as_rule() == Rule::fn_param)
-            .cloned();
-        Ok({
-            child_fn_param
-                .iter()
-                .filter_map(|p| self.build_fn_param(p.clone()).ok())
-                .collect()
-        })
+            .filter(|p| p.as_rule() == Rule::fn_param)
+            .cloned()
+            .collect();
+        // Build all params from the collected fn_param children
+        Ok(all_fn_params
+            .iter()
+            .filter_map(|p| self.build_fn_param(p.clone()).ok())
+            .collect())
     }
     #[doc = r" Build a #return_type from a parsed rule"]
     pub fn build_comptime_param(
@@ -1602,6 +1602,114 @@ impl AstBuilderContext {
         })
     }
     #[doc = r" Build a #return_type from a parsed rule"]
+    pub fn build_deref_op(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<PostfixOp, ParseError> {
+        let span = Span::from_pest(pair.as_span());
+        let pair_str = pair.as_str();
+        let mut children = pair.into_inner().peekable();
+        let all_children: Vec<_> = children.collect();
+        let mut child_iter = all_children.iter();
+        Ok({ PostfixOp::Deref })
+    }
+    #[doc = r" Build a #return_type from a parsed rule"]
+    pub fn build_field_op(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<PostfixOp, ParseError> {
+        let span = Span::from_pest(pair.as_span());
+        let pair_str = pair.as_str();
+        let mut children = pair.into_inner().peekable();
+        let all_children: Vec<_> = children.collect();
+        let mut child_iter = all_children.iter();
+        let child_identifier = all_children
+            .iter()
+            .find(|p| p.as_rule() == Rule::identifier)
+            .cloned();
+        Ok({
+            PostfixOp::Field(
+                child_identifier
+                    .as_ref()
+                    .map(|p| p.as_str().to_string())
+                    .unwrap_or_default(),
+            )
+        })
+    }
+    #[doc = r" Build a #return_type from a parsed rule"]
+    pub fn build_index_op(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<PostfixOp, ParseError> {
+        let span = Span::from_pest(pair.as_span());
+        let pair_str = pair.as_str();
+        let mut children = pair.into_inner().peekable();
+        let all_children: Vec<_> = children.collect();
+        let mut child_iter = all_children.iter();
+        let child_expr = all_children
+            .iter()
+            .find(|p| p.as_rule() == Rule::expr)
+            .cloned();
+        Ok({
+            PostfixOp::Index(
+                child_expr
+                    .as_ref()
+                    .and_then(|p| self.build_expr(p.clone()).ok())
+                    .unwrap_or_default(),
+            )
+        })
+    }
+    #[doc = r" Build a #return_type from a parsed rule"]
+    pub fn build_call_op(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<PostfixOp, ParseError> {
+        let span = Span::from_pest(pair.as_span());
+        let pair_str = pair.as_str();
+        let mut children = pair.into_inner().peekable();
+        let all_children: Vec<_> = children.collect();
+        let mut child_iter = all_children.iter();
+        let child_arg_list = all_children
+            .iter()
+            .find(|p| p.as_rule() == Rule::arg_list)
+            .cloned();
+        Ok({
+            PostfixOp::Call(
+                child_arg_list
+                    .as_ref()
+                    .and_then(|p| self.build_arg_list(p.clone()).ok())
+                    .unwrap_or_default(),
+            )
+        })
+    }
+    #[doc = r" Build a #return_type from a parsed rule"]
+    pub fn build_arg_list(
+        &mut self,
+        pair: pest::iterators::Pair<Rule>,
+    ) -> Result<Vec<TypedExpression>, ParseError> {
+        let span = Span::from_pest(pair.as_span());
+        let pair_str = pair.as_str();
+        let mut children = pair.into_inner().peekable();
+        let all_children: Vec<_> = children.collect();
+        let mut child_iter = all_children.iter();
+        let child_expr = all_children
+            .iter()
+            .find(|p| p.as_rule() == Rule::expr)
+            .cloned();
+        Ok({
+            collect_exprs(
+                child_expr
+                    .as_ref()
+                    .and_then(|p| self.build_expr(p.clone()).ok())
+                    .unwrap_or_default(),
+                child_expr
+                    .iter()
+                    .filter_map(|p| self.build_expr(p.clone()).ok())
+                    .collect::<Vec<_>>(),
+            )
+        })
+    }
+    #[doc = r" Build a #return_type from a parsed rule"]
     pub fn build_lambda_expr(
         &mut self,
         pair: pest::iterators::Pair<Rule>,
@@ -2251,12 +2359,14 @@ impl AstBuilderContext {
     pub fn build_postfix_op(
         &mut self,
         pair: pest::iterators::Pair<Rule>,
-    ) -> Result<TypedExpression, ParseError> {
+    ) -> Result<PostfixOp, ParseError> {
         let span = Span::from_pest(pair.as_span());
         if let Some(inner) = pair.into_inner().next() {
             match inner.as_rule() {
-                Rule::expr => self.build_expr(inner),
-                Rule::args => self.build_args(inner),
+                Rule::deref_op => self.build_deref_op(inner),
+                Rule::field_op => self.build_field_op(inner),
+                Rule::index_op => self.build_index_op(inner),
+                Rule::call_op => self.build_call_op(inner),
                 _ => Err(ParseError(format!(
                     "Unexpected rule in {}: {:?}",
                     stringify!(build_postfix_op),

@@ -250,7 +250,7 @@ pub struct FnDecl {
     pub is_export: bool,
     pub is_extern: bool,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Param {
     pub name: String,
     pub ty: Type,
@@ -485,12 +485,72 @@ pub fn parse_unary_op<T>(_op: T) -> UnaryOp {
     UnaryOp::Neg
 }
 #[doc = r" Fold binary operations"]
-pub fn fold_binary<T, U>(_first: T, _rest: U, _default_op: BinaryOp) -> TypedExpression {
-    TypedExpression::default()
+pub fn fold_binary(
+    first: TypedExpression,
+    rest: Vec<TypedExpression>,
+    default_op: BinaryOp,
+) -> TypedExpression {
+    if rest.is_empty() {
+        return first;
+    }
+    rest.into_iter().fold(first, |left, right| {
+        let result_ty = match default_op {
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge
+            | BinaryOp::And
+            | BinaryOp::Or => Type::Bool,
+            BinaryOp::Orelse => left.ty.unwrap_optional(),
+            BinaryOp::Catch => left.ty.unwrap_result(),
+            _ => left.ty.clone(),
+        };
+        TypedExpression {
+            expr: Expression::BinaryOp(default_op, Box::new(left.clone()), Box::new(right.clone())),
+            ty: result_ty,
+            span: Span::merge(&left.span, &right.span),
+        }
+    })
 }
 #[doc = r" Fold postfix operations"]
-pub fn fold_postfix<T, U>(_base: T, _ops: U) -> TypedExpression {
-    TypedExpression::default()
+pub fn fold_postfix(base: TypedExpression, ops: Vec<PostfixOp>) -> TypedExpression {
+    ops.into_iter().fold(base, |expr, op| {
+        let span = expr.span.clone();
+        match op {
+            PostfixOp::Deref => TypedExpression {
+                ty: expr.ty.deref(),
+                expr: Expression::Deref(Box::new(expr)),
+                span,
+            },
+            PostfixOp::Field(name) => TypedExpression {
+                ty: Type::Unknown,
+                expr: Expression::FieldAccess(Box::new(expr), name),
+                span,
+            },
+            PostfixOp::Index(index) => TypedExpression {
+                ty: expr.ty.element_type(),
+                expr: Expression::Index(Box::new(expr), Box::new(index)),
+                span,
+            },
+            PostfixOp::Call(args) => TypedExpression {
+                ty: expr.ty.return_type(),
+                expr: Expression::Call(Box::new(expr), args),
+                span,
+            },
+            PostfixOp::OptionalUnwrap => TypedExpression {
+                ty: expr.ty.unwrap_optional(),
+                expr: Expression::UnaryOp(UnaryOp::Try, Box::new(expr)),
+                span,
+            },
+            PostfixOp::TryUnwrap => TypedExpression {
+                ty: expr.ty.unwrap_result(),
+                expr: Expression::UnaryOp(UnaryOp::Try, Box::new(expr)),
+                span,
+            },
+        }
+    })
 }
 #[doc = r" Collect switch cases"]
 pub fn collect_cases<T, U>(_scrutinee: T, _cases: U) -> Vec<(Pattern, TypedExpression)> {
@@ -500,9 +560,21 @@ pub fn collect_cases<T, U>(_scrutinee: T, _cases: U) -> Vec<(Pattern, TypedExpre
 pub fn infer_switch_type<T, U>(_scrutinee: T, _cases: U) -> Type {
     Type::Unknown
 }
+#[doc = r" Collect function parameters"]
+pub fn collect_params(first: Param, rest: Vec<Param>) -> Vec<Param> {
+    let mut result = vec![first];
+    result.extend(rest);
+    result
+}
 #[doc = r" Collect struct fields"]
 pub fn collect_fields<T, U>(_first: T, _rest: U) -> Vec<(String, TypedExpression)> {
     vec![]
+}
+#[doc = r" Collect expressions into a vector"]
+pub fn collect_exprs(first: TypedExpression, rest: Vec<TypedExpression>) -> Vec<TypedExpression> {
+    let mut result = vec![first];
+    result.extend(rest);
+    result
 }
 #[doc = r" Assignment operators"]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

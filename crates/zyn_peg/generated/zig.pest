@@ -109,11 +109,16 @@ multiplication = { unary ~ (mul_op ~ unary)*  }
 unary = { unary_op? ~ postfix  }
 postfix = { primary ~ postfix_op*
  }
-postfix_op = { ".*"
-  | "." ~ identifier
-  | "[" ~ expr ~ "]"
-  | "(" ~ args? ~ ")"
+postfix_op = { deref_op
+  | field_op
+  | index_op
+  | call_op
  }
+deref_op = { ".*"  }
+field_op = { "." ~ identifier  }
+index_op = { "[" ~ expr ~ "]"  }
+call_op = { "(" ~ arg_list? ~ ")"  }
+arg_list = { expr ~ ("," ~ expr)*  }
 args = { expr ~ ("," ~ expr)*  }
 primary = { literal
   | struct_literal

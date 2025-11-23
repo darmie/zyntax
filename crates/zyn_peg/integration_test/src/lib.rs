@@ -372,3 +372,23 @@ const Point = struct {
         }
     }
 }
+
+// =========================================================================
+// NOTE ON JIT EXECUTION TESTS
+// =========================================================================
+// JIT execution tests are NOT included in this integration test because
+// ZynPEG currently generates its own TypedAST types that are different from
+// zyntax_typed_ast. Converting between them requires significant type mapping
+// due to different type representations (e.g., Type::I32 vs Type::Primitive(PrimitiveType::I32)).
+//
+// The proper solution is to modify ZynPEG's generator to directly use
+// zyntax_typed_ast types. Until then, JIT execution testing should be done
+// through the existing tests in crates/zyn_parser/tests/zig_e2e_jit.rs
+// which uses the hand-written zyn_parser that properly integrates with
+// zyntax_typed_ast.
+//
+// TODO: Modify ZynPEG generator to:
+// 1. Import and use zyntax_typed_ast types directly
+// 2. Generate action code that constructs zyntax_typed_ast::TypedExpression
+// 3. Use InternedString instead of String
+// 4. Use Type::Primitive(PrimitiveType::I32) instead of simple Type::I32
