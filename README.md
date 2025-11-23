@@ -176,6 +176,33 @@ zyntax compile --source input.calc --grammar calc.zyn --format zyn --run
 
 # Verbose mode shows compilation steps
 zyntax compile -v --source code.mylang --grammar mylang.zyn --format zyn -o output
+
+# Interactive REPL mode
+zyntax repl --grammar calc.zyn
+```
+
+### Interactive REPL
+
+Start an interactive session to evaluate expressions on the fly:
+
+```
+$ zyntax repl --grammar examples/zpeg_test/calc.zyn
+Zyntax REPL
+Grammar: examples/zpeg_test/calc.zyn
+✓ Calculator grammar loaded (11 rules)
+
+Calculator> 2 + 3 * 4
+[1] = 14
+Calculator> (10 + 5) * 2
+[2] = 30
+Calculator> :help
+REPL Commands:
+  :help, :h, :?    Show this help message
+  :quit, :q, :exit Exit the REPL
+  :verbose, :v     Toggle verbose mode
+  :clear, :c       Clear the screen
+Calculator> :quit
+Goodbye!
 ```
 
 ### Key Features
