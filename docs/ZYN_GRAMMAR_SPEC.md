@@ -204,32 +204,65 @@ Using named arguments makes grammars self-documenting. The `store` field saves t
 
 **Available node types:**
 
+**Literals:**
+
 | Node Type | Arguments | Description |
 |-----------|-----------|-------------|
 | `int_literal` | value: i64 | Create integer literal |
 | `float_literal` | value: f64 | Create float literal |
 | `string_literal` | value: string | Create string literal |
 | `bool_literal` | value: bool | Create boolean literal |
+| `char_literal` | value: string | Create character literal (first char of string) |
+
+**Expressions:**
+
+| Node Type | Arguments | Description |
+|-----------|-----------|-------------|
 | `identifier` | name: string | Create identifier expression |
+| `variable` / `var_ref` | name: string | Create variable reference |
 | `binary_op` | op, left, right | Create binary operation |
-| `unary_op` | op, operand | Create unary operation |
-| `call_expr` | callee, args[] | Create function call expression |
-| `index` | array, index | Create array index |
+| `unary_op` | op / operator, operand | Create unary operation |
+| `call_expr` / `call` | callee, args[] | Create function call expression |
+| `method_call` | receiver, method, args[] | Create method call expression |
+| `index` / `index_expr` | object / array, index | Create array/index access |
 | `field_access` | object, field | Create field access |
-| `var_decl` | name, type?, init?, is_const | Create variable declaration |
-| `assignment` | target, value | Create assignment |
+| `array` / `array_literal` | elements[] | Create array literal |
+| `struct_literal` | name, fields[] | Create struct literal |
+| `cast` | expr, target_type / type | Create cast expression |
+| `lambda` | params[], body | Create lambda expression |
+
+**Statements:**
+
+| Node Type | Arguments | Description |
+|-----------|-----------|-------------|
+| `let_stmt` / `var_decl` | name, type?, init / value?, is_const / const? | Create variable declaration |
+| `assignment` / `assign` | target, value | Create assignment |
 | `return_stmt` | value? | Create return statement |
-| `if` | condition, then, else? | Create if statement |
-| `while` | condition, body | Create while loop |
-| `for` | iterator, iterable, body | Create for loop |
+| `if_stmt` / `if` | condition, then / then_block, else / else_block? | Create if statement |
+| `while_stmt` / `while` | condition, body | Create while loop |
+| `for_stmt` / `for` | variable / iterator, iterable, body | Create for loop |
+| `break_stmt` / `break` | value? | Create break statement |
+| `continue_stmt` / `continue` | - | Create continue statement |
+| `expression_stmt` | expr | Create expression statement |
 | `block` | statements[] | Create block |
+
+**Declarations:**
+
+| Node Type | Arguments | Description |
+|-----------|-----------|-------------|
 | `function` | name, params[], body | Create function declaration |
 | `param` | name, type | Create parameter |
-| `primitive_type` | name | Create primitive type |
+| `program` | declarations[] | Create program with declarations |
+
+**Types:**
+
+| Node Type | Arguments | Description |
+|-----------|-----------|-------------|
+| `primitive_type` | name | Create primitive type (i32, i64, bool, etc.) |
 | `pointer_type` | pointee | Create pointer type |
 | `array_type` | element, size? | Create array type |
-| `named_type` | name | Create named type |
-| `program` | declarations[] | Create program with declarations |
+| `named_type` | name | Create named/user type |
+| `function_type` | params[], return_type | Create function type |
 
 #### `get_child` - Access Child Node
 

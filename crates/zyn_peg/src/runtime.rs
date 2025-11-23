@@ -250,14 +250,35 @@ pub trait AstHostFunctions {
     /// Create an identifier expression
     fn create_identifier(&mut self, name: &str) -> NodeHandle;
 
+    /// Create a character literal
+    fn create_char_literal(&mut self, value: char) -> NodeHandle;
+
+    /// Create a variable reference expression
+    fn create_variable(&mut self, name: &str) -> NodeHandle;
+
     /// Create a function call expression
     fn create_call(&mut self, callee: NodeHandle, args: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a method call expression
+    fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle;
 
     /// Create an array/index access expression
     fn create_index(&mut self, array: NodeHandle, index: NodeHandle) -> NodeHandle;
 
     /// Create a field access expression
     fn create_field_access(&mut self, object: NodeHandle, field: &str) -> NodeHandle;
+
+    /// Create an array literal expression
+    fn create_array(&mut self, elements: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a struct literal expression
+    fn create_struct_literal(&mut self, name: &str, fields: Vec<(String, NodeHandle)>) -> NodeHandle;
+
+    /// Create a cast expression
+    fn create_cast(&mut self, expr: NodeHandle, target_type: NodeHandle) -> NodeHandle;
+
+    /// Create a lambda expression
+    fn create_lambda(&mut self, params: Vec<NodeHandle>, body: NodeHandle) -> NodeHandle;
 
     // ========== Statements ==========
 
@@ -295,6 +316,24 @@ pub trait AstHostFunctions {
 
     /// Create an expression statement
     fn create_expr_stmt(&mut self, expr: NodeHandle) -> NodeHandle;
+
+    /// Create a let/variable declaration (alias for create_var_decl)
+    fn create_let(
+        &mut self,
+        name: &str,
+        ty: Option<NodeHandle>,
+        init: Option<NodeHandle>,
+        is_const: bool,
+    ) -> NodeHandle;
+
+    /// Create a break statement
+    fn create_break(&mut self, value: Option<NodeHandle>) -> NodeHandle;
+
+    /// Create a continue statement
+    fn create_continue(&mut self) -> NodeHandle;
+
+    /// Create an expression statement (alias)
+    fn create_expression_stmt(&mut self, expr: NodeHandle) -> NodeHandle;
 
     // ========== Types ==========
 
@@ -1237,6 +1276,135 @@ impl AstHostFunctions for TypedAstBuilder {
         // Spans are handled inline during node creation
         // This could be extended to update spans if needed
     }
+
+    fn create_char_literal(&mut self, value: char) -> NodeHandle {
+        let span = self.default_span();
+        let expr = self.inner.char_literal(value, span);
+        self.store_expr(expr)
+    }
+
+    fn create_let(
+        &mut self,
+        name: &str,
+        ty: Option<NodeHandle>,
+        init: Option<NodeHandle>,
+        is_const: bool,
+    ) -> NodeHandle {
+        // Delegate to create_var_decl
+        self.create_var_decl(name, ty, init, is_const)
+    }
+
+    fn create_break(&mut self, value: Option<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        if let Some(h) = value {
+            if let Some(expr) = self.get_expr(h) {
+                let stmt = self.inner.break_with_value(expr, span);
+                return self.store_stmt(stmt);
+            }
+        }
+
+        let stmt = self.inner.break_stmt(span);
+        self.store_stmt(stmt)
+    }
+
+    fn create_continue(&mut self) -> NodeHandle {
+        let span = self.default_span();
+        let stmt = self.inner.continue_stmt(span);
+        self.store_stmt(stmt)
+    }
+
+    fn create_expression_stmt(&mut self, expr: NodeHandle) -> NodeHandle {
+        // Delegate to create_expr_stmt
+        self.create_expr_stmt(expr)
+    }
+
+    fn create_variable(&mut self, name: &str) -> NodeHandle {
+        let span = self.default_span();
+        let expr = self.inner.variable(name, Type::Primitive(PrimitiveType::I32), span);
+        self.store_expr(expr)
+    }
+
+    fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        let receiver_expr = self.get_expr(receiver)
+            .unwrap_or_else(|| self.inner.variable("self", Type::Primitive(PrimitiveType::I32), span));
+
+        let arg_exprs: Vec<_> = args.iter()
+            .filter_map(|h| self.get_expr(*h))
+            .collect();
+
+        let expr = self.inner.method_call(receiver_expr, method, arg_exprs, Type::Primitive(PrimitiveType::I32), span);
+        self.store_expr(expr)
+    }
+
+    fn create_array(&mut self, elements: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        let elem_exprs: Vec<_> = elements.iter()
+            .filter_map(|h| self.get_expr(*h))
+            .collect();
+
+        let array_type = Type::Array {
+            element_type: Box::new(Type::Primitive(PrimitiveType::I32)),
+            size: Some(zyntax_typed_ast::ConstValue::Int(elem_exprs.len() as i64)),
+            nullability: zyntax_typed_ast::NullabilityKind::NonNull,
+        };
+
+        let expr = self.inner.array_literal(elem_exprs, array_type, span);
+        self.store_expr(expr)
+    }
+
+    fn create_struct_literal(&mut self, name: &str, fields: Vec<(String, NodeHandle)>) -> NodeHandle {
+        let span = self.default_span();
+
+        let field_exprs: Vec<(&str, TypedNode<TypedExpression>)> = fields.iter()
+            .filter_map(|(field_name, h)| {
+                self.get_expr(*h).map(|expr| (field_name.as_str(), expr))
+            })
+            .collect();
+
+        // Use Unknown type for now - proper struct types would need TypeRegistry lookup
+        let struct_type = Type::Unknown;
+
+        let expr = self.inner.struct_literal(name, field_exprs, struct_type, span);
+        self.store_expr(expr)
+    }
+
+    fn create_cast(&mut self, expr_handle: NodeHandle, _target_type: NodeHandle) -> NodeHandle {
+        let span = self.default_span();
+
+        let expr = self.get_expr(expr_handle)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
+
+        // For now, cast to i64
+        let target = Type::Primitive(PrimitiveType::I64);
+        let cast_expr = self.inner.cast(expr, target, span);
+        self.store_expr(cast_expr)
+    }
+
+    fn create_lambda(&mut self, _params: Vec<NodeHandle>, body: NodeHandle) -> NodeHandle {
+        let span = self.default_span();
+
+        let body_expr = self.get_expr(body)
+            .unwrap_or_else(|| self.inner.unit_literal(span));
+
+        // Simple lambda with no params for now
+        let lambda_type = Type::Function {
+            params: vec![],
+            return_type: Box::new(Type::Primitive(PrimitiveType::I32)),
+            is_varargs: false,
+            has_named_params: false,
+            has_default_params: false,
+            async_kind: zyntax_typed_ast::AsyncKind::Sync,
+            calling_convention: zyntax_typed_ast::CallingConvention::Default,
+            nullability: zyntax_typed_ast::NullabilityKind::NonNull,
+        };
+
+        let expr = self.inner.lambda(vec![], body_expr, lambda_type, span);
+        self.store_expr(expr)
+    }
 }
 
 // ============================================================================
@@ -1681,6 +1849,328 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => "i32".to_string(),
                 };
                 let handle = self.host.create_primitive_type(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // ===== ADDITIONAL EXPRESSIONS =====
+
+            "char_literal" => {
+                let value = match args.get("value") {
+                    Some(RuntimeValue::String(s)) if !s.is_empty() => s.chars().next().unwrap_or('\0'),
+                    _ => '\0',
+                };
+                let handle = self.host.create_char_literal(value);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "variable" | "var_ref" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let handle = self.host.create_variable(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "call_expr" | "call" => {
+                let callee = match args.get("callee") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("call: missing callee".into())),
+                };
+                let call_args: Vec<NodeHandle> = match args.get("args") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_call(callee, call_args);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "method_call" => {
+                let receiver = match args.get("receiver") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("method_call: missing receiver".into())),
+                };
+                let method = match args.get("method") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let call_args: Vec<NodeHandle> = match args.get("args") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_method_call(receiver, &method, call_args);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "field_access" => {
+                let object = match args.get("object") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_access: missing object".into())),
+                };
+                let field = match args.get("field") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let handle = self.host.create_field_access(object, &field);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "index" | "index_expr" => {
+                let object = match args.get("object").or(args.get("array")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("index: missing object".into())),
+                };
+                let index = match args.get("index") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("index: missing index".into())),
+                };
+                let handle = self.host.create_index(object, index);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "array" | "array_literal" => {
+                let elements: Vec<NodeHandle> = match args.get("elements") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_array(elements);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "struct_literal" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let fields: Vec<(String, NodeHandle)> = match args.get("fields") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some((String::new(), *h)),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_struct_literal(&name, fields);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "cast" => {
+                let expr = match args.get("expr") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("cast: missing expr".into())),
+                };
+                let target_type = match args.get("target_type").or(args.get("type")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+                let handle = self.host.create_cast(expr, target_type);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "lambda" => {
+                let params: Vec<NodeHandle> = match args.get("params") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let body = match args.get("body") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("lambda: missing body".into())),
+                };
+                let handle = self.host.create_lambda(params, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // ===== ADDITIONAL STATEMENTS =====
+
+            "let_stmt" | "var_decl" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let ty = match args.get("type") {
+                    Some(RuntimeValue::Node(h)) => Some(*h),
+                    _ => None,
+                };
+                let init = match args.get("init").or(args.get("value")) {
+                    Some(RuntimeValue::Node(h)) => Some(*h),
+                    _ => None,
+                };
+                let is_const = match args.get("is_const").or(args.get("const")) {
+                    Some(RuntimeValue::Bool(b)) => *b,
+                    _ => false,
+                };
+                let handle = self.host.create_let(&name, ty, init, is_const);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "assignment" | "assign" => {
+                let target = match args.get("target") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("assignment: missing target".into())),
+                };
+                let value = match args.get("value") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("assignment: missing value".into())),
+                };
+                let handle = self.host.create_assignment(target, value);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "if_stmt" | "if" => {
+                let condition = match args.get("condition") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("if: missing condition".into())),
+                };
+                let then_block = match args.get("then").or(args.get("then_block")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("if: missing then block".into())),
+                };
+                let else_block = match args.get("else").or(args.get("else_block")) {
+                    Some(RuntimeValue::Node(h)) => Some(*h),
+                    _ => None,
+                };
+                let handle = self.host.create_if(condition, then_block, else_block);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "while_stmt" | "while" => {
+                let condition = match args.get("condition") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("while: missing condition".into())),
+                };
+                let body = match args.get("body") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("while: missing body".into())),
+                };
+                let handle = self.host.create_while(condition, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "for_stmt" | "for" => {
+                let variable = match args.get("variable").or(args.get("iterator")) {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    Some(RuntimeValue::Node(h)) => {
+                        // If it's a node, try to extract the name
+                        format!("iter_{:?}", h)
+                    }
+                    _ => "it".to_string(),
+                };
+                let iterable = match args.get("iterable") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("for: missing iterable".into())),
+                };
+                let body = match args.get("body") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("for: missing body".into())),
+                };
+                let handle = self.host.create_for(&variable, iterable, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "break_stmt" | "break" => {
+                let value = match args.get("value") {
+                    Some(RuntimeValue::Node(h)) => Some(*h),
+                    _ => None,
+                };
+                let handle = self.host.create_break(value);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "continue_stmt" | "continue" => {
+                let handle = self.host.create_continue();
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "expression_stmt" => {
+                let expr = match args.get("expr") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("expression_stmt: missing expr".into())),
+                };
+                let handle = self.host.create_expression_stmt(expr);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // ===== TYPES =====
+
+            "pointer_type" => {
+                let pointee = match args.get("pointee") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+                let handle = self.host.create_pointer_type(pointee);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "array_type" => {
+                let element = match args.get("element") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+                let size = match args.get("size") {
+                    Some(RuntimeValue::Int(n)) => Some(*n as usize),
+                    _ => None,
+                };
+                let handle = self.host.create_array_type(element, size);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "named_type" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "Unknown".to_string(),
+                };
+                let handle = self.host.create_named_type(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "function_type" => {
+                let params: Vec<NodeHandle> = match args.get("params") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let return_type = match args.get("return_type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("void"),
+                };
+                let handle = self.host.create_function_type(params, return_type);
                 Ok(RuntimeValue::Node(handle))
             }
 
