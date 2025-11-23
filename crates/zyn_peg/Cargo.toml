@@ -19,8 +19,15 @@ syn = { version = "2.0", features = ["full", "parsing"] }
 # Error handling
 thiserror = "1.0"
 
+# Serialization (for zpeg runtime format)
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
 # Interned strings (shared with typed_ast)
 internment = "0.8"
+
+# TypedAST builder for runtime AST construction
+zyntax_typed_ast = { path = "../typed_ast", package = "zyntax_typed_ast" }
 
 [dev-dependencies]
 # Testing

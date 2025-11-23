@@ -1,7 +1,8 @@
-//! Input format handling (HIR bytecode and TypedAST JSON)
+//! Input format handling (HIR bytecode, TypedAST JSON, and ZynPEG grammar-based)
 
 pub mod hir_bytecode;
 pub mod typed_ast_json;
+pub mod zyn_grammar;
 
 use std::path::PathBuf;
 
@@ -11,17 +12,37 @@ pub enum InputFormat {
     HirBytecode,
     /// TypedAST JSON (.json files)
     TypedAst,
+    /// ZynPEG grammar-based parsing (requires --grammar and --source)
+    ZynGrammar,
 }
 
 /// Detect input format based on format string and file extensions
 pub fn detect_format(
     format_arg: &str,
     inputs: &[PathBuf],
+    grammar: Option<&PathBuf>,
+    source: Option<&PathBuf>,
 ) -> Result<InputFormat, Box<dyn std::error::Error>> {
     match format_arg {
-        "auto" => auto_detect_format(inputs),
+        "auto" => {
+            // If grammar and source are provided, use ZynGrammar
+            if grammar.is_some() && source.is_some() {
+                Ok(InputFormat::ZynGrammar)
+            } else if grammar.is_some() || source.is_some() {
+                Err("Both --grammar and --source must be provided for grammar-based compilation".into())
+            } else {
+                auto_detect_format(inputs)
+            }
+        }
         "hir-bytecode" | "bytecode" | "zbc" => Ok(InputFormat::HirBytecode),
         "typed-ast" | "json" => Ok(InputFormat::TypedAst),
+        "zyn" | "zyn-grammar" => {
+            if grammar.is_none() || source.is_none() {
+                Err("Format 'zyn' requires both --grammar and --source options".into())
+            } else {
+                Ok(InputFormat::ZynGrammar)
+            }
+        }
         _ => Err(format!("Unknown format: {}", format_arg).into()),
     }
 }

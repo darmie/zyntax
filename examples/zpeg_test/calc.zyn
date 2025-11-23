@@ -1,0 +1,63 @@
+// Simple calculator grammar for testing zpeg runtime
+@language {
+    name: "Calculator",
+    version: "1.0",
+    file_extensions: [".calc"],
+    entry_point: "main",
+}
+
+// Build a program with a main function that returns the expression
+// Using sequential JSON commands to construct:
+//   1. return_stmt from expr ($1)
+//   2. function "main" wrapping the return statement
+//   3. program containing the function
+program = { SOI ~ expr ~ EOI }
+  -> TypedProgram {
+      "commands": [
+          { "define": "return_stmt", "args": { "value": "$1" }, "store": "ret" },
+          { "define": "function", "args": { "name": "main", "params": [], "body": "$ret" } },
+          { "define": "program", "args": { "declarations": ["$result"] } }
+      ]
+  }
+
+expr = { term ~ ((add_op | sub_op) ~ term)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "term", "operator": "add_op|sub_op" }
+  }
+
+term = { factor ~ ((mul_op | div_op) ~ factor)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "factor", "operator": "mul_op|div_op" }
+  }
+
+// factor: number returns the node directly, parenthesized expr also returns just the expr
+// Using atomic grouping with inner silent parens so we just get the expr
+factor = { number | paren_expr }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Parenthesized expression - parens are not captured, only the inner expr
+paren_expr = _{ "(" ~ expr ~ ")" }
+
+number = @{ ASCII_DIGIT+ }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_int": true,
+      "define": "int_literal",
+      "args": { "value": "$result" }
+  }
+
+add_op = { "+" }
+  -> String { "get_text": true }
+
+sub_op = { "-" }
+  -> String { "get_text": true }
+
+mul_op = { "*" }
+  -> String { "get_text": true }
+
+div_op = { "/" }
+  -> String { "get_text": true }
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }

@@ -20,8 +20,17 @@ pub enum Commands {
     /// Compile source files to native code
     Compile {
         /// Input file(s) or directory (.json for TypedAST, .zbc for HIR bytecode)
+        /// For grammar-based compilation, use --source and --grammar instead
         #[arg(value_name = "INPUT")]
         input: Vec<PathBuf>,
+
+        /// Source code file to compile (used with --grammar for ZynPEG-based parsing)
+        #[arg(short, long, value_name = "SOURCE")]
+        source: Option<PathBuf>,
+
+        /// ZynPEG grammar file (.zyn) defining the language parser
+        #[arg(short, long, value_name = "GRAMMAR")]
+        grammar: Option<PathBuf>,
 
         /// Output file path
         #[arg(short, long, value_name = "OUTPUT")]
@@ -35,7 +44,11 @@ pub enum Commands {
         #[arg(short = 'O', long, default_value = "2")]
         opt_level: u8,
 
-        /// Input format (auto, typed-ast, hir-bytecode)
+        /// Input format (auto, typed-ast, hir-bytecode, zyn)
+        /// - auto: Auto-detect from file extension
+        /// - typed-ast: TypedAST JSON files
+        /// - hir-bytecode: HIR bytecode (.zbc) files
+        /// - zyn: ZynPEG grammar-based parsing (requires --grammar and --source)
         #[arg(short = 'f', long, default_value = "auto")]
         format: String,
 
@@ -53,6 +66,8 @@ impl Commands {
         match self {
             Commands::Compile {
                 input,
+                source,
+                grammar,
                 output,
                 backend,
                 opt_level,
@@ -60,6 +75,8 @@ impl Commands {
                 run,
             } => Some(CompileArgs {
                 input: input.clone(),
+                source: source.clone(),
+                grammar: grammar.clone(),
                 output: output.clone(),
                 backend: backend.clone(),
                 opt_level: *opt_level,
@@ -74,6 +91,8 @@ impl Commands {
 #[derive(Debug, Clone)]
 pub struct CompileArgs {
     pub input: Vec<PathBuf>,
+    pub source: Option<PathBuf>,
+    pub grammar: Option<PathBuf>,
     pub output: Option<PathBuf>,
     pub backend: String,
     pub opt_level: u8,

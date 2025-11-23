@@ -41,6 +41,7 @@ use pest_derive::Parser;
 pub mod ast;
 pub mod generator;
 pub mod error;
+pub mod runtime;
 
 // Parser for .zyn grammar files
 #[derive(Parser)]
@@ -53,6 +54,8 @@ pub struct LanguageInfo {
     pub name: String,
     pub version: String,
     pub file_extensions: Vec<String>,
+    /// Entry point function name (declared by the grammar for --run flag)
+    pub entry_point: Option<String>,
 }
 
 /// Context variable from @context directive
@@ -107,8 +110,10 @@ pub enum RuleModifier {
 pub struct ActionBlock {
     pub return_type: String,
     pub fields: Vec<ActionField>,
-    /// Raw Rust code if not using structured fields
+    /// Raw Rust code if not using structured fields (legacy)
     pub raw_code: Option<String>,
+    /// JSON commands for zpeg runtime interpreter
+    pub json_commands: Option<String>,
 }
 
 /// A field in an action block

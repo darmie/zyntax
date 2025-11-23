@@ -1033,6 +1033,11 @@ pub fn format_rust_code(code: &str) -> String {
     }
 }
 
+/// Generate a pest-compatible grammar from ZynGrammar rules (public wrapper)
+pub fn generate_pest_grammar_string(grammar: &ZynGrammar) -> Result<String> {
+    generate_pest_grammar(grammar)
+}
+
 /// Generate a pest-compatible grammar from ZynGrammar rules
 fn generate_pest_grammar(grammar: &ZynGrammar) -> Result<String> {
     let mut lines = Vec::new();

@@ -90,6 +90,13 @@ fn build_language_info(pair: Pair<Rule>) -> Result<LanguageInfo, String> {
                         info.file_extensions.push(extract_string_value(item));
                     }
                 }
+            } else if field_text.trim().starts_with("entry_point") {
+                for item in &field_content {
+                    if item.as_rule() == Rule::string_literal {
+                        info.entry_point = Some(extract_string_value(item));
+                        break;
+                    }
+                }
             }
         }
     }
@@ -193,6 +200,7 @@ fn build_action_block(pair: Pair<Rule>) -> Result<ActionBlock, String> {
     let mut return_type = String::new();
     let mut fields = Vec::new();
     let mut raw_code = None;
+    let mut json_commands = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -202,6 +210,10 @@ fn build_action_block(pair: Pair<Rule>) -> Result<ActionBlock, String> {
             Rule::action_body => {
                 for field_pair in inner.into_inner() {
                     match field_pair.as_rule() {
+                        Rule::json_action => {
+                            // Build JSON commands string
+                            json_commands = Some(build_json_commands(field_pair)?);
+                        }
                         Rule::action_field => {
                             fields.push(build_action_field(field_pair)?);
                         }
@@ -220,7 +232,95 @@ fn build_action_block(pair: Pair<Rule>) -> Result<ActionBlock, String> {
         return_type,
         fields,
         raw_code,
+        json_commands,
     })
+}
+
+/// Build JSON commands string from a json_action parse tree node
+fn build_json_commands(pair: Pair<Rule>) -> Result<String, String> {
+    // Wrap the fields in a JSON object and return as string
+    let mut json_str = String::from("{");
+    let mut first = true;
+
+    for field in pair.into_inner() {
+        if field.as_rule() == Rule::json_field {
+            if !first {
+                json_str.push_str(", ");
+            }
+            first = false;
+
+            let mut field_inner = field.into_inner();
+            if let (Some(key), Some(value)) = (field_inner.next(), field_inner.next()) {
+                // Key is already quoted string literal
+                json_str.push_str(key.as_str());
+                json_str.push_str(": ");
+                // Value needs to be converted to JSON
+                json_str.push_str(&json_value_to_string(value)?);
+            }
+        }
+    }
+
+    json_str.push('}');
+    Ok(json_str)
+}
+
+/// Convert a json_value parse node to JSON string
+fn json_value_to_string(pair: Pair<Rule>) -> Result<String, String> {
+    match pair.as_rule() {
+        Rule::string_literal | Rule::capture_ref_string => {
+            // Already quoted
+            Ok(pair.as_str().to_string())
+        }
+        Rule::json_number | Rule::json_bool | Rule::json_null => {
+            Ok(pair.as_str().to_string())
+        }
+        Rule::json_array => {
+            let mut result = String::from("[");
+            let mut first = true;
+            for inner in pair.into_inner() {
+                if !first {
+                    result.push_str(", ");
+                }
+                first = false;
+                result.push_str(&json_value_to_string(inner)?);
+            }
+            result.push(']');
+            Ok(result)
+        }
+        Rule::json_object => {
+            let mut result = String::from("{");
+            let mut first = true;
+            for field in pair.into_inner() {
+                if field.as_rule() == Rule::json_field {
+                    if !first {
+                        result.push_str(", ");
+                    }
+                    first = false;
+
+                    let mut field_inner = field.into_inner();
+                    if let (Some(key), Some(value)) = (field_inner.next(), field_inner.next()) {
+                        result.push_str(key.as_str());
+                        result.push_str(": ");
+                        result.push_str(&json_value_to_string(value)?);
+                    }
+                }
+            }
+            result.push('}');
+            Ok(result)
+        }
+        Rule::json_value => {
+            // Recurse into actual value
+            if let Some(inner) = pair.into_inner().next() {
+                json_value_to_string(inner)
+            } else {
+                Ok("null".to_string())
+            }
+        }
+        _ => {
+            // Fallback: use raw text
+            Ok(pair.as_str().to_string())
+        }
+    }
 }
 
 fn build_action_field(pair: Pair<Rule>) -> Result<ActionField, String> {

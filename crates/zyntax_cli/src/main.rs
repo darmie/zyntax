@@ -3,6 +3,7 @@
 //! Supports multiple input formats:
 //! - HIR bytecode (.zbc files) - Direct HIR deserialization
 //! - TypedAST JSON (.json files) - Language-agnostic IR from frontends
+//! - ZynPEG grammar (.zyn files) - Grammar-based parsing for custom languages
 //!
 //! Multiple backends:
 //! - Cranelift JIT - Fast compilation for development
@@ -29,6 +30,8 @@ fn main() {
             if let Some(args) = cli.command.compile_args() {
                 commands::compile(
                     args.input,
+                    args.source,
+                    args.grammar,
                     args.output,
                     args.backend,
                     args.opt_level,

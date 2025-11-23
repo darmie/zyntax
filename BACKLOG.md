@@ -5,6 +5,12 @@
 
 **Recent Progress**:
 
+- ✅ **ZynPEG VM Runtime** (No Rust compilation required! JSON command pattern for dynamic AST construction)
+  - `pest_vm` for dynamic grammar parsing
+  - JSON action blocks in `.zyn` files → runtime interpretation
+  - `CommandInterpreter` executes zpeg commands via host functions
+  - Full pipeline: `.zyn` grammar → `.zpeg` module → parse source → TypedAST → HIR → JIT
+- ✅ **ZynPEG Grammar Specification** (`docs/ZYN_GRAMMAR_SPEC.md` - Version 2.0 with JSON action blocks)
 - ✅ **ZynPEG Integration Test with JIT** (Full pipeline: ZynPEG grammar → pest + AST builder → TypedAST → HIR → Cranelift JIT → Execution)
 - ✅ **Grammar Conventions Documentation** (`crates/zyn_peg/GRAMMAR_CONVENTIONS.md` - best practices for .zyn files)
 - ✅ **Fixed fn_params bug** (all_children iteration instead of .find() to collect ALL parameters)
@@ -104,12 +110,45 @@
 - [x] Fixed binary expression rules (use `fold_binary` pattern)
 - [x] **NOTE**: JIT tests require `--test-threads=1` (Cranelift not thread-safe)
 
+**Phase 3.5: ZynPEG VM Runtime** ✅ **COMPLETE**
+
+No Rust compilation required for grammar users! Dynamic interpretation of JSON action blocks.
+
+- [x] **JSON Action Block Syntax** - `.zyn` grammars use JSON commands instead of Rust code
+- [x] **ZPEG Module Format** - Compiled `.zpeg` contains pest grammar + JSON command mappings
+- [x] **pest_vm Integration** - Dynamic grammar parsing at runtime (no pest_derive compilation)
+- [x] **CommandInterpreter** - Executes zpeg commands via host functions
+- [x] **AstHostFunctions Trait** - Pluggable AST construction interface
+- [x] **TypedAstBuilder** - Uses `TypedASTBuilder` fluent API from `zyntax_typed_ast`
+- [x] **CLI Integration** - `zyntax compile --grammar foo.zyn --source code.lang --format zyn`
+- [x] **Grammar Specification** - `docs/ZYN_GRAMMAR_SPEC.md` (Version 2.0)
+- [x] **End-to-end JIT execution** - Calculator example returns correct value (42)!
+
+**Architecture**:
+```
+┌─ Compile Time ────────────────────────────────────────┐
+│  .zyn grammar  →  ZynPEG Compiler  →  .zpeg module   │
+│                                                       │
+│  .zpeg contains:                                     │
+│  - pest grammar (string)                             │
+│  - Rule command mappings (JSON)                      │
+└───────────────────────────────────────────────────────┘
+
+┌─ Runtime ─────────────────────────────────────────────┐
+│  source.lang + .zpeg  →  pest_vm  →  Commands  → AST │
+│                                                       │
+│  No Rust compilation required!                       │
+└───────────────────────────────────────────────────────┘
+```
+
 **Remaining Items** (deferred):
 
+- [ ] Binary expression folding - `fold_binary` command for proper left-associative arithmetic
 - [ ] Pattern matching - None literal (arena symbol resolution issue)
 - [ ] String operations (needs stdlib integration via plugin system)
 
 **Documents**:
+- [Grammar Specification](docs/ZYN_GRAMMAR_SPEC.md) ← NEW (Version 2.0 JSON format)
 - [Implementation Plan](docs/ZYN_PARSER_IMPLEMENTATION.md)
 - [Phase 1 Completion](docs/ZYN_PARSER_PHASE1_COMPLETION.md)
 - [Phase 2 Plan](docs/ZYN_PARSER_PHASE2_PLAN.md)

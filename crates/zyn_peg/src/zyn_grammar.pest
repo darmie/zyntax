@@ -22,6 +22,7 @@ language_field = {
     "name" ~ ":" ~ string_literal
   | "version" ~ ":" ~ string_literal
   | "file_extensions" ~ ":" ~ "[" ~ string_literal ~ ("," ~ string_literal)* ~ "]"
+  | "entry_point" ~ ":" ~ string_literal
 }
 
 // @imports { use zyntax_typed_ast::*; }
@@ -71,26 +72,56 @@ rule_def = {
 
 rule_modifier = { "@" | "!" | "$" | "_" }
 
-// Action block: -> TypedExpression { expr: ..., ty: ..., span: ... }
-// Supports both structured fields and direct Rust code
+// Action block: -> TypedExpression { JSON commands }
+// JSON-based action mappings that call host functions at runtime
 action_block = {
     "->" ~ rust_type ~ "{" ~ action_body ~ "}"
 }
 
-// action_body: Tries raw code FIRST since it's more general.
-// Only falls back to structured fields if raw code doesn't match.
-// Raw code is anything with function calls, struct literals, match, etc.
+// action_body: JSON object or legacy field syntax
+// NEW: Supports JSON command syntax for runtime interpretation
+// LEGACY: Also supports simple field: value syntax for compatibility
 action_body = {
-    action_code                                   // Direct Rust code (function calls, struct literals, etc.)
-  | action_field ~ ("," ~ action_field)* ~ ","?  // Simple structured fields: expr: ..., ty: ...
+    json_action                                   // JSON command object
+  | action_field ~ ("," ~ action_field)* ~ ","?  // Legacy: structured fields
+  | action_code                                   // Legacy: direct Rust code
 }
 
-// Field assignment in action block - colon must NOT be followed by another colon (::)
+// JSON-based action commands
+// Example: "call": "int_literal", "args": [...]
+json_action = {
+    json_field ~ ("," ~ json_field)* ~ ","?
+}
+
+json_field = {
+    string_literal ~ ":" ~ json_value
+}
+
+json_value = {
+    string_literal
+  | json_number
+  | json_bool
+  | json_null
+  | json_array
+  | json_object
+  | capture_ref_string  // "$1", "$name" as string
+}
+
+json_number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+json_bool = { "true" | "false" }
+json_null = { "null" }
+json_array = { "[" ~ (json_value ~ ("," ~ json_value)*)? ~ ","? ~ "]" }
+json_object = { "{" ~ (json_field ~ ("," ~ json_field)*)? ~ ","? ~ "}" }
+
+// Capture reference in JSON context (as a string like "$1" or "$name")
+capture_ref_string = ${ "\"$" ~ (ASCII_DIGIT+ | identifier) ~ "\"" }
+
+// Legacy: Field assignment in action block - colon must NOT be followed by another colon (::)
 action_field = {
     identifier ~ ":" ~ !(":") ~ rust_expr
 }
 
-// Direct Rust code in action block (for match expressions, function calls, etc.)
+// Legacy: Direct Rust code in action block (for match expressions, function calls, etc.)
 action_code = { rust_action_inner+ }
 rust_action_inner = {
     "{" ~ rust_action_inner* ~ "}"     // Nested braces

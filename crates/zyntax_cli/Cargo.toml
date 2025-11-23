@@ -10,6 +10,11 @@ path = "src/main.rs"
 [dependencies]
 zyntax_typed_ast = { path = "../typed_ast" }
 zyntax_compiler = { path = "../compiler" }
+zyn_peg = { path = "../zyn_peg" }
+pest = "2.7"
+pest_derive = "2.7"
+pest_vm = "2.8"
+pest_meta = "2.8"
 
 # Runtime libraries (statically linked)
 # Standard library runtime (generic I/O functions)
