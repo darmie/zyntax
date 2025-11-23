@@ -365,11 +365,11 @@ impl CraneliftBackend {
 
             // Phase 1: Analyze function structure
             let block_order = self.compute_block_order(function);
-            eprintln!("[Cranelift] Block order: {:?} blocks", block_order.len());
-            eprintln!("[Cranelift] Entry block: {:?}", function.entry_block);
-            eprintln!("[Cranelift] Total blocks in function: {:?}", function.blocks.len());
+            log::debug!("[Cranelift] Block order: {:?} blocks", block_order.len());
+            log::debug!("[Cranelift] Entry block: {:?}", function.entry_block);
+            log::debug!("[Cranelift] Total blocks in function: {:?}", function.blocks.len());
             for (i, block_id) in block_order.iter().enumerate() {
-                eprintln!("[Cranelift]   [{}] {:?}", i, block_id);
+                log::debug!("[Cranelift]   [{}] {:?}", i, block_id);
             }
             let predecessor_map = self.build_predecessor_map(function);
 
@@ -517,12 +517,12 @@ impl CraneliftBackend {
 
             // Phase 4: Process each block in order
             for hir_block_id in &block_order {
-                eprintln!("[Cranelift] Processing block {:?}", hir_block_id);
+                log::debug!("[Cranelift] Processing block {:?}", hir_block_id);
                 let cranelift_block = block_map[hir_block_id];
                 let hir_block = match function.blocks.get(hir_block_id) {
                     Some(b) => b,
                     None => {
-                        eprintln!("[Cranelift]   Block not found in function.blocks!");
+                        log::debug!("[Cranelift]   Block not found in function.blocks!");
                         continue;
                     }
                 };
@@ -542,9 +542,9 @@ impl CraneliftBackend {
 
                 // Map phi node results to block parameters
                 let block_params = builder.block_params(cranelift_block).to_vec();
-                eprintln!("[Cranelift] Block {:?} has {} phis and {} block_params", hir_block_id, hir_block.phis.len(), block_params.len());
+                log::debug!("[Cranelift] Block {:?} has {} phis and {} block_params", hir_block_id, hir_block.phis.len(), block_params.len());
                 for (i, phi) in hir_block.phis.iter().enumerate() {
-                    eprintln!("[Cranelift]   phi[{}]: result={:?}, block_params[{}]={:?}", i, phi.result, i, block_params.get(i));
+                    log::debug!("[Cranelift]   phi[{}]: result={:?}, block_params[{}]={:?}", i, phi.result, i, block_params.get(i));
                     if let Some(&param_val) = block_params.get(i) {
                         self.value_map.insert(phi.result, param_val);
                     }
@@ -1762,8 +1762,7 @@ impl CraneliftBackend {
         }
 
         // Debug: Print IR after finalize
-        eprintln!("[Cranelift] IR after finalize (inside compile_function_body):");
-        eprintln!("{}", self.codegen_context.func);
+        log::debug!("[Cranelift] IR after finalize (inside compile_function_body):\n{}", self.codegen_context.func);
 
         // Debug: Uncomment to dump IR for all functions
         // self.dump_cranelift_ir(&function.name.to_string());

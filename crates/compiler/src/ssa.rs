@@ -750,7 +750,7 @@ impl SsaBuilder {
             },
         );
 
-        eprintln!("[SSA] Generated pattern check: discriminant({:?}) == {} -> {:?}",
+        log::debug!("[SSA] Generated pattern check: discriminant({:?}) == {} -> {:?}",
                  discriminant_val, variant_index, cmp_result);
 
         // Use the false_target provided by CFG (next pattern check or unreachable block)
@@ -811,7 +811,7 @@ impl SsaBuilder {
                         // Bind the extracted value to the variable
                         self.write_variable(*name, block_id, extracted_id);
 
-                        eprintln!("[SSA] Extracted union value for pattern variable {:?}: val={:?}",
+                        log::debug!("[SSA] Extracted union value for pattern variable {:?}: val={:?}",
                                  name, extracted_id);
                     }
                 }
@@ -909,7 +909,7 @@ impl SsaBuilder {
             "Ok" => {
                 // Ok(value): Result<T,E> with discriminant 0
                 if args.len() != 1 {
-                    eprintln!("[SSA] ERROR: Ok() called with {} args, result_ty={:?}", args.len(), result_ty);
+                    log::debug!("[SSA] ERROR: Ok() called with {} args, result_ty={:?}", args.len(), result_ty);
                     return Err(crate::CompilerError::Analysis(
                         format!("Ok() requires exactly 1 argument, got {}", args.len())
                     ));
@@ -1030,7 +1030,7 @@ impl SsaBuilder {
             self.add_use(value_id, result_id);
         }
 
-        eprintln!("[SSA] Created union for {}: result={:?}, variant_index={}, value={:?}",
+        log::debug!("[SSA] Created union for {}: result={:?}, variant_index={}, value={:?}",
                  constructor_name, result_id, variant_index, value_id);
 
         Ok(result_id)
@@ -1047,9 +1047,9 @@ impl SsaBuilder {
         // Track current block - may change if try expressions split the block
         let mut current_block = block_id;
         for (i, stmt) in cfg_node.statements.iter().enumerate() {
-            eprintln!("[SSA] process_block: stmt {} with current_block={:?}", i, current_block);
+            log::debug!("[SSA] process_block: stmt {} with current_block={:?}", i, current_block);
             current_block = self.process_statement(current_block, stmt)?;
-            eprintln!("[SSA] process_block: after stmt {}, current_block={:?}", i, current_block);
+            log::debug!("[SSA] process_block: after stmt {}, current_block={:?}", i, current_block);
         }
 
         // Process terminator on the final current block
@@ -1070,7 +1070,7 @@ impl SsaBuilder {
     ) -> CompilerResult<HirId> {
         use zyntax_typed_ast::typed_ast::TypedStatement;
 
-        eprintln!("[SSA] process_statement: block={:?}, stmt_variant={:?}",
+        log::debug!("[SSA] process_statement: block={:?}, stmt_variant={:?}",
                  block_id, std::mem::discriminant(&stmt.node));
 
         // NOTE: Don't clear continuation_block here - it should persist across statements
@@ -1115,7 +1115,7 @@ impl SsaBuilder {
 
                         // Track stack slot for this variable
                         self.stack_slots.insert(let_stmt.name, stack_slot);
-                        eprintln!("[SSA] Allocated stack slot {:?} for address-taken var {:?}", stack_slot, let_stmt.name);
+                        log::debug!("[SSA] Allocated stack slot {:?} for address-taken var {:?}", stack_slot, let_stmt.name);
                     } else {
                         // Normal SSA: Create assignment in the continuation block if set
                         self.write_variable(let_stmt.name, write_block, value_id);
@@ -1130,7 +1130,7 @@ impl SsaBuilder {
 
             TypedStatement::Match(match_stmt) => {
                 // Handle match statement: evaluate scrutinee
-                eprintln!("[SSA] Match scrutinee expression: {:?}", match_stmt.scrutinee.node);
+                log::debug!("[SSA] Match scrutinee expression: {:?}", match_stmt.scrutinee.node);
                 let scrutinee_val = self.translate_expression(block_id, &match_stmt.scrutinee)?;
 
                 // Check if scrutinee is a union type (Optional, Result, or custom union)
@@ -1155,7 +1155,7 @@ impl SsaBuilder {
                         union_type: Some(union_type.clone()),
                     });
 
-                    eprintln!("[SSA] Match on union type: scrutinee={:?}, discriminant={:?}",
+                    log::debug!("[SSA] Match on union type: scrutinee={:?}, discriminant={:?}",
                              scrutinee_val, discriminant_id);
                 } else {
                     // Non-union match (e.g., literals, structs)
@@ -1164,7 +1164,7 @@ impl SsaBuilder {
                         discriminant_value: None,
                         union_type: None,
                     });
-                    eprintln!("[SSA] Match on non-union type: {:?}", scrutinee_hir_type);
+                    log::debug!("[SSA] Match on non-union type: {:?}", scrutinee_hir_type);
                 }
 
                 // Pattern binding variables will be handled when the pattern arm body is processed
@@ -1185,7 +1185,7 @@ impl SsaBuilder {
         // Return the continuation block if set (try expression), otherwise the original block
         let result_block = self.continuation_block.unwrap_or(block_id);
         if self.continuation_block.is_some() {
-            eprintln!("[SSA] process_statement: returning continuation_block {:?} instead of {:?}",
+            log::debug!("[SSA] process_statement: returning continuation_block {:?} instead of {:?}",
                      result_block, block_id);
         }
         Ok(result_block)
@@ -1265,7 +1265,7 @@ impl SsaBuilder {
                         volatile: false,
                     });
                     self.add_use(stack_slot, result);
-                    eprintln!("[SSA] Load address-taken var {:?} from stack slot {:?} -> {:?}", name, stack_slot, result);
+                    log::debug!("[SSA] Load address-taken var {:?} from stack slot {:?} -> {:?}", name, stack_slot, result);
                     return Ok(result);
                 }
 
@@ -1283,25 +1283,25 @@ impl SsaBuilder {
                     arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
                 });
 
-                eprintln!("[SSA] Variable not found: {:?} resolves to '{}', type: {:?}", name, name_str, expr.ty);
+                log::debug!("[SSA] Variable not found: {:?} resolves to '{}', type: {:?}", name, name_str, expr.ty);
 
                 // Check for known enum constructors
                 match name_str.as_str() {
                     "None" => {
-                        eprintln!("[SSA] Recognized as enum constructor: {}", name_str);
+                        log::debug!("[SSA] Recognized as enum constructor: {}", name_str);
                         return self.translate_enum_constructor(block_id, &name_str, &[], &expr.ty);
                     }
                     "Some" | "Ok" | "Err" => {
                         // These constructors require args - shouldn't appear as bare variables
                         // They should be Call expressions, not Variable expressions
                         // This likely means the Zig builder is producing the wrong AST
-                        eprintln!("[SSA] ERROR: {} found as bare variable without args, type={:?}", name_str, expr.ty);
+                        log::debug!("[SSA] ERROR: {} found as bare variable without args, type={:?}", name_str, expr.ty);
                         // Read as undefined variable (will likely fail later)
                         Ok(self.read_variable(*name, block_id))
                     }
                     _ => {
                         // If not an enum constructor, reading as undefined variable
-                        eprintln!("[SSA] Not an enum constructor, reading as undefined variable");
+                        log::debug!("[SSA] Not an enum constructor, reading as undefined variable");
                         Ok(self.read_variable(*name, block_id))
                     }
                 }
@@ -1753,14 +1753,14 @@ impl SsaBuilder {
                 // Check if the inner expression is a variable with a stack slot
                 if let TE::Variable(var_name) = &reference.expr.node {
                     if let Some(&stack_slot) = self.stack_slots.get(var_name) {
-                        eprintln!("[SSA] Reference to address-taken var {:?} -> stack slot {:?}", var_name, stack_slot);
+                        log::debug!("[SSA] Reference to address-taken var {:?} -> stack slot {:?}", var_name, stack_slot);
                         return Ok(stack_slot);
                     }
                 }
 
                 // For non-stack-allocated expressions, this is an error in the current model
                 // as SSA values don't have addresses
-                eprintln!("[SSA] Warning: Taking reference of non-stack-allocated expression");
+                log::debug!("[SSA] Warning: Taking reference of non-stack-allocated expression");
                 let operand_val = self.translate_expression(block_id, &reference.expr)?;
                 Ok(operand_val)
             }
@@ -1922,7 +1922,7 @@ impl SsaBuilder {
     
     /// Write a variable in SSA form
     fn write_variable(&mut self, var: InternedString, block: HirId, value: HirId) {
-        eprintln!("[SSA] write_variable({:?}, {:?}, {:?})", var, block, value);
+        log::debug!("[SSA] write_variable({:?}, {:?}, {:?})", var, block, value);
         self.definitions
             .get_mut(&block)
             .unwrap()
@@ -1943,11 +1943,11 @@ impl SsaBuilder {
 
     fn read_variable(&mut self, var: InternedString, block: HirId) -> HirId {
         if let Some(&value) = self.definitions.get(&block).and_then(|defs| defs.get(&var)) {
-            eprintln!("[SSA] read_variable({:?}, {:?}) = {:?} (found in definitions)", var, block, value);
+            log::debug!("[SSA] read_variable({:?}, {:?}) = {:?} (found in definitions)", var, block, value);
             return value;
         }
 
-        eprintln!("[SSA] read_variable({:?}, {:?}) - not in definitions, recursing", var, block);
+        log::debug!("[SSA] read_variable({:?}, {:?}) - not in definitions, recursing", var, block);
         // Not defined in this block - need phi or recursive lookup
         self.read_variable_recursive(var, block)
     }
@@ -2074,13 +2074,13 @@ impl SsaBuilder {
             // Collect values from predecessors
             let mut incoming = Vec::new();
 
-            eprintln!("[SSA] Filling phi for var {:?} in block {:?} with {} predecessors", var, block, predecessors.len());
+            log::debug!("[SSA] Filling phi for var {:?} in block {:?} with {} predecessors", var, block, predecessors.len());
             for pred in predecessors {
                 let pred_val = self.read_variable(var, pred);
-                eprintln!("[SSA]   Phi incoming: ({:?}, {:?})", pred_val, pred);
+                log::debug!("[SSA]   Phi incoming: ({:?}, {:?})", pred_val, pred);
                 incoming.push((pred_val, pred));
             }
-            eprintln!("[SSA] Phi filled with {} incoming values", incoming.len());
+            log::debug!("[SSA] Phi filled with {} incoming values", incoming.len());
 
             // Check if phi is trivial
             let non_phi_vals: HashSet<_> = incoming.iter()
@@ -2141,16 +2141,16 @@ impl SsaBuilder {
             let preds = self.function.blocks[&block].predecessors.clone();
             let mut incoming = Vec::new();
 
-            eprintln!("[SSA] fill_incomplete_phi: var={:?}, block={:?}, phi_val={:?}, predecessors={}",
+            log::debug!("[SSA] fill_incomplete_phi: var={:?}, block={:?}, phi_val={:?}, predecessors={}",
                      var, block, phi_val, preds.len());
             for pred in preds {
                 // Use read_variable to get the value - this will traverse phis if needed
                 let pred_val = self.read_variable(var, pred);
-                eprintln!("[SSA]   from pred {:?} → value {:?}", pred, pred_val);
+                log::debug!("[SSA]   from pred {:?} → value {:?}", pred, pred_val);
                 incoming.push((pred_val, pred));
             }
 
-            eprintln!("[SSA] Phi complete with {} incoming values", incoming.len());
+            log::debug!("[SSA] Phi complete with {} incoming values", incoming.len());
 
             // Update the phi
             if let Some(phi) = self.function.blocks.get_mut(&block)
@@ -2322,7 +2322,7 @@ impl SsaBuilder {
             }
         }
 
-        eprintln!("[SSA] Address-taken variables: {:?}", self.address_taken_vars);
+        log::debug!("[SSA] Address-taken variables: {:?}", self.address_taken_vars);
     }
 
     /// Recursively collect variables that have their address taken
@@ -2334,7 +2334,7 @@ impl SsaBuilder {
                 // If the reference is to a variable, mark it as address-taken
                 if let TypedExpression::Variable(var_name) = &reference.expr.node {
                     self.address_taken_vars.insert(*var_name);
-                    eprintln!("[SSA] Found address-taken variable: {:?}", var_name);
+                    log::debug!("[SSA] Found address-taken variable: {:?}", var_name);
                 }
                 // Also recurse into the inner expression
                 self.collect_address_taken_vars_from_expr(&reference.expr);
@@ -2860,7 +2860,7 @@ impl SsaBuilder {
                         align: 8,
                         volatile: false,
                     });
-                    eprintln!("[SSA] Store to address-taken var {:?} stack slot {:?}", name, stack_slot);
+                    log::debug!("[SSA] Store to address-taken var {:?} stack slot {:?}", name, stack_slot);
                 } else {
                     // Use write_variable to update the SSA variable tracking
                     self.write_variable(*name, block_id, value);
