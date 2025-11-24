@@ -185,9 +185,41 @@ var_decl_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";" }
 
 // ===== Type Expressions =====
 
-type_expr = { primitive_type | identifier }
+type_expr = { pointer_type | optional_type | error_union_type | array_type | primitive_type | identifier }
   -> Type {
       "get_child": { "index": 0 }
+  }
+
+// Pointer type: *T or *const T
+pointer_type = { "*" ~ "const"? ~ type_expr }
+  -> Type {
+      "commands": [
+          { "define": "pointer_type", "args": { "pointee": "$1" } }
+      ]
+  }
+
+// Optional type: ?T
+optional_type = { "?" ~ type_expr }
+  -> Type {
+      "commands": [
+          { "define": "optional_type", "args": { "inner": "$1" } }
+      ]
+  }
+
+// Error union type: !T or E!T
+error_union_type = { "!" ~ type_expr }
+  -> Type {
+      "commands": [
+          { "define": "error_union_type", "args": { "payload": "$1" } }
+      ]
+  }
+
+// Array type: [N]T or []T (slice)
+array_type = { "[" ~ integer_literal? ~ "]" ~ type_expr }
+  -> Type {
+      "commands": [
+          { "define": "array_type", "args": { "size": "$1", "element": "$2" } }
+      ]
   }
 
 primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" }
@@ -199,9 +231,25 @@ primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" |
 
 // ===== Statements =====
 
-statement = { if_stmt | while_stmt | for_stmt | return_stmt | local_const | local_var | assign_stmt | expr_stmt }
+statement = { if_stmt | while_stmt | for_stmt | return_stmt | break_stmt | continue_stmt | local_const | local_var | assign_stmt | expr_stmt }
   -> TypedStatement {
       "get_child": { "index": 0 }
+  }
+
+// Break statement
+break_stmt = { "break" ~ ";" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "break" }
+      ]
+  }
+
+// Continue statement
+continue_stmt = { "continue" ~ ";" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "continue" }
+      ]
   }
 
 // If statement variants
@@ -428,9 +476,17 @@ call_args = { expr ~ ("," ~ expr)* }
   }
 
 // Atom: the base of postfix expressions
-atom = { array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr }
+atom = { try_expr | array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr }
   -> TypedExpression {
       "get_child": { "index": 0 }
+  }
+
+// Try expression: try expr
+try_expr = { "try" ~ primary }
+  -> TypedExpression {
+      "commands": [
+          { "define": "try", "args": { "expr": "$1" } }
+      ]
   }
 
 paren_expr = _{ "(" ~ expr ~ ")" }
