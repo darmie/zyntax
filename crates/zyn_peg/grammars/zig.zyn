@@ -151,9 +151,56 @@ primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" |
 
 // ===== Statements =====
 
-statement = { return_stmt | local_const | local_var | expr_stmt }
+statement = { if_stmt | while_stmt | return_stmt | local_const | local_var | assign_stmt | expr_stmt }
   -> TypedStatement {
       "get_child": { "index": 0 }
+  }
+
+// If statement variants
+if_stmt = { if_else | if_only }
+  -> TypedStatement { "get_child": { "index": 0 } }
+
+if_only = { "if" ~ "(" ~ expr ~ ")" ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "if", "args": {
+              "condition": "$1",
+              "then_branch": "$2"
+          }}
+      ]
+  }
+
+if_else = { "if" ~ "(" ~ expr ~ ")" ~ block ~ "else" ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "if", "args": {
+              "condition": "$1",
+              "then_branch": "$2",
+              "else_branch": "$3"
+          }}
+      ]
+  }
+
+// While loop
+while_stmt = { "while" ~ "(" ~ expr ~ ")" ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "while", "args": {
+              "condition": "$1",
+              "body": "$2"
+          }}
+      ]
+  }
+
+// Assignment statement: identifier = expr;
+assign_stmt = { identifier ~ "=" ~ expr ~ ";" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": "$1",
+              "value": "$2"
+          }}
+      ]
   }
 
 // Children (non-silent): expr?
@@ -234,9 +281,15 @@ block = { "{" ~ statement* ~ "}" }
 
 // ===== Expressions =====
 
-expr = { addition }
+expr = { comparison }
   -> TypedExpression {
       "get_child": { "index": 0 }
+  }
+
+// Comparison operators (lowest precedence)
+comparison = { addition ~ ((eq_op | neq_op | lte_op | gte_op | lt_op | gt_op) ~ addition)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "addition", "operator": "eq_op|neq_op|lte_op|gte_op|lt_op|gt_op" }
   }
 
 addition = { multiplication ~ ((add_op | sub_op) ~ multiplication)* }
@@ -254,12 +307,28 @@ unary = { unary_op? ~ primary }
       "get_child": { "index": 0 }
   }
 
-primary = { integer_literal | identifier_expr | paren_expr }
+primary = { bool_literal | integer_literal | call_expr | identifier_expr | paren_expr }
   -> TypedExpression {
       "get_child": { "index": 0 }
   }
 
 paren_expr = _{ "(" ~ expr ~ ")" }
+
+// Function call expression: identifier(args...)
+call_expr = { identifier ~ "(" ~ call_args? ~ ")" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "call", "args": {
+              "callee": "$1",
+              "args": "$2"
+          }}
+      ]
+  }
+
+call_args = { expr ~ ("," ~ expr)* }
+  -> List {
+      "get_all_children": true
+  }
 
 identifier_expr = { identifier }
   -> TypedExpression {
@@ -269,6 +338,13 @@ identifier_expr = { identifier }
   }
 
 // ===== Literals =====
+
+bool_literal = { "true" | "false" }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "bool_literal",
+      "args": { "value": "$result" }
+  }
 
 integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
   -> TypedExpression {
@@ -287,6 +363,26 @@ identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // ===== Operators =====
 
+// Comparison operators (must check longer operators first)
+eq_op = { "==" }
+  -> String { "get_text": true }
+
+neq_op = { "!=" }
+  -> String { "get_text": true }
+
+lte_op = { "<=" }
+  -> String { "get_text": true }
+
+gte_op = { ">=" }
+  -> String { "get_text": true }
+
+lt_op = { "<" }
+  -> String { "get_text": true }
+
+gt_op = { ">" }
+  -> String { "get_text": true }
+
+// Arithmetic operators
 add_op = { "+" }
   -> String { "get_text": true }
 

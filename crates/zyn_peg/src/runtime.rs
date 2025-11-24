@@ -1136,16 +1136,23 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_assignment(&mut self, target: NodeHandle, value: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        // Assignment is represented as an expression statement with binary op
-        // For simplicity, we'll create an expression statement
+        // Get target and value expressions
         let target_expr = self.get_expr(target)
             .unwrap_or_else(|| self.inner.variable("target", Type::Primitive(PrimitiveType::I32), span));
         let value_expr = self.get_expr(value)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
 
-        // For now, wrap as expression (proper assignment would need TypedAssignment)
-        let _ = target_expr; // TODO: proper assignment
-        let stmt = self.inner.expression_statement(value_expr, span);
+        // Create assignment as a binary expression: target = value
+        let assign_expr = self.inner.binary(
+            BinaryOp::Assign,
+            target_expr,
+            value_expr,
+            Type::Primitive(PrimitiveType::Unit),
+            span,
+        );
+
+        // Wrap in expression statement
+        let stmt = self.inner.expression_statement(assign_expr, span);
         self.store_stmt(stmt)
     }
 
@@ -1174,24 +1181,28 @@ impl AstHostFunctions for TypedAstBuilder {
         let cond_expr = self.get_expr(condition)
             .unwrap_or_else(|| self.inner.bool_literal(true, span));
 
-        let then_stmts = if let Some(stmt) = self.get_stmt(then_branch) {
-            vec![stmt]
+        // Get the then block - check for block first, then statement, then expression
+        let then_block = if let Some(block) = self.get_block(then_branch) {
+            block
+        } else if let Some(stmt) = self.get_stmt(then_branch) {
+            TypedBlock { statements: vec![stmt], span }
         } else if let Some(expr) = self.get_expr(then_branch) {
-            vec![self.inner.expression_statement(expr, span)]
+            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
         } else {
-            vec![]
+            TypedBlock { statements: vec![], span }
         };
-        let then_block = self.inner.block(then_stmts, span);
 
+        // Get the else block if present
         let else_block = else_branch.map(|h| {
-            let else_stmts = if let Some(stmt) = self.get_stmt(h) {
-                vec![stmt]
+            if let Some(block) = self.get_block(h) {
+                block
+            } else if let Some(stmt) = self.get_stmt(h) {
+                TypedBlock { statements: vec![stmt], span }
             } else if let Some(expr) = self.get_expr(h) {
-                vec![self.inner.expression_statement(expr, span)]
+                TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
             } else {
-                vec![]
-            };
-            self.inner.block(else_stmts, span)
+                TypedBlock { statements: vec![], span }
+            }
         });
 
         let stmt = self.inner.if_statement(cond_expr, then_block, else_block, span);
@@ -1204,14 +1215,16 @@ impl AstHostFunctions for TypedAstBuilder {
         let cond_expr = self.get_expr(condition)
             .unwrap_or_else(|| self.inner.bool_literal(true, span));
 
-        let body_stmts = if let Some(stmt) = self.get_stmt(body) {
-            vec![stmt]
+        // Get body block - check for block first, then statement, then expression
+        let body_block = if let Some(block) = self.get_block(body) {
+            block
+        } else if let Some(stmt) = self.get_stmt(body) {
+            TypedBlock { statements: vec![stmt], span }
         } else if let Some(expr) = self.get_expr(body) {
-            vec![self.inner.expression_statement(expr, span)]
+            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
         } else {
-            vec![]
+            TypedBlock { statements: vec![], span }
         };
-        let body_block = self.inner.block(body_stmts, span);
 
         let stmt = self.inner.while_loop(cond_expr, body_block, span);
         self.store_stmt(stmt)
@@ -1223,14 +1236,16 @@ impl AstHostFunctions for TypedAstBuilder {
         let iter_expr = self.get_expr(iterable)
             .unwrap_or_else(|| self.inner.variable("iter", Type::Primitive(PrimitiveType::I32), span));
 
-        let body_stmts = if let Some(stmt) = self.get_stmt(body) {
-            vec![stmt]
+        // Get body block - check for block first, then statement, then expression
+        let body_block = if let Some(block) = self.get_block(body) {
+            block
+        } else if let Some(stmt) = self.get_stmt(body) {
+            TypedBlock { statements: vec![stmt], span }
         } else if let Some(expr) = self.get_expr(body) {
-            vec![self.inner.expression_statement(expr, span)]
+            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
         } else {
-            vec![]
+            TypedBlock { statements: vec![], span }
         };
-        let body_block = self.inner.block(body_stmts, span);
 
         let stmt = self.inner.for_loop(iterator, iter_expr, body_block, span);
         self.store_stmt(stmt)
@@ -1746,6 +1761,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "bool_literal" => {
                 let value = match args.get("value") {
                     Some(RuntimeValue::Bool(b)) => *b,
+                    Some(RuntimeValue::String(s)) => s == "true",
                     _ => false,
                 };
                 let handle = self.host.create_bool_literal(value);
@@ -1904,8 +1920,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "call_expr" | "call" => {
+                // Callee can be either a Node (expression) or String (identifier)
                 let callee = match args.get("callee") {
                     Some(RuntimeValue::Node(h)) => *h,
+                    Some(RuntimeValue::String(name)) => {
+                        // Create a variable reference for the callee
+                        self.host.create_variable(name)
+                    }
                     _ => return Err(crate::error::ZynPegError::CodeGenError("call: missing callee".into())),
                 };
                 let call_args: Vec<NodeHandle> = match args.get("args") {
@@ -1917,6 +1938,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                             })
                             .collect()
                     }
+                    Some(RuntimeValue::Null) => vec![],
+                    None => vec![],
                     _ => vec![],
                 };
                 let handle = self.host.create_call(callee, call_args);
@@ -2066,8 +2089,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "assignment" | "assign" => {
+                // Target can be either a Node (expression) or String (identifier)
                 let target = match args.get("target") {
                     Some(RuntimeValue::Node(h)) => *h,
+                    Some(RuntimeValue::String(name)) => {
+                        // Create a variable reference for the target
+                        self.host.create_variable(name)
+                    }
                     _ => return Err(crate::error::ZynPegError::CodeGenError("assignment: missing target".into())),
                 };
                 let value = match args.get("value") {
@@ -2083,11 +2111,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::Node(h)) => *h,
                     _ => return Err(crate::error::ZynPegError::CodeGenError("if: missing condition".into())),
                 };
-                let then_block = match args.get("then").or(args.get("then_block")) {
+                let then_block = match args.get("then").or(args.get("then_block")).or(args.get("then_branch")) {
                     Some(RuntimeValue::Node(h)) => *h,
                     _ => return Err(crate::error::ZynPegError::CodeGenError("if: missing then block".into())),
                 };
-                let else_block = match args.get("else").or(args.get("else_block")) {
+                let else_block = match args.get("else").or(args.get("else_block")).or(args.get("else_branch")) {
                     Some(RuntimeValue::Node(h)) => Some(*h),
                     _ => None,
                 };
