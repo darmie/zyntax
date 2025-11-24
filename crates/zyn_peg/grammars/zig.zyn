@@ -26,9 +26,57 @@ program = { SOI ~ declaration* ~ EOI }
       ]
   }
 
-declaration = { fn_decl | const_decl | var_decl }
+declaration = { struct_decl | enum_decl | fn_decl | const_decl | var_decl }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
+  }
+
+// ===== Struct Declaration =====
+
+struct_decl = { "const" ~ identifier ~ "=" ~ "struct" ~ "{" ~ struct_fields? ~ "}" ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "struct", "args": {
+              "name": "$1",
+              "fields": "$2"
+          }}
+      ]
+  }
+
+struct_fields = { struct_field ~ ("," ~ struct_field)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+struct_field = { identifier ~ ":" ~ type_expr }
+  -> TypedField {
+      "commands": [
+          { "define": "field", "args": { "name": "$1", "type": "$2" } }
+      ]
+  }
+
+// ===== Enum Declaration =====
+
+enum_decl = { "const" ~ identifier ~ "=" ~ "enum" ~ "{" ~ enum_variants? ~ "}" ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "enum", "args": {
+              "name": "$1",
+              "variants": "$2"
+          }}
+      ]
+  }
+
+enum_variants = { enum_variant ~ ("," ~ enum_variant)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+enum_variant = { identifier }
+  -> TypedVariant {
+      "get_text": true,
+      "define": "variant",
+      "args": { "name": "$result" }
   }
 
 // ===== Function Declaration =====

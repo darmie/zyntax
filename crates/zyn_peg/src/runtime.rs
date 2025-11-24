@@ -359,6 +359,20 @@ pub trait AstHostFunctions {
     /// Create a named/user type
     fn create_named_type(&mut self, name: &str) -> NodeHandle;
 
+    // ========== Struct/Enum Declarations ==========
+
+    /// Create a struct declaration
+    fn create_struct(&mut self, name: &str, fields: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create an enum declaration
+    fn create_enum(&mut self, name: &str, variants: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a struct field
+    fn create_field(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
+
+    /// Create an enum variant
+    fn create_variant(&mut self, name: &str) -> NodeHandle;
+
     // ========== Span/Location ==========
 
     /// Set span on a node
@@ -1305,6 +1319,30 @@ impl AstHostFunctions for TypedAstBuilder {
         self.alloc_handle()
     }
 
+    fn create_struct(&mut self, _name: &str, _fields: Vec<NodeHandle>) -> NodeHandle {
+        // TODO: Implement struct declaration once TypedDeclaration supports it
+        // For now, just allocate a handle
+        self.alloc_handle()
+    }
+
+    fn create_enum(&mut self, _name: &str, _variants: Vec<NodeHandle>) -> NodeHandle {
+        // TODO: Implement enum declaration once TypedDeclaration supports it
+        // For now, just allocate a handle
+        self.alloc_handle()
+    }
+
+    fn create_field(&mut self, _name: &str, _ty: NodeHandle) -> NodeHandle {
+        // TODO: Implement field once TypedField is available
+        // For now, just allocate a handle
+        self.alloc_handle()
+    }
+
+    fn create_variant(&mut self, _name: &str) -> NodeHandle {
+        // TODO: Implement variant once TypedEnumVariant is available
+        // For now, just allocate a handle
+        self.alloc_handle()
+    }
+
     fn set_span(&mut self, _node: NodeHandle, _start: usize, _end: usize) {
         // Spans are handled inline during node creation
         // This could be extended to update spans if needed
@@ -1841,6 +1879,68 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                 let return_type = self.host.create_primitive_type("i32");
                 let handle = self.host.create_function(&name, params, return_type, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "struct" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "AnonymousStruct".to_string(),
+                };
+                let fields: Vec<NodeHandle> = match args.get("fields") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_struct(&name, fields);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "enum" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "AnonymousEnum".to_string(),
+                };
+                let variants: Vec<NodeHandle> = match args.get("variants") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_enum(&name, variants);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "field" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "field".to_string(),
+                };
+                let ty = match args.get("type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+                let handle = self.host.create_field(&name, ty);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "variant" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "Variant".to_string(),
+                };
+                let handle = self.host.create_variant(&name);
                 Ok(RuntimeValue::Node(handle))
             }
 
