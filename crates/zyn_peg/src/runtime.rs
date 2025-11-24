@@ -1794,7 +1794,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
-            "unary_op" => {
+            "unary_op" | "unary" => {
                 let op = match args.get("op").or(args.get("operator")) {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => "-".to_string(),
@@ -2137,7 +2137,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "for_stmt" | "for" => {
-                let variable = match args.get("variable").or(args.get("iterator")) {
+                let variable = match args.get("variable").or(args.get("iterator")).or(args.get("binding")) {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     Some(RuntimeValue::Node(h)) => {
                         // If it's a node, try to extract the name

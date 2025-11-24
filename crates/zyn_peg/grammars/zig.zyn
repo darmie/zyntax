@@ -151,7 +151,7 @@ primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" |
 
 // ===== Statements =====
 
-statement = { if_stmt | while_stmt | return_stmt | local_const | local_var | assign_stmt | expr_stmt }
+statement = { if_stmt | while_stmt | for_stmt | return_stmt | local_const | local_var | assign_stmt | expr_stmt }
   -> TypedStatement {
       "get_child": { "index": 0 }
   }
@@ -188,6 +188,18 @@ while_stmt = { "while" ~ "(" ~ expr ~ ")" ~ block }
           { "define": "while", "args": {
               "condition": "$1",
               "body": "$2"
+          }}
+      ]
+  }
+
+// For loop: for (slice) |item| { ... }
+for_stmt = { "for" ~ "(" ~ expr ~ ")" ~ "|" ~ identifier ~ "|" ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "for", "args": {
+              "iterable": "$1",
+              "binding": "$2",
+              "body": "$3"
           }}
       ]
   }
@@ -281,12 +293,24 @@ block = { "{" ~ statement* ~ "}" }
 
 // ===== Expressions =====
 
-expr = { comparison }
+expr = { logical_or }
   -> TypedExpression {
       "get_child": { "index": 0 }
   }
 
-// Comparison operators (lowest precedence)
+// Logical OR (lowest precedence)
+logical_or = { logical_and ~ (or_op ~ logical_and)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "logical_and", "operator": "or_op" }
+  }
+
+// Logical AND
+logical_and = { comparison ~ (and_op ~ comparison)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "comparison", "operator": "and_op" }
+  }
+
+// Comparison operators
 comparison = { addition ~ ((eq_op | neq_op | lte_op | gte_op | lt_op | gt_op) ~ addition)* }
   -> TypedExpression {
       "fold_binary": { "operand": "addition", "operator": "eq_op|neq_op|lte_op|gte_op|lt_op|gt_op" }
@@ -302,12 +326,19 @@ multiplication = { unary ~ ((mul_op | div_op) ~ unary)* }
       "fold_binary": { "operand": "unary", "operator": "mul_op|div_op" }
   }
 
-unary = { unary_op? ~ primary }
+unary = { unary_with_op | primary }
   -> TypedExpression {
       "get_child": { "index": 0 }
   }
 
-primary = { bool_literal | integer_literal | call_expr | identifier_expr | paren_expr }
+unary_with_op = { unary_op ~ primary }
+  -> TypedExpression {
+      "commands": [
+          { "define": "unary", "args": { "op": "$1", "operand": "$2" } }
+      ]
+  }
+
+primary = { bool_literal | string_literal | integer_literal | call_expr | identifier_expr | paren_expr }
   -> TypedExpression {
       "get_child": { "index": 0 }
   }
@@ -354,6 +385,17 @@ integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
       "args": { "value": "$result" }
   }
 
+string_literal = @{ "\"" ~ string_inner* ~ "\"" }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "string_literal",
+      "args": { "value": "$result" }
+  }
+
+string_inner = { (!("\"" | "\\") ~ ANY) | escape_seq }
+
+escape_seq = { "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "0") }
+
 // ===== Identifiers =====
 
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
@@ -362,6 +404,13 @@ identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
   }
 
 // ===== Operators =====
+
+// Logical operators
+and_op = { "and" }
+  -> String { "get_text": true }
+
+or_op = { "or" }
+  -> String { "get_text": true }
 
 // Comparison operators (must check longer operators first)
 eq_op = { "==" }
