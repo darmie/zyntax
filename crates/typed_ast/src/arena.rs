@@ -48,8 +48,14 @@ impl Serialize for InternedString {
     where
         S: serde::Serializer,
     {
-        // Serialize as the underlying symbol index
-        self.0.to_usize().serialize(serializer)
+        // Serialize as the actual string value for portability
+        // This makes the JSON human-readable and works across processes
+        if let Some(resolved) = self.resolve_global() {
+            resolved.serialize(serializer)
+        } else {
+            // Fallback to empty string if resolution fails
+            "".serialize(serializer)
+        }
     }
 }
 

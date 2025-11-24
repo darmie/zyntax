@@ -64,6 +64,13 @@ pub fn load(
     let typed_ast_json = parse_with_zpeg(&zpeg_module, &source_code, verbose)?;
 
     // Step 3: Deserialize TypedAST JSON to TypedProgram
+    if verbose {
+        // Pretty print the JSON for debugging
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&typed_ast_json) {
+            println!("{} TypedAST:\n{}", "debug:".yellow(), serde_json::to_string_pretty(&parsed).unwrap_or_default());
+        }
+    }
+
     let typed_program: TypedProgram = serde_json::from_str(&typed_ast_json)
         .map_err(|e| format!("Failed to deserialize TypedAST: {}", e))?;
 
@@ -224,12 +231,20 @@ fn walk_parse_tree<'a, H: zyn_peg::runtime::AstHostFunctions>(
 
         // Recursively process children first
         let children: Vec<RuntimeValue> = pair.into_inner()
-            .map(|child| walk_pair_to_value(child, interpreter))
+            .map(|child| walk_pair_to_value(child, interpreter, verbose))
             .collect();
+
+        if verbose && !children.is_empty() {
+            println!("    {} children: {}", "trace:".cyan(), children.len());
+        }
 
         // Execute commands for this rule
         let result = interpreter.execute_rule(&rule_name, &text, children)
             .map_err(|e| format!("Error executing rule '{}': {}", rule_name, e))?;
+
+        if verbose {
+            println!("    {} result: {:?}", "trace:".cyan(), result);
+        }
 
         results.push(result);
     }
@@ -242,15 +257,21 @@ fn walk_parse_tree<'a, H: zyn_peg::runtime::AstHostFunctions>(
 fn walk_pair_to_value<'a, H: zyn_peg::runtime::AstHostFunctions>(
     pair: pest::iterators::Pair<'a, &'a str>,
     interpreter: &mut zyn_peg::runtime::CommandInterpreter<'_, H>,
+    verbose: bool,
 ) -> zyn_peg::runtime::RuntimeValue {
     use zyn_peg::runtime::RuntimeValue;
 
     let rule_name = pair.as_rule().to_string();
     let text = pair.as_str().to_string();
 
+    if verbose {
+        println!("      {} walk_pair '{}': {:?}", "trace:".cyan(), rule_name,
+            if text.len() > 30 { format!("{}...", &text[..30]) } else { text.clone() });
+    }
+
     // Recursively process children
     let children: Vec<RuntimeValue> = pair.into_inner()
-        .map(|c| walk_pair_to_value(c, interpreter))
+        .map(|c| walk_pair_to_value(c, interpreter, verbose))
         .collect();
 
     // Execute commands for this rule

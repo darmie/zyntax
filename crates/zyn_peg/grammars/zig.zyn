@@ -1,1287 +1,306 @@
 // ===================================================================
-// ZynPEG Zig Grammar with TypedAST Action Blocks
+// Zig Grammar with JSON Commands for Zyn Runtime
 // ===================================================================
 //
-// This grammar extends the pest PEG syntax with action blocks that
-// generate TypedAST nodes directly during parsing.
+// This grammar uses JSON command blocks that work with the Zyn runtime
+// interpreter to build TypedAST nodes at parse time.
+//
+// Usage:
+//   zyntax compile --source file.zig --grammar zig.zyn --format zyn --run
 //
 // ===================================================================
 
 @language {
     name: "Zig",
     version: "0.11",
-    file_extensions: [".zig", ".zyn"],
-}
-
-@imports {
-    use zyntax_typed_ast::*;
-    use zyntax_typed_ast::typed_ast::*;
-    use zyntax_typed_ast::arena::AstArena;
-    use zyntax_typed_ast::types::Type;
-}
-
-@context {
-    arena: &mut AstArena,
-    type_registry: &mut TypeRegistry,
-    scope: &mut ScopeStack,
-}
-
-@type_helpers {
-    // Helper to fold binary operations into a typed_node tree
-    // Input: first operand and a list of (operator_string, operand) pairs
-    // Output: A TypedNode<TypedExpression> representing the binary tree
-    fn fold_binary(first: TypedNode<TypedExpression>, rest: Vec<(String, TypedNode<TypedExpression>)>, default_op: BinaryOp) -> TypedNode<TypedExpression> {
-        rest.into_iter().fold(first, |left, (op_str, right)| {
-            let op = match op_str.as_str() {
-                "+" => BinaryOp::Add,
-                "-" => BinaryOp::Sub,
-                "*" => BinaryOp::Mul,
-                "/" => BinaryOp::Div,
-                "%" => BinaryOp::Rem,
-                "==" => BinaryOp::Eq,
-                "!=" => BinaryOp::Ne,
-                "<" => BinaryOp::Lt,
-                "<=" => BinaryOp::Le,
-                ">" => BinaryOp::Gt,
-                ">=" => BinaryOp::Ge,
-                "and" => BinaryOp::And,
-                "or" => BinaryOp::Or,
-                "|" => BinaryOp::BitOr,
-                "&" => BinaryOp::BitAnd,
-                "^" => BinaryOp::BitXor,
-                "<<" => BinaryOp::Shl,
-                ">>" => BinaryOp::Shr,
-                _ => default_op,
-            };
-            let result_ty = Self::infer_binary_type(&left.ty, op, &right.ty);
-            let span = Span::new(left.span.start, right.span.end);
-            typed_node(
-                TypedExpression::Binary(TypedBinary {
-                    op,
-                    left: Box::new(left),
-                    right: Box::new(right),
-                }),
-                result_ty,
-                span,
-            )
-        })
-    }
-
-    fn infer_binary_type(left: &Type, op: BinaryOp, _right: &Type) -> Type {
-        match op {
-            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le |
-            BinaryOp::Gt | BinaryOp::Ge | BinaryOp::And | BinaryOp::Or => Type::Primitive(PrimitiveType::Bool),
-            _ => left.clone(),
-        }
-    }
-
-    fn fold_postfix(base: TypedNode<TypedExpression>, ops: Vec<PostfixOp>) -> TypedNode<TypedExpression> {
-        ops.into_iter().fold(base, |expr, op| {
-            let span = expr.span;
-            match op {
-                PostfixOp::Deref => typed_node(
-                    TypedExpression::Dereference(Box::new(expr)),
-                    Type::Never, // Type will be inferred later
-                    span,
-                ),
-                PostfixOp::Field(name) => typed_node(
-                    TypedExpression::Field(TypedFieldAccess {
-                        object: Box::new(expr),
-                        field: name,
-                    }),
-                    Type::Never,
-                    span,
-                ),
-                PostfixOp::Index(index) => typed_node(
-                    TypedExpression::Index(TypedIndex {
-                        object: Box::new(expr),
-                        index: Box::new(index),
-                    }),
-                    Type::Never,
-                    span,
-                ),
-                PostfixOp::Call(args) => typed_node(
-                    TypedExpression::Call(TypedCall {
-                        callee: Box::new(expr),
-                        positional_args: args,
-                        named_args: vec![],
-                        type_args: vec![],
-                    }),
-                    Type::Never,
-                    span,
-                ),
-                PostfixOp::OptionalUnwrap => typed_node(
-                    TypedExpression::Try(Box::new(expr)),
-                    Type::Never,
-                    span,
-                ),
-                PostfixOp::TryUnwrap => typed_node(
-                    TypedExpression::Try(Box::new(expr)),
-                    Type::Never,
-                    span,
-                ),
-            }
-        })
-    }
-
-    // Helper: Parse integer from string
-    fn parse_int(s: &str) -> i128 {
-        s.trim().parse().unwrap_or(0)
-    }
-
-    // Helper: Parse float from string
-    fn parse_float(s: &str) -> f64 {
-        s.trim().parse().unwrap_or(0.0)
-    }
-
-    // Helper: Unwrap result type (get the ok type)
-    fn unwrap_result_type(ty: &Type) -> Type {
-        match ty {
-            Type::Result { ok_type, .. } => (**ok_type).clone(),
-            _ => ty.clone(),
-        }
-    }
-
-    // Helper: Collect switch cases (placeholder)
-    fn collect_cases<T, U>(_first: T, _rest: U) -> Vec<TypedMatchArm> {
-        vec![]  // TODO: implement proper case collection
-    }
-
-    // Helper: Infer switch type from arms
-    fn infer_switch_type<T, U>(_first: T, _rest: U) -> Type {
-        Type::Never  // TODO: infer actual type
-    }
-
-    // Helper: Parse unary operator
-    fn parse_unary_op(op: &str) -> UnaryOp {
-        match op {
-            "+" => UnaryOp::Plus,
-            "-" => UnaryOp::Minus,
-            "!" => UnaryOp::Not,
-            "~" => UnaryOp::BitNot,
-            _ => UnaryOp::Minus,
-        }
-    }
-
-    // Helper: Collect expressions from first and rest captures
-    fn collect_exprs(first: TypedNode<TypedExpression>, rest: Vec<TypedNode<TypedExpression>>) -> Vec<TypedNode<TypedExpression>> {
-        let mut exprs = vec![first];
-        exprs.extend(rest);
-        exprs
-    }
+    file_extensions: [".zig"],
+    entry_point: "main",
 }
 
 // ===== Program Structure =====
 
 program = { SOI ~ declaration* ~ EOI }
   -> TypedProgram {
-      TypedProgram {
-          declarations: child_declaration
-              .iter()
-              .filter_map(|p| self.build_declaration(p.clone()).ok())
-              .collect::<Vec<_>>(),
-          span: span,
-      }
+      "commands": [
+          { "define": "program", "args": { "declarations": "$1" } }
+      ]
   }
 
-declaration = {
-    const_decl
-  | var_decl
-  | fn_decl
-  | struct_decl
-  | enum_decl
-  | union_decl
-  | error_set_decl
-}
-
-// ===== Declarations =====
-
-const_decl = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
-  -> TypedNode<TypedDeclaration> {
-      typed_node(
-          TypedDeclaration::Variable(TypedVariable {
-              name: intern($2),
-              ty: $3.unwrap_or(Type::Never),
-              mutability: Mutability::Immutable,
-              initializer: Some(Box::new($5)),
-              visibility: Visibility::Private,
-          }),
-          Type::Never,
-          span($1, $6),
-      )
+declaration = { fn_decl | const_decl | var_decl }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
   }
 
-var_decl = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
-  -> TypedNode<TypedDeclaration> {
-      typed_node(
-          TypedDeclaration::Variable(TypedVariable {
-              name: intern($2),
-              ty: $3.unwrap_or(Type::Never),
-              mutability: Mutability::Mutable,
-              initializer: Some(Box::new($5)),
-              visibility: Visibility::Private,
-          }),
-          Type::Never,
-          span($1, $6),
-      )
+// ===== Function Declaration =====
+
+// Split into two rules to handle the optional params correctly
+// pest doesn't produce placeholder children for missing optionals
+
+fn_decl = { fn_decl_with_params | fn_decl_no_params }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
   }
 
-fn_decl = {
-    "fn" ~ identifier ~
-    "(" ~ fn_params? ~ ")" ~ type_expr ~
-    block
-}
-  -> TypedNode<TypedDeclaration> {
-      typed_node(
-          TypedDeclaration::Function(TypedFunction {
-              name: intern($2),
-              type_params: vec![],
-              params: $4.unwrap_or_default(),
-              return_type: $6,
-              body: Some($7),
-              visibility: Visibility::Private,
-              is_async: false,
-              is_external: false,
-              calling_convention: CallingConvention::default(),
-              link_name: None,
-          }),
-          Type::Never,
-          span($1, $7),
-      )
+// With params: identifier, fn_params, type_expr, block
+fn_decl_with_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// No params: identifier, type_expr, block (no fn_params child)
+fn_decl_no_params = { "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "$2",
+              "body": "$3"
+          }}
+      ]
   }
 
 fn_params = { fn_param ~ ("," ~ fn_param)* }
-  -> Vec<TypedParameter> {
-      // Collect ALL fn_param children (not just the first one)
-      all_children
-          .iter()
-          .filter(|p| p.as_rule() == Rule::fn_param)
-          .filter_map(|p| self.build_fn_param(p.clone()).ok())
-          .collect()
+  -> List {
+      "get_child": { "index": 0 }
   }
-fn_param  = { comptime_param | regular_param }
-comptime_param = { "comptime" ~ identifier ~ ":" ~ "type" }
+
+// Children (non-silent): identifier, type_expr
+fn_param = { identifier ~ ":" ~ type_expr }
   -> TypedParameter {
-      TypedParameter {
-          name: intern($2),
-          ty: Type::Never,
-          mutability: Mutability::Immutable,
-          kind: ParameterKind::Regular,
-          default_value: None,
-          attributes: vec![],
-          span: span,
-      }
+      "commands": [
+          { "define": "param", "args": { "name": "$1", "type": "$2" } }
+      ]
   }
 
-regular_param = { identifier ~ ":" ~ type_expr }
-  -> TypedParameter {
-      TypedParameter {
-          name: intern($1),
-          ty: $3,
-          mutability: Mutability::Immutable,
-          kind: ParameterKind::Regular,
-          default_value: None,
-          attributes: vec![],
-          span: span,
-      }
+// ===== Variable Declarations =====
+// Split into typed/untyped variants since pest doesn't produce placeholder children for missing optionals
+
+const_decl = { const_decl_typed | const_decl_untyped }
+  -> TypedDeclaration { "get_child": { "index": 0 } }
+
+const_decl_typed = { "const" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3",
+              "is_const": true
+          }}
+      ]
   }
 
-struct_decl = {
-    "const" ~ identifier ~ "=" ~ "struct" ~ "{" ~
-    field_decl* ~
-    "}" ~ ";"
-}
-  -> TypedNode<TypedDeclaration> {
-      typed_node(
-          TypedDeclaration::Class(TypedClass {
-              name: intern($2),
-              type_params: vec![],
-              extends: None,
-              implements: vec![],
-              fields: $6,
-              methods: vec![],
-              constructors: vec![],
-              visibility: Visibility::Private,
-              is_abstract: false,
-              is_final: false,
-              span: span($1, $8),
-          }),
-          Type::Never,
-          span($1, $8),
-      )
+const_decl_untyped = { "const" ~ identifier ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "init": "$2",
+              "is_const": true
+          }}
+      ]
   }
 
-field_decl = { identifier ~ ":" ~ type_expr ~ "," }
-  -> TypedField {
-      TypedField {
-          name: intern($1),
-          ty: $3,
-          initializer: None,
-          visibility: Visibility::Private,
-          mutability: Mutability::Immutable,
-          is_static: false,
-          span: span($1, $3),
-      }
+var_decl = { var_decl_typed | var_decl_untyped }
+  -> TypedDeclaration { "get_child": { "index": 0 } }
+
+var_decl_typed = { "var" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3",
+              "is_const": false
+          }}
+      ]
   }
 
-enum_decl = {
-    "const" ~ identifier ~ "=" ~ "enum" ~ ("(" ~ type_expr ~ ")")? ~ "{" ~
-    enum_variant ~ ("," ~ enum_variant)* ~ ","? ~
-    "}" ~ ";"
-}
-  -> TypedNode<TypedDeclaration> {
-      typed_node(
-          TypedDeclaration::Enum(TypedEnum {
-              name: intern($2),
-              type_params: vec![],
-              variants: vec![],  // TODO: properly collect variants
-              visibility: Visibility::Private,
-              span: span($1, $11),
-          }),
-          Type::Never,
-          span($1, $11),
-      )
-  }
-
-enum_variant = { identifier ~ ("=" ~ expr)? }
-  -> TypedNode<TypedExpression> {
-      // Extract the name from the identifier - use all_children provided by generator
-      let mut name = String::new();
-      let mut value: Option<TypedNode<TypedExpression>> = None;
-      for inner in all_children.iter() {
-          match inner.as_rule() {
-              Rule::identifier => name = inner.as_str().to_string(),
-              Rule::expr => value = Some(self.build_expr(inner.clone())?),
-              _ => {}
-          }
-      }
-      typed_node(
-          TypedExpression::Variable(intern(&name)),
-          Type::Never,
-          span,
-      )
-  }
-
-union_decl = {
-    "const" ~ identifier ~ "=" ~ "union" ~ ("(" ~ "enum" ~ ")")? ~ "{" ~
-    union_field ~ ("," ~ union_field)* ~ ","? ~
-    "}" ~ ";"
-}
-  -> TypedNode<TypedDeclaration> {
-      typed_node(
-          TypedDeclaration::Class(TypedClass {
-              name: intern($2),
-              type_params: vec![],
-              extends: None,
-              implements: vec![],
-              fields: vec![],  // TODO: properly collect union fields
-              methods: vec![],
-              constructors: vec![],
-              visibility: Visibility::Private,
-              is_abstract: false,
-              is_final: false,
-              span: span($1, $11),
-          }),
-          Type::Never,
-          span($1, $11),
-      )
-  }
-
-union_field = { identifier ~ ":" ~ type_expr }
-  -> TypedField {
-      TypedField {
-          name: intern($1),
-          ty: $3,
-          initializer: None,
-          visibility: Visibility::Private,
-          mutability: Mutability::Immutable,
-          is_static: false,
-          span: span($1, $3),
-      }
-  }
-
-error_set_decl = {
-    "const" ~ identifier ~ "=" ~ "error" ~ "{" ~
-    identifier ~ ("," ~ identifier)* ~ ","? ~
-    "}" ~ ";"
-}
-  -> TypedNode<TypedDeclaration> {
-      typed_node(
-          TypedDeclaration::Enum(TypedEnum {
-              name: intern($2),
-              type_params: vec![],
-              variants: vec![],  // TODO: properly collect error names as variants
-              visibility: Visibility::Private,
-              span: span($1, $9),
-          }),
-          Type::Never,
-          span($1, $9),
-      )
+var_decl_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "init": "$2",
+              "is_const": false
+          }}
+      ]
   }
 
 // ===== Type Expressions =====
 
-type_expr = {
-    primitive_type
-  | identifier
-  | array_type
-  | pointer_type
-  | optional_type
-  | error_union_type
-}
+type_expr = { primitive_type | identifier }
   -> Type {
-      // Dispatch based on what was actually matched - use all_children from generator
-      if let Some(inner) = all_children.first() {
-          match inner.as_rule() {
-              Rule::primitive_type => self.build_primitive_type(inner.clone())?,
-              Rule::array_type => self.build_array_type(inner.clone())?,
-              Rule::pointer_type => self.build_pointer_type(inner.clone())?,
-              Rule::optional_type => self.build_optional_type(inner.clone())?,
-              Rule::error_union_type => self.build_error_union_type(inner.clone())?,
-              Rule::identifier => {
-                  // Convert identifier to Type::Named using a placeholder TypeId
-                  // The actual type resolution happens during type checking
-                  Type::Named {
-                      id: TypeId::new(0),  // Placeholder - resolved during type checking
-                      type_args: vec![],
-                      const_args: vec![],
-                      variance: vec![],
-                      nullability: NullabilityKind::NonNull,
-                  }
-              }
-              _ => Type::Named {
-                  id: TypeId::new(0),
-                  type_args: vec![],
-                  const_args: vec![],
-                  variance: vec![],
-                  nullability: NullabilityKind::NonNull,
-              }
-          }
-      } else {
-          // Fallback: treat entire text as type name
-          Type::Named {
-              id: TypeId::new(0),  // Placeholder
-              type_args: vec![],
-              const_args: vec![],
-              variance: vec![],
-              nullability: NullabilityKind::NonNull,
-          }
-      }
+      "get_child": { "index": 0 }
   }
 
-primitive_type = {
-    "i8" | "i16" | "i32" | "i64" | "i128"
-  | "u8" | "u16" | "u32" | "u64" | "u128"
-  | "f32" | "f64"
-  | "bool"
-  | "void"
-}
+primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" }
   -> Type {
-      parse_primitive_type($1)
-  }
-
-array_type = { "[" ~ integer_literal? ~ "]" ~ type_expr }
-  -> Type {
-      Type::Array {
-          element_type: Box::new($4),
-          size: $2.and_then(|e| {
-              if let TypedExpression::Literal(TypedLiteral::Integer(n)) = &e.node {
-                  Some(ConstValue::Int(*n as i64))
-              } else {
-                  None
-              }
-          }),
-          nullability: NullabilityKind::NonNull,
-      }
-  }
-
-pointer_type = { "*" ~ type_expr }
-  -> Type {
-      Type::Reference {
-          ty: Box::new($2),
-          mutability: Mutability::Immutable,
-          lifetime: None,
-          nullability: NullabilityKind::NonNull,
-      }
-  }
-
-optional_type = { "?" ~ type_expr }
-  -> Type {
-      Type::Optional(Box::new($2))
-  }
-
-error_union_type = { "!" ~ type_expr }
-  -> Type {
-      Type::Result {
-          ok_type: Box::new($2),
-          err_type: Box::new(Type::Never),
-      }
+      "get_text": true,
+      "define": "primitive_type",
+      "args": { "name": "$result" }
   }
 
 // ===== Statements =====
 
-statement = {
-    local_const
-  | local_var
-  | assignment
-  | if_stmt
-  | while_stmt
-  | for_stmt
-  | break_stmt
-  | continue_stmt
-  | return_stmt
-  | defer_stmt
-  | errdefer_stmt
-  | expr_stmt
-}
-
-// Local const/var declarations (return TypedStatement for use in blocks)
-local_const = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Let(TypedLet {
-              name: intern($2),
-              ty: $3.unwrap_or(Type::Never),
-              mutability: Mutability::Immutable,
-              initializer: Some(Box::new($5)),
-              span: span($1, $6),
-          }),
-          Type::Never,
-          span($1, $6),
-      )
+statement = { return_stmt | local_const | local_var | expr_stmt }
+  -> TypedStatement {
+      "get_child": { "index": 0 }
   }
 
-local_var = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Let(TypedLet {
-              name: intern($2),
-              ty: $3.unwrap_or(Type::Never),
-              mutability: Mutability::Mutable,
-              initializer: Some(Box::new($5)),
-              span: span($1, $6),
-          }),
-          Type::Never,
-          span($1, $6),
-      )
-  }
-
-defer_stmt = { "defer" ~ block }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Defer(TypedDefer {
-              body: Box::new(typed_node(
-                  TypedExpression::Block($2),
-                  Type::Never,
-                  span,
-              )),
-              span: span,
-          }),
-          Type::Never,
-          span,
-      )
-  }
-
-errdefer_stmt = { "errdefer" ~ block }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Defer(TypedDefer {
-              body: Box::new(typed_node(
-                  TypedExpression::Block($2),
-                  Type::Never,
-                  span,
-              )),
-              span: span,
-          }),
-          Type::Never,
-          span,
-      )
-  }
-
-assignment = { assign_target ~ assign_op ~ expr ~ ";" }
-  -> TypedNode<TypedStatement> {
-      // Assignment is an expression statement
-      typed_node(
-          TypedStatement::Expression(Box::new($3)),
-          Type::Never,
-          span($1, $4),
-      )
-  }
-
-assign_target = { identifier ~ ("[" ~ expr ~ "]")* }
-  -> TypedNode<TypedExpression> {
-      // Extract identifier and optional index expressions - use all_children from generator
-      let mut base: Option<TypedNode<TypedExpression>> = None;
-      let mut indices: Vec<TypedNode<TypedExpression>> = Vec::new();
-      for inner in all_children.iter() {
-          match inner.as_rule() {
-              Rule::identifier => {
-                  base = Some(typed_node(
-                      TypedExpression::Variable(intern(inner.as_str())),
-                      Type::Never,
-                      span,
-                  ));
-              }
-              Rule::expr => indices.push(self.build_expr(inner.clone())?),
-              _ => {}
-          }
-      }
-      let mut result = base.unwrap_or_else(|| typed_node(
-          TypedExpression::Variable(intern(pair_str)),
-          Type::Never,
-          span,
-      ));
-      // Apply index operations
-      for idx in indices {
-          result = typed_node(
-              TypedExpression::Index(TypedIndex {
-                  object: Box::new(result),
-                  index: Box::new(idx),
-              }),
-              Type::Never,
-              span,
-          );
-      }
-      result
-  }
-assign_op = { "<<=" | ">>=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "=" }
-
+// Children (non-silent): expr?
 return_stmt = { "return" ~ expr? ~ ";" }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Return($2.map(Box::new)),
-          Type::Never,
-          span($1, $3),
-      )
+  -> TypedStatement {
+      "commands": [
+          { "define": "return_stmt", "args": { "value": "$1" } }
+      ]
+  }
+
+// Split into typed/untyped variants
+local_const = { local_const_typed | local_const_untyped }
+  -> TypedStatement { "get_child": { "index": 0 } }
+
+local_const_typed = { "const" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3",
+              "is_const": true
+          }}
+      ]
+  }
+
+local_const_untyped = { "const" ~ identifier ~ "=" ~ expr ~ ";" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "init": "$2",
+              "is_const": true
+          }}
+      ]
+  }
+
+local_var = { local_var_typed | local_var_untyped }
+  -> TypedStatement { "get_child": { "index": 0 } }
+
+local_var_typed = { "var" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3",
+              "is_const": false
+          }}
+      ]
+  }
+
+local_var_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "init": "$2",
+              "is_const": false
+          }}
+      ]
   }
 
 expr_stmt = { expr ~ ";" }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Expression(Box::new($1)),
-          Type::Never,
-          span($1, $2),
-      )
+  -> TypedStatement {
+      "commands": [
+          { "define": "expression_stmt", "args": { "expr": "$1" } }
+      ]
   }
 
-if_stmt = {
-    if_let_stmt
-  | if_regular_stmt
-}
-
-if_let_stmt = {
-    "if" ~ "(" ~ "let" ~ pattern ~ "=" ~ expr ~ ")" ~ block ~
-    ("else" ~ block)?
-}
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::If(TypedIf {
-              condition: Box::new($6),
-              then_block: $8,
-              else_block: $9,
-              span: span,
-          }),
-          Type::Never,
-          span,
-      )
-  }
-
-if_regular_stmt = {
-    "if" ~ "(" ~ expr ~ ")" ~ block ~
-    ("else" ~ block)?
-}
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::If(TypedIf {
-              condition: Box::new($3),
-              then_block: $5,
-              else_block: $6,
-              span: span,
-          }),
-          Type::Never,
-          span,
-      )
-  }
-
-while_stmt = {
-    "while" ~ "(" ~ expr ~ ")" ~ block
-}
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::While(TypedWhile {
-              condition: Box::new($3),
-              body: $5,
-              span: span($1, $5),
-          }),
-          Type::Never,
-          span($1, $5),
-      )
-  }
-
-for_stmt = {
-    "for" ~ "(" ~ identifier ~ "in" ~ expr ~ ")" ~ block
-}
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::For(TypedFor {
-              pattern: Box::new(typed_node(
-                  TypedPattern::immutable_var(intern($3)),
-                  Type::Never,
-                  span,
-              )),
-              iterator: Box::new($5),
-              body: $7,
-          }),
-          Type::Never,
-          span,
-      )
-  }
-
-break_stmt = { "break" ~ ";" }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Break(None),
-          Type::Never,
-          span($1, $2),
-      )
-  }
-
-continue_stmt = { "continue" ~ ";" }
-  -> TypedNode<TypedStatement> {
-      typed_node(
-          TypedStatement::Continue,
-          Type::Never,
-          span($1, $2),
-      )
-  }
-
+// Collect all statements using get_all_children
 block = { "{" ~ statement* ~ "}" }
   -> TypedBlock {
-      TypedBlock {
-          statements: child_statement
-              .iter()
-              .filter_map(|p| self.build_statement(p.clone()).ok())
-              .collect::<Vec<_>>(),
-          span: span,
-      }
+      "get_all_children": true,
+      "define": "block",
+      "args": { "statements": "$result" }
   }
 
 // ===== Expressions =====
 
-expr = { orelse_expr }
-
-orelse_expr = { catch_expr ~ (orelse_op ~ catch_expr)* }
-  -> TypedNode<TypedExpression> {
-      // TODO: properly handle binary ops when generator supports tuples in repeated patterns
-      $1.clone()
+expr = { addition }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
   }
 
-catch_expr = { logical_or ~ (catch_op ~ logical_or)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
+addition = { multiplication ~ ((add_op | sub_op) ~ multiplication)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "multiplication", "operator": "add_op|sub_op" }
   }
 
-logical_or = { logical_and ~ (log_or_op ~ logical_and)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
+multiplication = { unary ~ ((mul_op | div_op) ~ unary)* }
+  -> TypedExpression {
+      "fold_binary": { "operand": "unary", "operator": "mul_op|div_op" }
   }
 
-logical_and = { equality ~ (log_and_op ~ equality)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
+unary = { unary_op? ~ primary }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
   }
 
-equality = { comparison ~ (eq_op ~ comparison)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
+primary = { integer_literal | identifier_expr | paren_expr }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
   }
 
-comparison = { bitwise_or ~ (cmp_op ~ bitwise_or)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
+paren_expr = _{ "(" ~ expr ~ ")" }
+
+identifier_expr = { identifier }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "variable",
+      "args": { "name": "$result" }
   }
-
-bitwise_or = { bitwise_xor ~ (bit_or_op ~ bitwise_xor)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
-  }
-
-bitwise_xor = { bitwise_and ~ (bit_xor_op ~ bitwise_and)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
-  }
-
-bitwise_and = { bit_shift ~ (bit_and_op ~ bit_shift)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
-  }
-
-bit_shift = { addition ~ (shift_op ~ addition)* }
-  -> TypedNode<TypedExpression> {
-      $1.clone()
-  }
-
-addition = { multiplication ~ (add_op ~ multiplication)* }
-  -> TypedNode<TypedExpression> {
-      // Collect (operator, operand) pairs from the repeated group
-      let mut rest: Vec<(String, TypedNode<TypedExpression>)> = Vec::new();
-      let mut iter = all_children.iter();
-      // Skip first multiplication (it's our $1)
-      if let Some(first) = iter.next() {
-          // Now iterate through remaining pairs: add_op, multiplication, add_op, multiplication, ...
-          while let Some(op_pair) = iter.next() {
-              if let Some(operand_pair) = iter.next() {
-                  let op_str = op_pair.as_str().to_string();
-                  if let Ok(operand) = self.build_multiplication(operand_pair.clone()) {
-                      rest.push((op_str, operand));
-                  }
-              }
-          }
-          Self::fold_binary(self.build_multiplication(first.clone())?, rest, BinaryOp::Add)
-      } else {
-          typed_node(TypedExpression::Variable(intern("error")), Type::Never, span)
-      }
-  }
-
-multiplication = { unary ~ (mul_op ~ unary)* }
-  -> TypedNode<TypedExpression> {
-      // Collect (operator, operand) pairs from the repeated group
-      let mut rest: Vec<(String, TypedNode<TypedExpression>)> = Vec::new();
-      let mut iter = all_children.iter();
-      // Skip first unary (it's our $1)
-      if let Some(first) = iter.next() {
-          // Now iterate through remaining pairs: mul_op, unary, mul_op, unary, ...
-          while let Some(op_pair) = iter.next() {
-              if let Some(operand_pair) = iter.next() {
-                  let op_str = op_pair.as_str().to_string();
-                  if let Ok(operand) = self.build_unary(operand_pair.clone()) {
-                      rest.push((op_str, operand));
-                  }
-              }
-          }
-          Self::fold_binary(self.build_unary(first.clone())?, rest, BinaryOp::Mul)
-      } else {
-          typed_node(TypedExpression::Variable(intern("error")), Type::Never, span)
-      }
-  }
-
-unary = { unary_op? ~ postfix }
-  -> TypedNode<TypedExpression> {
-      match $1 {
-          Some(op) => typed_node(
-              TypedExpression::Unary(TypedUnary {
-                  op: Self::parse_unary_op(&op),
-                  operand: Box::new($2.clone()),
-              }),
-              $2.ty.clone(),
-              span,
-          ),
-          None => $2,
-      }
-  }
-
-postfix = {
-    primary ~ postfix_op*
-}
-  -> TypedNode<TypedExpression> {
-      Self::fold_postfix($1, $2)
-  }
-
-postfix_op = {
-    deref_op
-  | field_op
-  | index_op
-  | call_op
-}
-
-deref_op = { ".*" }
-  -> PostfixOp {
-      PostfixOp::Deref
-  }
-
-field_op = { "." ~ identifier }
-  -> PostfixOp {
-      PostfixOp::Field(intern($2))
-  }
-
-index_op = { "[" ~ expr ~ "]" }
-  -> PostfixOp {
-      PostfixOp::Index($2)
-  }
-
-call_op = { "(" ~ arg_list? ~ ")" }
-  -> PostfixOp {
-      PostfixOp::Call($2.unwrap_or_default())
-  }
-
-arg_list = { expr ~ ("," ~ expr)* }
-  -> Vec<TypedExpression> {
-      Self::collect_exprs($1, $2)
-  }
-
-args = { expr ~ ("," ~ expr)* }
-
-primary = {
-    literal
-  | struct_literal
-  | switch_expr
-  | try_expr
-  | lambda_expr
-  | "(" ~ expr ~ ")"
-  | identifier
-}
-  -> TypedNode<TypedExpression> {
-      if let Some(inner) = all_children.first() {
-          match inner.as_rule() {
-              Rule::literal => self.build_literal(inner.clone())?,
-              Rule::struct_literal => self.build_struct_literal(inner.clone())?,
-              Rule::switch_expr => self.build_switch_expr(inner.clone())?,
-              Rule::try_expr => self.build_try_expr(inner.clone())?,
-              Rule::lambda_expr => self.build_lambda_expr(inner.clone())?,
-              Rule::expr => self.build_expr(inner.clone())?,
-              Rule::identifier => {
-                  // Convert identifier to variable expression
-                  let name = inner.as_str();
-                  typed_node(
-                      TypedExpression::Variable(intern(name)),
-                      Type::Never,
-                      span,
-                  )
-              }
-              _ => typed_node(
-                  TypedExpression::Variable(intern(pair_str)),
-                  Type::Never,
-                  span,
-              )
-          }
-      } else {
-          // Fallback: treat as variable
-          typed_node(
-              TypedExpression::Variable(intern(pair_str)),
-              Type::Never,
-              span,
-          )
-      }
-  }
-
-// ===== Lambda/Closure Expression =====
-
-lambda_expr = { lambda_start ~ lambda_params? ~ lambda_end ~ block }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Lambda(TypedLambda {
-              params: vec![],  // TODO: properly parse lambda params
-              body: TypedLambdaBody::Block($4),
-              captures: vec![],
-          }),
-          Type::Function {
-              params: vec![],
-              return_type: Box::new(Type::Never),
-              is_varargs: false,
-              has_named_params: false,
-              has_default_params: false,
-              async_kind: AsyncKind::Sync,
-              calling_convention: CallingConvention::Default,
-              nullability: NullabilityKind::NonNull,
-          },
-          span,
-      )
-  }
-
-// Helper rules for lambda delimiters
-lambda_start = { "|" }
-lambda_end = { "|" }
-
-lambda_params = { lambda_param ~ ("," ~ lambda_param)* }
-lambda_param = { identifier ~ (":" ~ type_expr)? }
-  -> Param {
-      name: intern($1),
-      ty: $2.unwrap_or(Type::Unknown),
-      is_comptime: false,
-  }
-
-// ===== Try Expression =====
-
-try_expr = { "try" ~ postfix }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Try(Box::new($2.clone())),
-          Self::unwrap_result_type(&$2.ty),
-          span,
-      )
-  }
-
-// ===== Switch Expression =====
-
-switch_expr = {
-    "switch" ~ "(" ~ expr ~ ")" ~ "{" ~
-    switch_case ~ ("," ~ switch_case)* ~ ","? ~
-    "}"
-}
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Match(TypedMatchExpr {
-              scrutinee: Box::new($3),
-              arms: Self::collect_cases($6, $7),
-          }),
-          Self::infer_switch_type($6, $7),
-          span,
-      )
-  }
-
-switch_case = {
-    switch_pattern ~ "=>" ~ expr
-}
-
-switch_pattern = {
-    integer_literal
-  | switch_else
-  | identifier
-}
-  -> TypedNode<TypedExpression> {
-      if let Some(inner) = all_children.first() {
-          match inner.as_rule() {
-              Rule::integer_literal => self.build_integer_literal(inner.clone())?,
-              Rule::switch_else => self.build_switch_else(inner.clone())?,
-              Rule::identifier => {
-                  // Convert identifier to variable expression
-                  let name = inner.as_str();
-                  typed_node(
-                      TypedExpression::Variable(intern(name)),
-                      Type::Never,
-                      span,
-                  )
-              }
-              _ => typed_node(
-                  TypedExpression::Variable(intern(pair_str)),
-                  Type::Never,
-                  span,
-              )
-          }
-      } else {
-          // Fallback: treat as identifier
-          typed_node(
-              TypedExpression::Variable(intern(pair_str)),
-              Type::Never,
-              span,
-          )
-      }
-  }
-
-switch_else = { "else" }
 
 // ===== Literals =====
 
-literal = {
-    bool_literal
-  | null_literal
-  | undefined_literal
-  | float_literal     // Must be before integer_literal (3.14 vs 3)
-  | integer_literal
-  | string_literal
-  | array_literal
-}
-
-null_literal = { "null" }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Literal(TypedLiteral::Null),
-          Type::Nullable(Box::new(Type::Never)),
-          span,
-      )
-  }
-
-undefined_literal = { "undefined" }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Literal(TypedLiteral::Undefined),
-          Type::Never,
-          span,
-      )
-  }
-
-bool_literal = { "true" | "false" }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Literal(TypedLiteral::Bool($1 == "true")),
-          Type::Primitive(PrimitiveType::Bool),
-          span,
-      )
-  }
-
 integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Literal(TypedLiteral::Integer(Self::parse_int(pair_str))),
-          Type::Primitive(PrimitiveType::I32),
-          span,
-      )
-  }
-
-float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Literal(TypedLiteral::Float(Self::parse_float(pair_str))),
-          Type::Primitive(PrimitiveType::F64),
-          span,
-      )
-  }
-
-string_literal = @{ "\"" ~ string_inner ~ "\"" }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Literal(TypedLiteral::String(InternedString::new_global(pair_str.trim_matches('"')))),
-          Type::Primitive(PrimitiveType::String),
-          span,
-      )
-  }
-
-string_inner = @{ (!("\"" | "\\") ~ ANY)* }
-
-array_literal = { "[" ~ "_" ~ "]" ~ type_expr ~ "{" ~ (expr ~ ("," ~ expr)*)? ~ "}" }
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Array(vec![]),
-          Type::Array {
-              element_type: Box::new($4),
-              size: None,
-              nullability: NullabilityKind::NonNull,
-          },
-          span,
-      )
-  }
-
-struct_literal = {
-    identifier ~ "{" ~ struct_field_init? ~ ("," ~ struct_field_init)* ~ ","? ~ "}"
-}
-  -> TypedNode<TypedExpression> {
-      typed_node(
-          TypedExpression::Struct(TypedStructLiteral {
-              name: intern($1),
-              fields: vec![],  // TODO: properly collect fields
-          }),
-          Type::Never,  // Type will be resolved during type checking
-          span,
-      )
-  }
-
-struct_field_init = { "." ~ identifier ~ "=" ~ expr }
-  -> TypedFieldInit {
-      // Extract field name and value - use all_children from generator
-      let mut field_name = String::new();
-      let mut value: Option<TypedNode<TypedExpression>> = None;
-      for inner in all_children.iter() {
-          match inner.as_rule() {
-              Rule::identifier => field_name = inner.as_str().to_string(),
-              Rule::expr => value = Some(self.build_expr(inner.clone())?),
-              _ => {}
-          }
-      }
-      TypedFieldInit {
-          name: intern(&field_name),
-          value: Box::new(value.unwrap_or_else(|| typed_node(
-              TypedExpression::Variable(intern(&field_name)),
-              Type::Never,
-              span,
-          ))),
-      }
-  }
-
-// ===== Patterns =====
-
-pattern = {
-    wildcard_pattern
-  | identifier_pattern
-  | literal_pattern
-  | enum_pattern
-}
-
-wildcard_pattern = { "_" }
-  -> TypedNode<TypedPattern> {
-      typed_node(TypedPattern::Wildcard, Type::Never, span)
-  }
-
-identifier_pattern = { ("mut" ~ identifier) | identifier }
-  -> TypedNode<TypedPattern> {
-      // Extract name and check for 'mut' keyword - use all_children from generator
-      let mut is_mut = false;
-      let mut name = String::new();
-      for inner in all_children.iter() {
-          let text = inner.as_str();
-          if text == "mut" {
-              is_mut = true;
-          } else if inner.as_rule() == Rule::identifier {
-              name = text.to_string();
-          }
-      }
-      // If no identifier found, use the whole text
-      if name.is_empty() {
-          name = pair_str.to_string();
-      }
-      typed_node(
-          TypedPattern::Identifier {
-              name: intern(&name),
-              mutability: if is_mut { Mutability::Mutable } else { Mutability::Immutable },
-          },
-          Type::Never,
-          span,
-      )
-  }
-
-literal_pattern = { literal }
-  -> TypedNode<TypedPattern> {
-      typed_node(
-          TypedPattern::Literal(TypedLiteralPattern::Integer(0)),
-          Type::Never,
-          span,
-      )
-  }
-
-enum_pattern = {
-    identifier ~ "(" ~ pattern ~ ")"
-}
-  -> TypedNode<TypedPattern> {
-      typed_node(
-          TypedPattern::Enum {
-              name: intern($1),
-              variant: intern($1),
-              fields: vec![$3],
-          },
-          Type::Never,
-          span,
-      )
+  -> TypedExpression {
+      "get_text": true,
+      "parse_int": true,
+      "define": "int_literal",
+      "args": { "value": "$result" }
   }
 
 // ===== Identifiers =====
 
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
   -> String {
-      pair_str.to_string()
+      "get_text": true
   }
 
 // ===== Operators =====
 
-orelse_op = { "orelse" }
-catch_op = { "catch" }
+add_op = { "+" }
+  -> String { "get_text": true }
 
-log_or_op = { "or" }
-log_and_op = { "and" }
+sub_op = { "-" }
+  -> String { "get_text": true }
 
-cmp_op = { "<=" | ">=" | "<" | ">" }
-eq_op = { "==" | "!=" }
+mul_op = { "*" }
+  -> String { "get_text": true }
 
-bit_or_op = { "|" }
-bit_xor_op = { "^" }
-bit_and_op = { "&" }
-shift_op = { "<<" | ">>" }
+div_op = { "/" }
+  -> String { "get_text": true }
 
-add_op = { "+" | "-" }
-mul_op = { "*" | "/" | "%" }
-
-unary_op = { "-" | "!" | "~" | "&" }
-  -> String {
-      pair_str.to_string()
-  }
+unary_op = { "-" | "!" }
+  -> String { "get_text": true }
 
 // ===== Whitespace and Comments =====
 

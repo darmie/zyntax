@@ -20,6 +20,52 @@ use zyntax_compiler::{
 };
 use std::sync::{Arc, Mutex};
 
+/// Debug test to print TypedAST from Rust ZigParser for comparison with Zyn grammar output
+#[test]
+fn test_debug_typed_ast_variable_reference() {
+    use zyntax_typed_ast::{TypedDeclaration, TypedStatement};
+
+    let source = r#"
+        fn calculate() i32 {
+            const x = 10;
+            return x;
+        }
+    "#;
+
+    let pairs = ZigParser::parse(Rule::program, source)
+        .expect("Failed to parse Zig source");
+    let mut builder = ZigBuilder::new();
+    let program = builder.build_program(pairs)
+        .expect("Failed to build TypedAST");
+
+    // Verify both statements are in the body
+    assert_eq!(program.declarations.len(), 1);
+    if let TypedDeclaration::Function(func) = &program.declarations[0].node {
+        let body = func.body.as_ref().expect("Function should have a body");
+        println!("[DEBUG] Function body has {} statements", body.statements.len());
+        assert_eq!(body.statements.len(), 2, "Expected 2 statements (const x = 10 and return x)");
+
+        // Check first statement is Let
+        match &body.statements[0].node {
+            TypedStatement::Let(let_binding) => {
+                let name_str = let_binding.name.resolve_global().unwrap_or_default();
+                println!("[DEBUG] Statement 0: Let binding for '{}'", name_str);
+            }
+            other => panic!("Expected Let statement, got {:?}", other),
+        }
+
+        // Check second statement is Return
+        match &body.statements[1].node {
+            TypedStatement::Return(expr) => {
+                println!("[DEBUG] Statement 1: Return with expr: {:?}", expr);
+            }
+            other => panic!("Expected Return statement, got {:?}", other),
+        }
+    } else {
+        panic!("Expected function declaration");
+    }
+}
+
 #[test]
 fn test_zig_jit_simple_function() {
     let source = r#"

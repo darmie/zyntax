@@ -113,6 +113,9 @@ pub enum AstCommand {
         #[serde(default)]
         name: Option<String>,
     },
+    /// Get all children as a list (for rule* patterns)
+    /// e.g., {"type": "get_all_children"}
+    GetAllChildren,
     /// Get the text content of current node
     /// e.g., {"type": "get_text"}
     GetText,
@@ -490,6 +493,16 @@ impl ZpegCompiler {
                 commands.push(AstCommand::GetChild { index, name });
             }
 
+            // "get_all_children": true - collect all children as a list
+            // Can also include "store": "var_name" to store the result
+            if map.get("get_all_children").is_some() {
+                commands.push(AstCommand::GetAllChildren);
+                // If "store" field exists, add a Store command after get_all_children
+                if let Some(store_name) = map.get("store").and_then(|v| v.as_str()) {
+                    commands.push(AstCommand::Store { name: store_name.to_string() });
+                }
+            }
+
             // "get_text": true
             if map.get("get_text").is_some() {
                 commands.push(AstCommand::GetText);
@@ -803,6 +816,8 @@ pub struct TypedAstBuilder {
     expressions: HashMap<NodeHandle, TypedNode<TypedExpression>>,
     /// Stored statement nodes by handle
     statements: HashMap<NodeHandle, TypedNode<TypedStatement>>,
+    /// Stored block nodes by handle
+    blocks: HashMap<NodeHandle, TypedBlock>,
     /// Stored declaration nodes by handle
     declarations: HashMap<NodeHandle, TypedNode<TypedDeclaration>>,
     /// Program declaration handles (in order)
@@ -822,6 +837,7 @@ impl TypedAstBuilder {
             next_id: 0,
             expressions: HashMap::new(),
             statements: HashMap::new(),
+            blocks: HashMap::new(),
             declarations: HashMap::new(),
             program_decls: Vec::new(),
         }
@@ -855,6 +871,13 @@ impl TypedAstBuilder {
         handle
     }
 
+    /// Store a block and return its handle
+    fn store_block(&mut self, block: TypedBlock) -> NodeHandle {
+        let handle = self.alloc_handle();
+        self.blocks.insert(handle, block);
+        handle
+    }
+
     /// Get an expression by handle (cloning it)
     fn get_expr(&self, handle: NodeHandle) -> Option<TypedNode<TypedExpression>> {
         self.expressions.get(&handle).cloned()
@@ -863,6 +886,11 @@ impl TypedAstBuilder {
     /// Get a statement by handle (cloning it)
     fn get_stmt(&self, handle: NodeHandle) -> Option<TypedNode<TypedStatement>> {
         self.statements.get(&handle).cloned()
+    }
+
+    /// Get a block by handle (cloning it)
+    fn get_block(&self, handle: NodeHandle) -> Option<TypedBlock> {
+        self.blocks.get(&handle).cloned()
     }
 
     /// Get the default span for nodes
@@ -959,16 +987,16 @@ impl AstHostFunctions for TypedAstBuilder {
             })
             .collect();
 
-        // Get body statements
-        let body_stmts: Vec<TypedNode<TypedStatement>> = if let Some(stmt) = self.get_stmt(body) {
-            vec![stmt]
+        // Get body block - first try as a block, then as a single statement
+        let body_block = if let Some(block) = self.get_block(body) {
+            block
+        } else if let Some(stmt) = self.get_stmt(body) {
+            TypedBlock { statements: vec![stmt], span }
         } else if let Some(expr) = self.get_expr(body) {
-            vec![self.inner.expression_statement(expr, span)]
+            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
         } else {
-            vec![]
+            TypedBlock { statements: vec![], span }
         };
-
-        let body_block = self.inner.block(body_stmts, span);
 
         let func = self.inner.function(
             name,
@@ -1222,19 +1250,9 @@ impl AstHostFunctions for TypedAstBuilder {
             }
         }
 
-        // Store as statement
+        // Store the entire block and return its handle
         let block = TypedBlock { statements: stmts, span };
-        // Wrap block in a dummy statement for handle tracking
-        // For simplicity, return the first statement handle or create empty
-        if block.statements.is_empty() {
-            let unit_expr = self.inner.unit_literal(span);
-            let empty_stmt = self.inner.expression_statement(unit_expr, span);
-            self.store_stmt(empty_stmt)
-        } else {
-            // Return first statement's handle (blocks are handled specially in callers)
-            let first = block.statements.into_iter().next().unwrap();
-            self.store_stmt(first)
-        }
+        self.store_block(block)
     }
 
     fn create_expr_stmt(&mut self, expr: NodeHandle) -> NodeHandle {
@@ -1517,6 +1535,17 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     RuntimeValue::Null
                 };
                 self.value_stack.push(value);
+            }
+
+            AstCommand::GetAllChildren => {
+                // Collect all $N variables as a list
+                let mut children: Vec<RuntimeValue> = Vec::new();
+                let mut i = 1;
+                while let Some(val) = self.variables.get(&format!("${}", i)) {
+                    children.push(val.clone());
+                    i += 1;
+                }
+                self.value_stack.push(RuntimeValue::List(children));
             }
 
             AstCommand::GetText => {
@@ -1824,6 +1853,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                             })
                             .collect()
                     }
+                    // Handle single statement (when statement* matches exactly one)
+                    Some(RuntimeValue::Node(h)) => vec![*h],
                     _ => vec![],
                 };
                 let handle = self.host.create_block(statements);
@@ -2171,6 +2202,128 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => self.host.create_primitive_type("void"),
                 };
                 let handle = self.host.create_function_type(params, return_type);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // ===== ZIG-SPECIFIC NODES =====
+
+            "null_literal" => {
+                // Create null literal - for now use an int with special marker
+                // TypedASTBuilder may need a null_literal method added
+                let handle = self.host.create_identifier("null");
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "try_expr" | "try" => {
+                // try expression unwraps error union
+                let expr = match args.get("expr").or(args.get("operand")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("try: missing expr".into())),
+                };
+                // For now, represent as unary with special op
+                let handle = self.host.create_unary_op("try", expr);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "defer_stmt" | "defer" => {
+                // defer statement - execute on scope exit
+                let body = match args.get("body") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("defer: missing body".into())),
+                };
+                // Represent as expression statement for now
+                let handle = self.host.create_expr_stmt(body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "errdefer_stmt" | "errdefer" => {
+                // errdefer - execute on scope exit if error
+                let body = match args.get("body") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("errdefer: missing body".into())),
+                };
+                let handle = self.host.create_expr_stmt(body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "optional_type" => {
+                // ?T - optional type
+                let inner = match args.get("inner").or(args.get("element")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+                // Represent as pointer for now (optional is like nullable pointer)
+                let handle = self.host.create_pointer_type(inner);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "error_union_type" => {
+                // !T - error union type
+                let ok_type = match args.get("ok_type").or(args.get("inner")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+                // For now, just use the ok type (error handling comes later)
+                Ok(RuntimeValue::Node(ok_type))
+            }
+
+            "struct_decl" => {
+                // Struct type declaration
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "AnonymousStruct".to_string(),
+                };
+                // Create as named type for now
+                let handle = self.host.create_named_type(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "enum_decl" => {
+                // Enum type declaration
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "AnonymousEnum".to_string(),
+                };
+                let handle = self.host.create_named_type(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "union_decl" => {
+                // Union type declaration
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "AnonymousUnion".to_string(),
+                };
+                let handle = self.host.create_named_type(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "orelse_expr" | "orelse" => {
+                // x orelse y - unwrap optional or use default
+                let lhs = match args.get("lhs").or(args.get("left")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("orelse: missing lhs".into())),
+                };
+                let rhs = match args.get("rhs").or(args.get("right")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("orelse: missing rhs".into())),
+                };
+                // Represent as binary op with special operator
+                let handle = self.host.create_binary_op("orelse", lhs, rhs);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "catch_expr" | "catch" => {
+                // x catch y - unwrap error or use default/handler
+                let lhs = match args.get("lhs").or(args.get("left")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("catch: missing lhs".into())),
+                };
+                let rhs = match args.get("rhs").or(args.get("right")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("catch: missing rhs".into())),
+                };
+                let handle = self.host.create_binary_op("catch", lhs, rhs);
                 Ok(RuntimeValue::Node(handle))
             }
 
