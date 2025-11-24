@@ -338,25 +338,64 @@ unary_with_op = { unary_op ~ primary }
       ]
   }
 
-primary = { bool_literal | string_literal | integer_literal | call_expr | identifier_expr | paren_expr }
+primary = { postfix_expr }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Postfix expressions: base followed by call/field/index
+// For now, just handle simple cases - no chaining
+postfix_expr = { call_expr | field_expr | index_expr | atom }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Function call: atom(args...)
+call_expr = { atom ~ "(" ~ call_args? ~ ")" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "call", "args": { "callee": "$1", "args": "$2" } }
+      ]
+  }
+
+// Field access: atom.field
+field_expr = { atom ~ "." ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "field_access", "args": { "object": "$1", "field": "$2" } }
+      ]
+  }
+
+// Index: atom[index]
+index_expr = { atom ~ "[" ~ expr ~ "]" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "index", "args": { "object": "$1", "index": "$2" } }
+      ]
+  }
+
+call_args = { expr ~ ("," ~ expr)* }
+  -> List {
+      "get_all_children": true
+  }
+
+// Atom: the base of postfix expressions
+atom = { array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr }
   -> TypedExpression {
       "get_child": { "index": 0 }
   }
 
 paren_expr = _{ "(" ~ expr ~ ")" }
 
-// Function call expression: identifier(args...)
-call_expr = { identifier ~ "(" ~ call_args? ~ ")" }
+// Array literal: [a, b, c]
+array_literal = { "[" ~ array_elements? ~ "]" }
   -> TypedExpression {
       "commands": [
-          { "define": "call", "args": {
-              "callee": "$1",
-              "args": "$2"
-          }}
+          { "define": "array_literal", "args": { "elements": "$1" } }
       ]
   }
 
-call_args = { expr ~ ("," ~ expr)* }
+array_elements = { expr ~ ("," ~ expr)* }
   -> List {
       "get_all_children": true
   }
