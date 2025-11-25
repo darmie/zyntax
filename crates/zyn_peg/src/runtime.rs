@@ -1538,8 +1538,29 @@ impl AstHostFunctions for TypedAstBuilder {
             })
             .collect();
 
-        // Use Unknown type for now - proper struct types would need TypeRegistry lookup
-        let struct_type = Type::Unknown;
+        // Create an inline struct type with the fields from the literal
+        // This allows field access to work without a TypeRegistry lookup
+        let struct_fields: Vec<zyntax_typed_ast::type_registry::FieldDef> = fields.iter()
+            .map(|(field_name, _h)| {
+                zyntax_typed_ast::type_registry::FieldDef {
+                    name: InternedString::new_global(field_name),
+                    ty: Type::Primitive(PrimitiveType::I32), // Default to i32 for now
+                    visibility: Visibility::Public,
+                    mutability: Mutability::Immutable,
+                    is_static: false,
+                    span,
+                    getter: None,
+                    setter: None,
+                    is_synthetic: false,
+                }
+            })
+            .collect();
+
+        let struct_type = Type::Struct {
+            fields: struct_fields,
+            is_anonymous: false,
+            nullability: zyntax_typed_ast::NullabilityKind::NonNull,
+        };
 
         let expr = self.inner.struct_literal(name, field_exprs, struct_type, span);
         self.store_expr(expr)
