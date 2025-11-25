@@ -1,0 +1,158 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Zyn Grammar",
+    "scopeName": "source.zyn",
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#metadata-block" },
+        { "include": "#rule-definition" },
+        { "include": "#semantic-action" },
+        { "include": "#strings" },
+        { "include": "#operators" },
+        { "include": "#keywords" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                {
+                    "name": "comment.line.double-slash.zyn",
+                    "match": "//.*$"
+                }
+            ]
+        },
+        "metadata-block": {
+            "begin": "(@)(language|config|import|export)\\s*(\\{)",
+            "end": "\\}",
+            "beginCaptures": {
+                "1": { "name": "punctuation.definition.annotation.zyn" },
+                "2": { "name": "keyword.control.metadata.zyn" },
+                "3": { "name": "punctuation.section.block.begin.zyn" }
+            },
+            "endCaptures": {
+                "0": { "name": "punctuation.section.block.end.zyn" }
+            },
+            "patterns": [
+                {
+                    "match": "\\b(name|version|file_extensions|entry_point)\\b",
+                    "name": "variable.parameter.zyn"
+                },
+                { "include": "#strings" },
+                {
+                    "match": "\\[.*?\\]",
+                    "name": "meta.array.zyn"
+                },
+                {
+                    "match": ":",
+                    "name": "punctuation.separator.key-value.zyn"
+                },
+                {
+                    "match": ",",
+                    "name": "punctuation.separator.comma.zyn"
+                }
+            ]
+        },
+        "rule-definition": {
+            "patterns": [
+                {
+                    "match": "^\\s*([a-z_][a-zA-Z0-9_]*)\\s*(=)",
+                    "captures": {
+                        "1": { "name": "entity.name.function.rule.zyn" },
+                        "2": { "name": "keyword.operator.assignment.zyn" }
+                    }
+                },
+                {
+                    "match": "\\b([a-z_][a-zA-Z0-9_]*)\\b(?!\\s*=)",
+                    "name": "variable.other.rule-reference.zyn"
+                }
+            ]
+        },
+        "semantic-action": {
+            "begin": "->\\s*(TypedProgram|TypedDeclaration|TypedStatement|TypedExpression|TypedBlock|TypedParameter|TypedField|TypedVariant|Type|List|String)\\s*\\{",
+            "end": "\\}",
+            "beginCaptures": {
+                "0": { "name": "keyword.operator.arrow.zyn" },
+                "1": { "name": "entity.name.type.return.zyn" }
+            },
+            "contentName": "meta.embedded.block.json",
+            "patterns": [
+                { "include": "#json-content" }
+            ]
+        },
+        "json-content": {
+            "patterns": [
+                {
+                    "match": "\"(get_child|get_all_children|get_text|parse_int|define|args|commands|fold_binary|operand|operator|index)\"",
+                    "name": "support.function.json-key.zyn"
+                },
+                {
+                    "match": "\"\\$[0-9]+\"",
+                    "name": "variable.parameter.positional.zyn"
+                },
+                {
+                    "match": "\"\\$result\"",
+                    "name": "variable.parameter.result.zyn"
+                },
+                {
+                    "match": "\"[^\"]*\"",
+                    "name": "string.quoted.double.json.zyn"
+                },
+                {
+                    "match": "\\b(true|false|null)\\b",
+                    "name": "constant.language.json.zyn"
+                },
+                {
+                    "match": "\\b[0-9]+\\b",
+                    "name": "constant.numeric.json.zyn"
+                },
+                {
+                    "match": "[\\{\\}\\[\\]:,]",
+                    "name": "punctuation.json.zyn"
+                }
+            ]
+        },
+        "strings": {
+            "patterns": [
+                {
+                    "name": "string.quoted.double.zyn",
+                    "match": "\"[^\"]*\""
+                }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                {
+                    "match": "~",
+                    "name": "keyword.operator.sequence.zyn"
+                },
+                {
+                    "match": "\\|",
+                    "name": "keyword.operator.choice.zyn"
+                },
+                {
+                    "match": "[*+?]",
+                    "name": "keyword.operator.quantifier.zyn"
+                },
+                {
+                    "match": "!|&",
+                    "name": "keyword.operator.predicate.zyn"
+                },
+                {
+                    "match": "@",
+                    "name": "keyword.operator.atomic.zyn"
+                },
+                {
+                    "match": "_",
+                    "name": "keyword.operator.silent.zyn"
+                }
+            ]
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "match": "\\b(SOI|EOI|ANY|ASCII_DIGIT|ASCII_ALPHA|ASCII_ALPHANUMERIC|WHITESPACE|COMMENT|NEWLINE)\\b",
+                    "name": "support.constant.builtin.zyn"
+                }
+            ]
+        }
+    }
+}

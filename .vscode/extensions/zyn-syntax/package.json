@@ -1,0 +1,23 @@
+{
+    "name": "zyn-syntax",
+    "displayName": "Zyn Grammar Syntax",
+    "description": "Syntax highlighting for .zyn grammar files",
+    "version": "0.1.0",
+    "engines": {
+        "vscode": "^1.60.0"
+    },
+    "categories": ["Programming Languages"],
+    "contributes": {
+        "languages": [{
+            "id": "zyn",
+            "aliases": ["Zyn Grammar", "zyn"],
+            "extensions": [".zyn"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "zyn",
+            "scopeName": "source.zyn",
+            "path": "./syntaxes/zyn.tmLanguage.json"
+        }]
+    }
+}
