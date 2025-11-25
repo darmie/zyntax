@@ -19,7 +19,12 @@
 
 // ===== Program Structure =====
 
-program = { SOI ~ declaration* ~ EOI }
+program = { SOI ~ declarations ~ EOI }
+  -> TypedProgram {
+      "get_child": { "index": 0 }
+  }
+
+declarations = { declaration* }
   -> TypedProgram {
       "get_all_children": true,
       "define": "program",
@@ -541,7 +546,14 @@ escape_seq = { "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "0") }
 
 // ===== Identifiers =====
 
-identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+keyword = @{
+    ("struct" | "enum" | "fn" | "const" | "var" | "if" | "else" | "while" | "for" |
+     "return" | "break" | "continue" | "try" | "and" | "or" | "true" | "false" |
+     "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void")
+    ~ !(ASCII_ALPHANUMERIC | "_")
+}
+
+identifier = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
   -> String {
       "get_text": true
   }

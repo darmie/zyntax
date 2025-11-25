@@ -48,7 +48,8 @@ use crate::ZynGrammar;
 pub use zyntax_typed_ast::{
     TypedASTBuilder, TypedProgram, TypedNode, TypedDeclaration, TypedExpression,
     TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span, InternedString,
-    TypedClass, TypedEnum, TypedField, TypedVariant, TypedVariantFields,
+    TypedClass, TypedEnum, TypedField, TypedVariant,
+    typed_ast::TypedVariantFields,
     type_registry::{Type, PrimitiveType, Mutability, Visibility},
 };
 
