@@ -279,6 +279,12 @@ pub trait AstHostFunctions {
     /// Create a struct literal expression
     fn create_struct_literal(&mut self, name: &str, fields: Vec<(String, NodeHandle)>) -> NodeHandle;
 
+    /// Store a struct field initialization (for later lookup by struct_init)
+    fn store_struct_field_init(&mut self, name: &str, value: NodeHandle) -> NodeHandle;
+
+    /// Get a stored struct field initialization
+    fn get_struct_field_init(&self, handle: NodeHandle) -> Option<(String, NodeHandle)>;
+
     /// Create a cast expression
     fn create_cast(&mut self, expr: NodeHandle, target_type: NodeHandle) -> NodeHandle;
 
@@ -840,6 +846,8 @@ pub struct TypedAstBuilder {
     fields: HashMap<NodeHandle, TypedField>,
     /// Stored variant nodes by handle
     variants: HashMap<NodeHandle, TypedVariant>,
+    /// Stored struct field initializers (name, value) by handle
+    struct_field_inits: HashMap<NodeHandle, (String, NodeHandle)>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
 }
@@ -861,6 +869,7 @@ impl TypedAstBuilder {
             declarations: HashMap::new(),
             fields: HashMap::new(),
             variants: HashMap::new(),
+            struct_field_inits: HashMap::new(),
             program_decls: Vec::new(),
         }
     }
@@ -1534,6 +1543,16 @@ impl AstHostFunctions for TypedAstBuilder {
 
         let expr = self.inner.struct_literal(name, field_exprs, struct_type, span);
         self.store_expr(expr)
+    }
+
+    fn store_struct_field_init(&mut self, name: &str, value: NodeHandle) -> NodeHandle {
+        let handle = self.alloc_handle();
+        self.struct_field_inits.insert(handle, (name.to_string(), value));
+        handle
+    }
+
+    fn get_struct_field_init(&self, handle: NodeHandle) -> Option<(String, NodeHandle)> {
+        self.struct_field_inits.get(&handle).cloned()
     }
 
     fn create_cast(&mut self, expr_handle: NodeHandle, _target_type: NodeHandle) -> NodeHandle {
@@ -2222,6 +2241,47 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => vec![],
                 };
                 let handle = self.host.create_struct_literal(&name, fields);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // Struct instantiation: Point{ .x = 10, .y = 20 }
+            "struct_init" => {
+                let type_name = match args.get("type_name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "AnonymousStruct".to_string(),
+                };
+                // Fields come as a list of struct_field_init results
+                // Each struct_field_init stores (name, value) in host's struct_init_fields map
+                let fields: Vec<(String, NodeHandle)> = match args.get("fields") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => {
+                                    // Look up the field init data from host
+                                    self.host.get_struct_field_init(*h)
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_struct_literal(&type_name, fields);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // Struct field initialization: .x = 10
+            "struct_field_init" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "field".to_string(),
+                };
+                let value = match args.get("value") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("struct_field_init: missing value".into())),
+                };
+                // Store field init and return a handle for later lookup
+                let handle = self.host.store_struct_field_init(&name, value);
                 Ok(RuntimeValue::Node(handle))
             }
 

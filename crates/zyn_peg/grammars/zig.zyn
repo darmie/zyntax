@@ -481,9 +481,29 @@ call_args = { expr ~ ("," ~ expr)* }
   }
 
 // Atom: the base of postfix expressions
-atom = { try_expr | array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr }
+atom = { try_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr }
   -> TypedExpression {
       "get_child": { "index": 0 }
+  }
+
+// Struct instantiation: Point{ .x = 10, .y = 20 }
+struct_init = { identifier ~ "{" ~ struct_init_fields? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "struct_init", "args": { "type_name": "$1", "fields": "$2" } }
+      ]
+  }
+
+struct_init_fields = { struct_init_field ~ ("," ~ struct_init_field)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+struct_init_field = { "." ~ identifier ~ "=" ~ expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "struct_field_init", "args": { "name": "$1", "value": "$2" } }
+      ]
   }
 
 // Try expression: try expr
