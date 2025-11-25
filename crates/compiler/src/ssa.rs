@@ -9,7 +9,7 @@ use std::sync::Arc;
 use zyntax_typed_ast::{InternedString, Type, ConstValue, typed_ast::{TypedNode, TypedExpression}};
 use petgraph::visit::EdgeRef; // For .source() method on edges
 use crate::hir::{
-    HirId, HirFunction, HirBlock, HirInstruction, HirValueKind,
+    HirId, HirFunction, HirBlock, HirInstruction, HirValueKind, HirConstant,
     HirType, HirPhi, HirTerminator, CastOp, HirParam, HirFunctionSignature
 };
 use crate::cfg::{ControlFlowGraph, BasicBlock};
@@ -1620,9 +1620,12 @@ impl SsaBuilder {
             }
 
             TypedExpression::Struct(struct_lit) => {
-                // Allocate struct
+                // Allocate struct on stack
                 let struct_ty = self.convert_type(&expr.ty);
-                let alloc_result = self.create_value(struct_ty.clone(), HirValueKind::Instruction);
+                let alloc_result = self.create_value(
+                    HirType::Ptr(Box::new(struct_ty.clone())),
+                    HirValueKind::Instruction
+                );
 
                 self.add_instruction(block_id, HirInstruction::Alloca {
                     result: alloc_result,
@@ -1631,11 +1634,15 @@ impl SsaBuilder {
                     align: 8,
                 });
 
-                // Initialize each field
+                // Store each field value at the appropriate offset
                 for (i, field) in struct_lit.fields.iter().enumerate() {
                     let field_val = self.translate_expression(block_id, &field.value)?;
 
-                    let insert_result = self.create_value(struct_ty.clone(), HirValueKind::Instruction);
+                    // Use InsertValue with the alloc as the aggregate (pointer)
+                    let insert_result = self.create_value(
+                        HirType::Ptr(Box::new(struct_ty.clone())),
+                        HirValueKind::Instruction
+                    );
                     self.add_instruction(block_id, HirInstruction::InsertValue {
                         result: insert_result,
                         ty: struct_ty.clone(),
@@ -1643,8 +1650,11 @@ impl SsaBuilder {
                         value: field_val,
                         indices: vec![i as u32],
                     });
+                    self.add_use(alloc_result, insert_result);
+                    self.add_use(field_val, insert_result);
                 }
 
+                // Return the pointer to the allocated struct
                 Ok(alloc_result)
             }
 
@@ -2729,6 +2739,20 @@ impl SsaBuilder {
                     discriminant_type: Box::new(HirType::U32),
                     is_c_union: false,
                 }))
+            },
+            Type::Struct { fields, .. } => {
+                // Convert inline struct type to HirType::Struct
+                use crate::hir::HirStructType;
+
+                let hir_fields: Vec<HirType> = fields.iter()
+                    .map(|field| self.convert_type(&field.ty))
+                    .collect();
+
+                HirType::Struct(HirStructType {
+                    name: None,
+                    fields: hir_fields,
+                    packed: false,
+                })
             },
             _ => HirType::I64, // Default for complex types
         }
