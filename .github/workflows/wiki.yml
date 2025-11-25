@@ -1,0 +1,53 @@
+name: Publish Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'book/**'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  publish-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare wiki content
+        run: |
+          mkdir -p wiki
+
+          # Copy book files to wiki directory
+          cp book/README.md wiki/Home.md
+          cp book/01-introduction.md wiki/01-Introduction.md
+          cp book/02-getting-started.md wiki/02-Getting-Started.md
+          cp book/03-using-the-cli.md wiki/03-Using-the-CLI.md
+          cp book/04-grammar-syntax.md wiki/04-Grammar-Syntax.md
+          cp book/05-semantic-actions.md wiki/05-Semantic-Actions.md
+          cp book/06-typed-ast.md wiki/06-The-TypedAST.md
+          cp book/07-typed-ast-builder.md wiki/07-TypedAST-Builder.md
+          cp book/08-zig-example.md wiki/08-Zig-Example.md
+          cp book/09-reference.md wiki/09-Reference.md
+
+          # Fix internal links for wiki format
+          # GitHub wiki uses spaces as hyphens in URLs
+          sed -i 's|\./01-introduction\.md|01-Introduction|g' wiki/*.md
+          sed -i 's|\./02-getting-started\.md|02-Getting-Started|g' wiki/*.md
+          sed -i 's|\./03-using-the-cli\.md|03-Using-the-CLI|g' wiki/*.md
+          sed -i 's|\./04-grammar-syntax\.md|04-Grammar-Syntax|g' wiki/*.md
+          sed -i 's|\./05-semantic-actions\.md|05-Semantic-Actions|g' wiki/*.md
+          sed -i 's|\./06-typed-ast\.md|06-The-TypedAST|g' wiki/*.md
+          sed -i 's|\./07-typed-ast-builder\.md|07-TypedAST-Builder|g' wiki/*.md
+          sed -i 's|\./08-zig-example\.md|08-Zig-Example|g' wiki/*.md
+          sed -i 's|\./09-reference\.md|09-Reference|g' wiki/*.md
+
+      - name: Upload wiki
+        uses: Andrew-Chen-Wang/github-wiki-action@v4
+        with:
+          path: wiki/
+          token: ${{ secrets.GITHUB_TOKEN }}
