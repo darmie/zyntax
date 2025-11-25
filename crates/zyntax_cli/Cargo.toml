@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 zyntax_typed_ast = { path = "../typed_ast" }
-zyntax_compiler = { path = "../compiler" }
+zyntax_compiler = { path = "../compiler", features = ["cranelift-backend"] }
 zyn_peg = { path = "../zyn_peg" }
 pest = "2.7"
 pest_derive = "2.7"
@@ -46,3 +46,11 @@ log = "0.4"
 # REPL
 rustyline = "14.0"
 dirs = "5.0"
+
+# LLVM backend (optional)
+inkwell = { version = "0.4", features = ["llvm17-0"], optional = true }
+
+[features]
+default = []
+llvm-backend = ["zyntax_compiler/llvm-backend", "inkwell"]
+all-backends = ["llvm-backend"]
