@@ -848,6 +848,8 @@ pub struct TypedAstBuilder {
     variants: HashMap<NodeHandle, TypedVariant>,
     /// Stored struct field initializers (name, value) by handle
     struct_field_inits: HashMap<NodeHandle, (String, NodeHandle)>,
+    /// Variable name to type mapping (for proper variable references)
+    variable_types: HashMap<String, Type>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
 }
@@ -870,6 +872,7 @@ impl TypedAstBuilder {
             fields: HashMap::new(),
             variants: HashMap::new(),
             struct_field_inits: HashMap::new(),
+            variable_types: HashMap::new(),
             program_decls: Vec::new(),
         }
     }
@@ -1148,7 +1151,20 @@ impl AstHostFunctions for TypedAstBuilder {
         let object_expr = self.get_expr(object)
             .unwrap_or_else(|| self.inner.variable("object", Type::Primitive(PrimitiveType::I32), span));
 
-        let expr = self.inner.field_access(object_expr, field, Type::Primitive(PrimitiveType::I32), span);
+        // Infer field type from object's struct type
+        let field_type = match &object_expr.ty {
+            Type::Struct { fields, .. } => {
+                // Find the field by name and get its type
+                let field_name = InternedString::new_global(field);
+                fields.iter()
+                    .find(|f| f.name == field_name)
+                    .map(|f| f.ty.clone())
+                    .unwrap_or(Type::Primitive(PrimitiveType::I32))
+            }
+            _ => Type::Primitive(PrimitiveType::I32),
+        };
+
+        let expr = self.inner.field_access(object_expr, field, field_type, span);
         self.store_expr(expr)
     }
 
@@ -1164,9 +1180,17 @@ impl AstHostFunctions for TypedAstBuilder {
         let init_expr = init.and_then(|h| self.get_expr(h));
         let mutability = if is_const { Mutability::Immutable } else { Mutability::Mutable };
 
+        // Infer type from initializer expression if available
+        let var_type = init_expr.as_ref()
+            .map(|expr| expr.ty.clone())
+            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+
+        // Register the variable type for later lookup
+        self.variable_types.insert(name.to_string(), var_type.clone());
+
         let stmt = self.inner.let_statement(
             name,
-            Type::Primitive(PrimitiveType::I32),
+            var_type,
             mutability,
             init_expr,
             span,
@@ -1494,7 +1518,11 @@ impl AstHostFunctions for TypedAstBuilder {
 
     fn create_variable(&mut self, name: &str) -> NodeHandle {
         let span = self.default_span();
-        let expr = self.inner.variable(name, Type::Primitive(PrimitiveType::I32), span);
+        // Look up the variable's declared type, default to I32 if not found
+        let var_type = self.variable_types.get(name)
+            .cloned()
+            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+        let expr = self.inner.variable(name, var_type, span);
         self.store_expr(expr)
     }
 
