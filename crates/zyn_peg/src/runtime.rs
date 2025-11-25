@@ -1100,6 +1100,13 @@ impl AstHostFunctions for TypedAstBuilder {
 
         let operand_expr = self.get_expr(operand).unwrap_or_else(|| self.inner.int_literal(0, span));
 
+        // Handle special cases that aren't true unary ops
+        match op.to_lowercase().as_str() {
+            // `try` unwraps error union - for now just pass through the value
+            "try" => return operand,
+            _ => {}
+        }
+
         let unary_op = Self::string_to_unary_op(op);
         let result_type = Type::Primitive(PrimitiveType::I32);
 
