@@ -47,7 +47,8 @@ use crate::ZynGrammar;
 // Re-export types from typed_ast for host function implementations
 pub use zyntax_typed_ast::{
     TypedASTBuilder, TypedProgram, TypedNode, TypedDeclaration, TypedExpression,
-    TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span,
+    TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span, InternedString,
+    TypedClass, TypedEnum, TypedField, TypedVariant, TypedVariantFields,
     type_registry::{Type, PrimitiveType, Mutability, Visibility},
 };
 
@@ -834,6 +835,10 @@ pub struct TypedAstBuilder {
     blocks: HashMap<NodeHandle, TypedBlock>,
     /// Stored declaration nodes by handle
     declarations: HashMap<NodeHandle, TypedNode<TypedDeclaration>>,
+    /// Stored field nodes by handle
+    fields: HashMap<NodeHandle, TypedField>,
+    /// Stored variant nodes by handle
+    variants: HashMap<NodeHandle, TypedVariant>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
 }
@@ -853,6 +858,8 @@ impl TypedAstBuilder {
             statements: HashMap::new(),
             blocks: HashMap::new(),
             declarations: HashMap::new(),
+            fields: HashMap::new(),
+            variants: HashMap::new(),
             program_decls: Vec::new(),
         }
     }
@@ -905,6 +912,16 @@ impl TypedAstBuilder {
     /// Get a block by handle (cloning it)
     fn get_block(&self, handle: NodeHandle) -> Option<TypedBlock> {
         self.blocks.get(&handle).cloned()
+    }
+
+    /// Get a field by handle (cloning it)
+    fn get_field(&self, handle: NodeHandle) -> Option<TypedField> {
+        self.fields.get(&handle).cloned()
+    }
+
+    /// Get a variant by handle (cloning it)
+    fn get_variant(&self, handle: NodeHandle) -> Option<TypedVariant> {
+        self.variants.get(&handle).cloned()
     }
 
     /// Get the default span for nodes
@@ -1319,28 +1336,103 @@ impl AstHostFunctions for TypedAstBuilder {
         self.alloc_handle()
     }
 
-    fn create_struct(&mut self, _name: &str, _fields: Vec<NodeHandle>) -> NodeHandle {
-        // TODO: Implement struct declaration once TypedDeclaration supports it
-        // For now, just allocate a handle
-        self.alloc_handle()
+    fn create_struct(&mut self, name: &str, field_handles: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect fields from handles
+        let fields: Vec<TypedField> = field_handles
+            .iter()
+            .filter_map(|h| self.get_field(*h))
+            .collect();
+
+        let class = TypedClass {
+            name: InternedString::new_global(name),
+            type_params: Vec::new(),
+            extends: None,
+            implements: Vec::new(),
+            fields,
+            methods: Vec::new(),
+            constructors: Vec::new(),
+            visibility: Visibility::Public,
+            is_abstract: false,
+            is_final: false,
+            span,
+        };
+
+        let decl = TypedNode {
+            node: TypedDeclaration::Class(class),
+            ty: Type::Never,
+            span,
+        };
+
+        self.store_decl(decl)
     }
 
-    fn create_enum(&mut self, _name: &str, _variants: Vec<NodeHandle>) -> NodeHandle {
-        // TODO: Implement enum declaration once TypedDeclaration supports it
-        // For now, just allocate a handle
-        self.alloc_handle()
+    fn create_enum(&mut self, name: &str, variant_handles: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect variants from handles
+        let variants: Vec<TypedVariant> = variant_handles
+            .iter()
+            .filter_map(|h| self.get_variant(*h))
+            .collect();
+
+        let enum_decl = TypedEnum {
+            name: InternedString::new_global(name),
+            type_params: Vec::new(),
+            variants,
+            visibility: Visibility::Public,
+            span,
+        };
+
+        let decl = TypedNode {
+            node: TypedDeclaration::Enum(enum_decl),
+            ty: Type::Never,
+            span,
+        };
+
+        self.store_decl(decl)
     }
 
-    fn create_field(&mut self, _name: &str, _ty: NodeHandle) -> NodeHandle {
-        // TODO: Implement field once TypedField is available
-        // For now, just allocate a handle
-        self.alloc_handle()
+    fn create_field(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
+        let span = self.default_span();
+
+        // Get the type - for now use a placeholder if not available
+        let field_type = if let Some(_expr) = self.get_expr(ty) {
+            // TODO: Extract type from type expression when type expr support is complete
+            Type::Primitive(PrimitiveType::I32)
+        } else {
+            Type::Primitive(PrimitiveType::I32)
+        };
+
+        let field = TypedField {
+            name: InternedString::new_global(name),
+            ty: field_type,
+            initializer: None,
+            visibility: Visibility::Public,
+            mutability: Mutability::Immutable,
+            is_static: false,
+            span,
+        };
+
+        let handle = self.alloc_handle();
+        self.fields.insert(handle, field);
+        handle
     }
 
-    fn create_variant(&mut self, _name: &str) -> NodeHandle {
-        // TODO: Implement variant once TypedEnumVariant is available
-        // For now, just allocate a handle
-        self.alloc_handle()
+    fn create_variant(&mut self, name: &str) -> NodeHandle {
+        let span = self.default_span();
+
+        let variant = TypedVariant {
+            name: InternedString::new_global(name),
+            fields: TypedVariantFields::Unit,  // Simple Zig-style enum variants
+            discriminant: None,
+            span,
+        };
+
+        let handle = self.alloc_handle();
+        self.variants.insert(handle, variant);
+        handle
     }
 
     fn set_span(&mut self, _node: NodeHandle, _start: usize, _end: usize) {

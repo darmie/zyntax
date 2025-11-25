@@ -21,9 +21,9 @@
 
 program = { SOI ~ declaration* ~ EOI }
   -> TypedProgram {
-      "commands": [
-          { "define": "program", "args": { "declarations": "$1" } }
-      ]
+      "get_all_children": true,
+      "define": "program",
+      "args": { "declarations": "$result" }
   }
 
 declaration = { struct_decl | enum_decl | fn_decl | const_decl | var_decl }
