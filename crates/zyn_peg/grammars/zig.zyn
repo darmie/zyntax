@@ -122,7 +122,7 @@ fn_decl_no_params = { "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
 
 fn_params = { fn_param ~ ("," ~ fn_param)* }
   -> List {
-      "get_child": { "index": 0 }
+      "get_all_children": true
   }
 
 // Children (non-silent): identifier, type_expr

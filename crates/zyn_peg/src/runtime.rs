@@ -848,6 +848,10 @@ pub struct TypedAstBuilder {
     variants: HashMap<NodeHandle, TypedVariant>,
     /// Stored struct field initializers (name, value) by handle
     struct_field_inits: HashMap<NodeHandle, (String, NodeHandle)>,
+    /// Stored function parameters (name, type) by handle
+    params: HashMap<NodeHandle, (String, Type)>,
+    /// Stored types by handle (for type resolution)
+    types: HashMap<NodeHandle, Type>,
     /// Variable name to type mapping (for proper variable references)
     variable_types: HashMap<String, Type>,
     /// Enum type name to variant names (in order, for discriminant calculation)
@@ -874,6 +878,8 @@ impl TypedAstBuilder {
             fields: HashMap::new(),
             variants: HashMap::new(),
             struct_field_inits: HashMap::new(),
+            params: HashMap::new(),
+            types: HashMap::new(),
             variable_types: HashMap::new(),
             enum_types: HashMap::new(),
             program_decls: Vec::new(),
@@ -938,6 +944,11 @@ impl TypedAstBuilder {
     /// Get a variant by handle (cloning it)
     fn get_variant(&self, handle: NodeHandle) -> Option<TypedVariant> {
         self.variants.get(&handle).cloned()
+    }
+
+    /// Get a type from a handle
+    fn get_type_from_handle(&self, handle: NodeHandle) -> Option<Type> {
+        self.types.get(&handle).cloned()
     }
 
     /// Get the default span for nodes
@@ -1026,11 +1037,15 @@ impl AstHostFunctions for TypedAstBuilder {
     ) -> NodeHandle {
         let span = self.default_span();
 
-        // Convert param handles to TypedParameter
+        // Convert param handles to TypedParameter using stored parameter info
         let typed_params: Vec<_> = params.iter()
-            .map(|_h| {
-                // For now, create simple parameters
-                self.inner.parameter("arg", Type::Primitive(PrimitiveType::I32), Mutability::Immutable, span)
+            .map(|h| {
+                if let Some((name, ty)) = self.params.get(h) {
+                    self.inner.parameter(name, ty.clone(), Mutability::Immutable, span)
+                } else {
+                    // Fallback for unknown params
+                    self.inner.parameter("arg", Type::Primitive(PrimitiveType::I32), Mutability::Immutable, span)
+                }
             })
             .collect();
 
@@ -1058,11 +1073,13 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_decl(func)
     }
 
-    fn create_param(&mut self, name: &str, _ty: NodeHandle) -> NodeHandle {
-        // Parameters are stored differently - just return a placeholder handle
-        // The actual TypedParameter is created in create_function
-        let _ = name;
-        self.alloc_handle()
+    fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
+        // Store parameter name and type for later use in create_function
+        let handle = self.alloc_handle();
+        // Get the type from the type handle, default to i32 if not found
+        let param_type = self.get_type_from_handle(ty).unwrap_or(Type::Primitive(PrimitiveType::I32));
+        self.params.insert(handle, (name.to_string(), param_type));
+        handle
     }
 
     fn create_binary_op(&mut self, op: &str, left: NodeHandle, right: NodeHandle) -> NodeHandle {
@@ -1361,9 +1378,28 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_stmt(stmt)
     }
 
-    fn create_primitive_type(&mut self, _name: &str) -> NodeHandle {
-        // Types are handled inline - just return placeholder
-        self.alloc_handle()
+    fn create_primitive_type(&mut self, name: &str) -> NodeHandle {
+        // Parse the type name and store the actual type
+        let handle = self.alloc_handle();
+        let ty = match name {
+            "i8" => Type::Primitive(PrimitiveType::I8),
+            "i16" => Type::Primitive(PrimitiveType::I16),
+            "i32" => Type::Primitive(PrimitiveType::I32),
+            "i64" => Type::Primitive(PrimitiveType::I64),
+            "i128" => Type::Primitive(PrimitiveType::I128),
+            "u8" => Type::Primitive(PrimitiveType::U8),
+            "u16" => Type::Primitive(PrimitiveType::U16),
+            "u32" => Type::Primitive(PrimitiveType::U32),
+            "u64" => Type::Primitive(PrimitiveType::U64),
+            "u128" => Type::Primitive(PrimitiveType::U128),
+            "f32" => Type::Primitive(PrimitiveType::F32),
+            "f64" => Type::Primitive(PrimitiveType::F64),
+            "bool" => Type::Primitive(PrimitiveType::Bool),
+            "void" | "unit" => Type::Primitive(PrimitiveType::Unit),
+            _ => Type::Primitive(PrimitiveType::I32), // Default to i32
+        };
+        self.types.insert(handle, ty);
+        handle
     }
 
     fn create_pointer_type(&mut self, _pointee: NodeHandle) -> NodeHandle {
