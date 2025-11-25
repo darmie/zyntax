@@ -850,6 +850,8 @@ pub struct TypedAstBuilder {
     struct_field_inits: HashMap<NodeHandle, (String, NodeHandle)>,
     /// Variable name to type mapping (for proper variable references)
     variable_types: HashMap<String, Type>,
+    /// Enum type name to variant names (in order, for discriminant calculation)
+    enum_types: HashMap<String, Vec<String>>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
 }
@@ -873,6 +875,7 @@ impl TypedAstBuilder {
             variants: HashMap::new(),
             struct_field_inits: HashMap::new(),
             variable_types: HashMap::new(),
+            enum_types: HashMap::new(),
             program_decls: Vec::new(),
         }
     }
@@ -1151,6 +1154,19 @@ impl AstHostFunctions for TypedAstBuilder {
         let object_expr = self.get_expr(object)
             .unwrap_or_else(|| self.inner.variable("object", Type::Primitive(PrimitiveType::I32), span));
 
+        // Check if this is an enum variant access (EnumType.Variant)
+        if let TypedExpression::Variable(var_name) = &object_expr.node {
+            let type_name = var_name.resolve_global().unwrap_or_default();
+            if let Some(variants) = self.enum_types.get(&type_name) {
+                // This is an enum variant access - find the discriminant
+                if let Some(discriminant) = variants.iter().position(|v| v == field) {
+                    // Return an integer literal representing the enum variant
+                    let expr = self.inner.int_literal(discriminant as i128, span);
+                    return self.store_expr(expr);
+                }
+            }
+        }
+
         // Infer field type from object's struct type
         let field_type = match &object_expr.ty {
             Type::Struct { fields, .. } => {
@@ -1410,6 +1426,13 @@ impl AstHostFunctions for TypedAstBuilder {
             .iter()
             .filter_map(|h| self.get_variant(*h))
             .collect();
+
+        // Register enum type with variant names for later lookup
+        let variant_names: Vec<String> = variants
+            .iter()
+            .filter_map(|v| v.name.resolve_global())
+            .collect();
+        self.enum_types.insert(name.to_string(), variant_names);
 
         let enum_decl = TypedEnum {
             name: InternedString::new_global(name),
