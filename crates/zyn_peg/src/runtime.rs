@@ -49,7 +49,7 @@ pub use zyntax_typed_ast::{
     TypedASTBuilder, TypedProgram, TypedNode, TypedDeclaration, TypedExpression,
     TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span, InternedString,
     TypedClass, TypedEnum, TypedField, TypedVariant,
-    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern},
+    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern, TypedMethod, TypedMethodParam, TypedTypeParam, ParameterKind, ParameterAttribute, TypedRange},
     type_registry::{Type, PrimitiveType, Mutability, Visibility, ConstValue},
 };
 
@@ -136,6 +136,9 @@ pub enum AstCommand {
         operand_rule: String,
         operator_rule: String,
     },
+    /// Fold postfix operations (primary followed by zero or more postfix ops)
+    /// e.g., {"fold_postfix": true}
+    FoldPostfix,
     /// Iterate over all children matching a rule
     /// e.g., {"type": "map_children", "rule": "statement", "commands": [...]}
     MapChildren {
@@ -346,6 +349,12 @@ pub trait AstHostFunctions {
     /// Create an expression statement (alias)
     fn create_expression_stmt(&mut self, expr: NodeHandle) -> NodeHandle;
 
+    /// Create a range expression (start..end or start...end)
+    fn create_range(&mut self, start: Option<NodeHandle>, end: Option<NodeHandle>, inclusive: bool) -> NodeHandle;
+
+    /// Apply a postfix operation (call, field access, index) to a base expression
+    fn apply_postfix(&mut self, base: NodeHandle, postfix_op: NodeHandle) -> NodeHandle;
+
     // ========== Pattern Matching ==========
 
     /// Create a match/switch expression
@@ -427,6 +436,22 @@ pub trait AstHostFunctions {
 
     /// Create an enum variant
     fn create_variant(&mut self, name: &str) -> NodeHandle;
+
+    // ========== Class/OOP Declarations (Haxe) ==========
+
+    /// Create a class declaration with type parameters and members
+    fn create_class(&mut self, name: &str, type_params: Vec<String>, members: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a method declaration
+    fn create_method(
+        &mut self,
+        name: &str,
+        is_static: bool,
+        visibility: &str,
+        params: Vec<NodeHandle>,
+        return_type: Option<NodeHandle>,
+        body: NodeHandle,
+    ) -> NodeHandle;
 
     // ========== Span/Location ==========
 
@@ -668,6 +693,11 @@ impl ZpegCompiler {
                 if let Some(name) = val.get("name").and_then(|v| v.as_str()) {
                     commands.push(AstCommand::Load { name: name.to_string() });
                 }
+            }
+
+            // "fold_postfix": true
+            if map.get("fold_postfix").is_some() {
+                commands.push(AstCommand::FoldPostfix);
             }
         }
 
@@ -917,6 +947,8 @@ pub struct TypedAstBuilder {
     fields: HashMap<NodeHandle, TypedField>,
     /// Stored variant nodes by handle
     variants: HashMap<NodeHandle, TypedVariant>,
+    /// Stored method nodes by handle
+    methods: HashMap<NodeHandle, TypedMethod>,
     /// Stored struct field initializers (name, value) by handle
     struct_field_inits: HashMap<NodeHandle, (String, NodeHandle)>,
     /// Stored patterns by handle
@@ -954,6 +986,7 @@ impl TypedAstBuilder {
             declarations: HashMap::new(),
             fields: HashMap::new(),
             variants: HashMap::new(),
+            methods: HashMap::new(),
             struct_field_inits: HashMap::new(),
             patterns: HashMap::new(),
             field_patterns: HashMap::new(),
@@ -1445,6 +1478,9 @@ impl AstHostFunctions for TypedAstBuilder {
         let iter_expr = self.get_expr(iterable)
             .unwrap_or_else(|| self.inner.variable("iter", Type::Primitive(PrimitiveType::I32), span));
 
+        log::trace!("[create_for] iterator={}, iterable={:?}, iter_expr.node={:?}",
+            iterator, iterable, iter_expr.node);
+
         // Get body block - check for block first, then statement, then expression
         let body_block = if let Some(block) = self.get_block(body) {
             block
@@ -1455,6 +1491,63 @@ impl AstHostFunctions for TypedAstBuilder {
         } else {
             TypedBlock { statements: vec![], span }
         };
+
+        // Check if iterable is a Range - if so, desugar to while loop
+        // for (i in 0...5) { body } => { var i = 0; while (i < 5) { body; i = i + 1; } }
+        if let TypedExpression::Range(range) = &iter_expr.node {
+            // Extract start and end values
+            let start_expr = range.start.as_ref()
+                .map(|e| (**e).clone())
+                .unwrap_or_else(|| self.inner.int_literal(0, span));
+            let end_expr = range.end.as_ref()
+                .map(|e| (**e).clone())
+                .unwrap_or_else(|| self.inner.int_literal(0, span));
+
+            // Register the iterator variable type
+            self.variable_types.insert(iterator.to_string(), Type::Primitive(PrimitiveType::I32));
+
+            // Create: var i = start
+            let init_stmt = self.inner.let_statement(
+                iterator,
+                Type::Primitive(PrimitiveType::I32),
+                Mutability::Mutable, // For-loop iterator must be mutable
+                Some(start_expr.clone()),
+                span,
+            );
+
+            // Create condition: i < end (or i <= end if inclusive)
+            let var_ref = self.inner.variable(iterator, Type::Primitive(PrimitiveType::I32), span);
+            let cond_op = if range.inclusive { BinaryOp::Le } else { BinaryOp::Lt };
+            let cond_expr = self.inner.binary(cond_op, var_ref.clone(), end_expr, Type::Primitive(PrimitiveType::Bool), span);
+
+            // Create increment: i = i + 1
+            let one = self.inner.int_literal(1, span);
+            let var_ref2 = self.inner.variable(iterator, Type::Primitive(PrimitiveType::I32), span);
+            let add_expr = self.inner.binary(BinaryOp::Add, var_ref2.clone(), one, Type::Primitive(PrimitiveType::I32), span);
+            // Assignment: i = i + 1 as binary expression wrapped in expression statement
+            let assign_expr = self.inner.binary(BinaryOp::Assign, var_ref2, add_expr, Type::Primitive(PrimitiveType::I32), span);
+            let incr_stmt = self.inner.expression_statement(assign_expr, span);
+
+            // Create while body with original body + increment
+            let mut while_body_stmts = body_block.statements.clone();
+            while_body_stmts.push(incr_stmt);
+            let while_body = TypedBlock { statements: while_body_stmts, span };
+
+            // Create while loop
+            let while_stmt = self.inner.while_loop(cond_expr, while_body, span);
+
+            // Wrap in block: { var i = start; while (i < end) { body; i = i + 1; } }
+            let outer_block = TypedBlock {
+                statements: vec![init_stmt, while_stmt],
+                span,
+            };
+            let block_stmt = TypedNode::new(
+                TypedStatement::Block(outer_block),
+                Type::Primitive(PrimitiveType::Unit),
+                span,
+            );
+            return self.store_stmt(block_stmt);
+        }
 
         let stmt = self.inner.for_loop(iterator, iter_expr, body_block, span);
         self.store_stmt(stmt)
@@ -1639,6 +1732,160 @@ impl AstHostFunctions for TypedAstBuilder {
         handle
     }
 
+    fn create_class(&mut self, name: &str, type_params: Vec<String>, member_handles: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Convert type params to TypedTypeParam
+        let typed_type_params: Vec<TypedTypeParam> = type_params
+            .iter()
+            .map(|s| TypedTypeParam {
+                name: InternedString::new_global(s),
+                bounds: Vec::new(),
+                default: None,
+                span,
+            })
+            .collect();
+
+        // Separate fields and methods from member handles
+        let mut fields: Vec<TypedField> = Vec::new();
+        let mut methods: Vec<TypedMethod> = Vec::new();
+
+        for handle in member_handles {
+            // Check if it's a field
+            if let Some(field) = self.get_field(handle) {
+                fields.push(field);
+            }
+            // Check if it's a method (stored in declarations as function)
+            else if let Some(decl) = self.declarations.get(&handle) {
+                if let TypedDeclaration::Function(func) = &decl.node {
+                    // Convert function to method - convert TypedParameter to TypedMethodParam
+                    let method_params: Vec<TypedMethodParam> = func.params.iter()
+                        .map(|p| TypedMethodParam {
+                            name: p.name.clone(),
+                            ty: p.ty.clone(),
+                            mutability: p.mutability,
+                            is_self: false,
+                            kind: ParameterKind::Regular,
+                            default_value: None,
+                            attributes: Vec::new(),
+                            span: p.span,
+                        })
+                        .collect();
+                    let method = TypedMethod {
+                        name: func.name.clone(),
+                        type_params: Vec::new(),
+                        params: method_params,
+                        return_type: func.return_type.clone(),
+                        body: func.body.clone(),
+                        visibility: func.visibility,
+                        is_static: false, // Will be updated by create_method
+                        is_async: false,
+                        is_override: false,
+                        span,
+                    };
+                    methods.push(method);
+                }
+            }
+            // Check if it's a method stored in our methods map
+            else if let Some(method) = self.methods.get(&handle).cloned() {
+                methods.push(method);
+            }
+        }
+
+        let class = TypedClass {
+            name: InternedString::new_global(name),
+            type_params: typed_type_params,
+            extends: None,
+            implements: Vec::new(),
+            fields,
+            methods,
+            constructors: Vec::new(),
+            visibility: Visibility::Public,
+            is_abstract: false,
+            is_final: false,
+            span,
+        };
+
+        let decl = TypedNode {
+            node: TypedDeclaration::Class(class),
+            ty: Type::Never,
+            span,
+        };
+
+        self.store_decl(decl)
+    }
+
+    fn create_method(
+        &mut self,
+        name: &str,
+        is_static: bool,
+        visibility: &str,
+        param_handles: Vec<NodeHandle>,
+        return_type_handle: Option<NodeHandle>,
+        body_handle: NodeHandle,
+    ) -> NodeHandle {
+        let span = self.default_span();
+
+        // Convert visibility string to Visibility enum
+        let vis = match visibility {
+            "private" => Visibility::Private,
+            "protected" => Visibility::Private, // No protected in our type system yet
+            _ => Visibility::Public,
+        };
+
+        // Get parameters - convert to TypedMethodParam
+        let params: Vec<TypedMethodParam> = param_handles.iter()
+            .filter_map(|h| {
+                self.params.get(h).map(|(param_name, ty)| {
+                    TypedMethodParam {
+                        name: InternedString::new_global(param_name),
+                        ty: ty.clone(),
+                        mutability: Mutability::Immutable,
+                        is_self: false,
+                        kind: ParameterKind::Regular,
+                        default_value: None,
+                        attributes: Vec::new(),
+                        span,
+                    }
+                })
+            })
+            .collect();
+
+        // Get return type
+        let return_type = return_type_handle
+            .and_then(|h| self.get_type_from_handle(h))
+            .unwrap_or(Type::Primitive(PrimitiveType::Unit));
+
+        // Get body block
+        let body = if let Some(block) = self.get_block(body_handle) {
+            block
+        } else if let Some(stmt) = self.get_stmt(body_handle) {
+            TypedBlock { statements: vec![stmt], span }
+        } else if let Some(expr) = self.get_expr(body_handle) {
+            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+        } else {
+            TypedBlock { statements: vec![], span }
+        };
+
+        let method = TypedMethod {
+            name: InternedString::new_global(name),
+            type_params: Vec::new(),
+            params,
+            return_type,
+            body: Some(body),
+            visibility: vis,
+            is_static,
+            is_async: false,
+            is_override: false,
+            span,
+        };
+
+        // Store method and return handle
+        let handle = self.alloc_handle();
+        self.methods.insert(handle, method);
+        handle
+    }
+
     fn set_span(&mut self, _node: NodeHandle, _start: usize, _end: usize) {
         // Spans are handled inline during node creation
         // This could be extended to update spans if needed
@@ -1684,6 +1931,37 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_expression_stmt(&mut self, expr: NodeHandle) -> NodeHandle {
         // Delegate to create_expr_stmt
         self.create_expr_stmt(expr)
+    }
+
+    fn create_range(&mut self, start: Option<NodeHandle>, end: Option<NodeHandle>, inclusive: bool) -> NodeHandle {
+        let span = self.default_span();
+
+        let start_expr = start.and_then(|h| self.get_expr(h));
+        let end_expr = end.and_then(|h| self.get_expr(h));
+
+        let range = TypedRange {
+            start: start_expr.map(Box::new),
+            end: end_expr.map(Box::new),
+            inclusive,
+        };
+
+        let expr = TypedNode::new(
+            TypedExpression::Range(range),
+            Type::Primitive(PrimitiveType::I32), // Range type - will be resolved during type checking
+            span,
+        );
+        self.store_expr(expr)
+    }
+
+    fn apply_postfix(&mut self, base: NodeHandle, postfix_op: NodeHandle) -> NodeHandle {
+        // Get the postfix operation node and apply it to the base
+        // For now, this is a placeholder - real postfix handling would inspect the postfix_op
+        // and create call/field/index expressions appropriately
+        let _span = self.default_span();
+
+        // Just return the base for now - postfix ops aren't used with range expressions
+        log::trace!("[apply_postfix] base={:?}, postfix_op={:?}", base, postfix_op);
+        base
     }
 
     fn create_variable(&mut self, name: &str) -> NodeHandle {
@@ -2234,8 +2512,12 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
     pub fn execute_rule(&mut self, rule_name: &str, text: &str, children: Vec<RuntimeValue>) -> Result<RuntimeValue> {
         // Get commands for this rule
         let commands = match self.module.rule_commands(rule_name) {
-            Some(cmds) => cmds.commands.clone(),
+            Some(cmds) => {
+                log::trace!("[execute_rule] rule='{}' has {} commands, children={:?}", rule_name, cmds.commands.len(), children);
+                cmds.commands.clone()
+            }
             None => {
+                log::trace!("[execute_rule] rule='{}' has NO commands, using defaults, children={:?}", rule_name, children);
                 // No commands defined - default behavior depends on children
                 if children.len() == 1 {
                     return Ok(children.into_iter().next().unwrap());
@@ -2262,6 +2544,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
         // Execute commands
         for cmd in &commands {
+            log::trace!("[execute_rule] executing command: {:?}", cmd);
             self.execute_command(cmd)?;
         }
 
@@ -2354,17 +2637,55 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     children.push(val.clone());
                     i += 1;
                 }
+                log::trace!("[FoldBinary] children.len()={}, children={:?}", children.len(), children);
+
+                // Helper closure to convert RuntimeValue to NodeHandle, creating nodes for immediates
+                let value_to_node = |host: &mut H, val: &RuntimeValue| -> Option<NodeHandle> {
+                    match val {
+                        RuntimeValue::Node(h) => Some(*h),
+                        RuntimeValue::Int(n) => Some(host.create_int_literal(*n)),
+                        RuntimeValue::Float(f) => Some(host.create_float_literal(*f)),
+                        RuntimeValue::String(s) => {
+                            // If it looks like a number, parse it
+                            if let Ok(n) = s.parse::<i64>() {
+                                Some(host.create_int_literal(n))
+                            } else if let Ok(f) = s.parse::<f64>() {
+                                Some(host.create_float_literal(f))
+                            } else {
+                                // Treat as variable reference
+                                Some(host.create_variable(s))
+                            }
+                        }
+                        RuntimeValue::Bool(b) => Some(host.create_bool_literal(*b)),
+                        _ => None,
+                    }
+                };
 
                 if children.is_empty() {
                     self.value_stack.push(RuntimeValue::Null);
                 } else if children.len() == 1 {
-                    // Single operand - just return it
-                    self.value_stack.push(children.into_iter().next().unwrap());
+                    // Single operand - convert to node if needed, then return it
+                    log::trace!("[FoldBinary] single child, passing through");
+                    let child = children.into_iter().next().unwrap();
+                    // Convert immediate values to nodes
+                    let result = if let Some(h) = value_to_node(&mut self.host, &child) {
+                        RuntimeValue::Node(h)
+                    } else {
+                        child
+                    };
+                    self.value_stack.push(result);
                 } else {
                     // Fold left-to-right: operand op operand op operand ...
-                    // children[0], children[2], children[4], ... are operands (nodes)
+                    // children[0], children[2], children[4], ... are operands (nodes or immediates)
                     // children[1], children[3], children[5], ... are operators (strings)
-                    let mut result = children[0].clone();
+
+                    // Convert first operand to node
+                    let first_node = value_to_node(&mut self.host, &children[0]);
+                    let mut result = if let Some(h) = first_node {
+                        RuntimeValue::Node(h)
+                    } else {
+                        children[0].clone()
+                    };
 
                     let mut idx = 1;
                     while idx + 1 < children.len() {
@@ -2382,13 +2703,54 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                             _ => "+".to_string(),
                         };
 
-                        // Get node handles
-                        if let (RuntimeValue::Node(left_h), RuntimeValue::Node(right_h)) = (&result, right) {
-                            let new_node = self.host.create_binary_op(&op_str, *left_h, *right_h);
+                        // Convert right operand to node if needed
+                        let right_node = value_to_node(&mut self.host, right);
+
+                        // Get node handles and create binary op
+                        if let (RuntimeValue::Node(left_h), Some(right_h)) = (&result, right_node) {
+                            let new_node = self.host.create_binary_op(&op_str, *left_h, right_h);
                             result = RuntimeValue::Node(new_node);
                         }
 
                         idx += 2;
+                    }
+
+                    self.value_stack.push(result);
+                }
+            }
+
+            AstCommand::FoldPostfix => {
+                // Fold postfix operations: primary ~ postfix_op*
+                // $1 is the primary (base), $2, $3, ... are postfix operations
+                // For now, just pass through the first child (primary)
+                // If there are postfix ops, apply them left-to-right
+
+                let mut children: Vec<RuntimeValue> = Vec::new();
+                let mut i = 1;
+                while let Some(val) = self.variables.get(&format!("${}", i)) {
+                    children.push(val.clone());
+                    i += 1;
+                }
+                log::trace!("[FoldPostfix] children.len()={}, children={:?}", children.len(), children);
+
+                if children.is_empty() {
+                    self.value_stack.push(RuntimeValue::Null);
+                } else if children.len() == 1 {
+                    // No postfix ops - just pass through the primary
+                    self.value_stack.push(children.into_iter().next().unwrap());
+                } else {
+                    // Apply postfix ops left-to-right
+                    // children[0] is primary, children[1..] are postfix ops
+                    let mut result = children[0].clone();
+
+                    for postfix_op in &children[1..] {
+                        // Each postfix_op should be a node representing the operation
+                        // For now, create a call/field/index expression
+                        if let (RuntimeValue::Node(base_h), RuntimeValue::Node(op_h)) = (&result, postfix_op) {
+                            // Apply postfix operation
+                            let new_node = self.host.apply_postfix(*base_h, *op_h);
+                            result = RuntimeValue::Node(new_node);
+                        }
                     }
 
                     self.value_stack.push(result);
@@ -2748,7 +3110,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "primitive_type" => {
                 let name = match args.get("name") {
-                    Some(RuntimeValue::String(s)) => s.clone(),
+                    Some(RuntimeValue::String(s)) => {
+                        // Map language-specific type names to internal primitive names
+                        match s.as_str() {
+                            // Haxe types
+                            "Int" => "i32".to_string(),
+                            "Float" => "f64".to_string(),
+                            "Bool" => "bool".to_string(),
+                            "Void" => "void".to_string(),
+                            "String" => "string".to_string(),
+                            // Already internal names
+                            other => other.to_string(),
+                        }
+                    }
                     _ => "i32".to_string(),
                 };
                 let handle = self.host.create_primitive_type(&name);
@@ -2964,7 +3338,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             // ===== ADDITIONAL STATEMENTS =====
 
-            "let_stmt" | "var_decl" => {
+            "let_stmt" | "var_decl" | "var_stmt" => {
+                log::trace!("[define_node] var_stmt args: {:?}", args);
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => String::new(),
@@ -2973,10 +3348,25 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::Node(h)) => Some(*h),
                     _ => None,
                 };
+                // Handle init as either a Node handle or an immediate value
                 let init = match args.get("init").or(args.get("value")) {
                     Some(RuntimeValue::Node(h)) => Some(*h),
+                    Some(RuntimeValue::Int(n)) => {
+                        // Create an int literal node for the immediate value
+                        Some(self.host.create_int_literal(*n))
+                    }
+                    Some(RuntimeValue::Float(n)) => {
+                        Some(self.host.create_float_literal(*n))
+                    }
+                    Some(RuntimeValue::String(s)) => {
+                        Some(self.host.create_string_literal(s))
+                    }
+                    Some(RuntimeValue::Bool(b)) => {
+                        Some(self.host.create_bool_literal(*b))
+                    }
                     _ => None,
                 };
+                log::trace!("[define_node] var_stmt name={}, ty={:?}, init={:?}", name, ty, init);
                 let is_const = match args.get("is_const").or(args.get("const")) {
                     Some(RuntimeValue::Bool(b)) => *b,
                     _ => false,
@@ -2986,6 +3376,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "assignment" | "assign" => {
+                log::trace!("[define_node] assignment args: {:?}", args);
                 // Target can be either a Node (expression) or String (identifier)
                 let target = match args.get("target") {
                     Some(RuntimeValue::Node(h)) => *h,
@@ -3021,6 +3412,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "while_stmt" | "while" => {
+                log::trace!("[define_node] while args: {:?}", args);
                 let condition = match args.get("condition") {
                     Some(RuntimeValue::Node(h)) => *h,
                     _ => return Err(crate::error::ZynPegError::CodeGenError("while: missing condition".into())),
@@ -3030,10 +3422,12 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => return Err(crate::error::ZynPegError::CodeGenError("while: missing body".into())),
                 };
                 let handle = self.host.create_while(condition, body);
+                log::trace!("[define_node] while created handle={:?}", handle);
                 Ok(RuntimeValue::Node(handle))
             }
 
             "for_stmt" | "for" => {
+                log::trace!("[define_node] for args: {:?}", args);
                 let variable = match args.get("variable").or(args.get("iterator")).or(args.get("binding")) {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     Some(RuntimeValue::Node(h)) => {
@@ -3069,11 +3463,31 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "expression_stmt" => {
+                log::trace!("[define_node] expression_stmt args: {:?}", args);
                 let expr = match args.get("expr") {
                     Some(RuntimeValue::Node(h)) => *h,
                     _ => return Err(crate::error::ZynPegError::CodeGenError("expression_stmt: missing expr".into())),
                 };
                 let handle = self.host.create_expression_stmt(expr);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // Range expression (for for-loop iterables): 0...5 or 0..5
+            "range" | "range_expr" => {
+                log::trace!("[define_node] range/range_expr args: {:?}", args);
+                let start = args.get("start").and_then(|v| match v {
+                    RuntimeValue::Node(h) => Some(*h),
+                    _ => None,
+                });
+                let end = args.get("end").and_then(|v| match v {
+                    RuntimeValue::Node(h) => Some(*h),
+                    _ => None,
+                });
+                let inclusive = match args.get("inclusive") {
+                    Some(RuntimeValue::Bool(b)) => *b,
+                    _ => false, // Haxe 0...5 is exclusive (0 to 4)
+                };
+                let handle = self.host.create_range(start, end, inclusive);
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -3492,6 +3906,100 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => "Error".to_string(),
                 };
                 let handle = self.host.create_error_pattern(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // ===== CLASS/OOP SUPPORT (Haxe) =====
+
+            "class" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "AnonymousClass".to_string(),
+                };
+                let type_params: Vec<String> = match args.get("type_params") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::String(s) => Some(s.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let members: Vec<NodeHandle> = match args.get("members") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_class(&name, type_params, members);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "method" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "method".to_string(),
+                };
+                let is_static = match args.get("is_static") {
+                    Some(RuntimeValue::String(s)) => s == "static",
+                    Some(RuntimeValue::Bool(b)) => *b,
+                    _ => false,
+                };
+                let visibility = match args.get("visibility") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "public".to_string(),
+                };
+                let params: Vec<NodeHandle> = match args.get("params") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let return_type = match args.get("return_type") {
+                    Some(RuntimeValue::Node(h)) => Some(*h),
+                    _ => None,
+                };
+                let body = match args.get("body") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("method: missing body".into())),
+                };
+                let handle = self.host.create_method(&name, is_static, &visibility, params, return_type, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "package" => {
+                // Package declarations are structural - just return a placeholder for now
+                let path = match args.get("path") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                // For now, packages don't generate AST nodes - they're metadata
+                // Return a dummy node that won't be included in declarations
+                let handle = self.host.create_identifier(&path);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "import" => {
+                // Import declarations are structural - just return a placeholder for now
+                let path = match args.get("path") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                // For now, imports don't generate AST nodes - they're metadata
+                // Return a dummy node that won't be included in declarations
+                let handle = self.host.create_identifier(&path);
                 Ok(RuntimeValue::Node(handle))
             }
 

@@ -264,6 +264,9 @@ fn walk_pair_to_value<'a, H: zyn_peg::runtime::AstHostFunctions>(
     let rule_name = pair.as_rule().to_string();
     let text = pair.as_str().to_string();
 
+    // Always trace for debugging
+    log::trace!("[walk_pair] rule='{}', text='{}'", rule_name, text.chars().take(50).collect::<String>());
+
     if verbose {
         println!("      {} walk_pair '{}': {:?}", "trace:".cyan(), rule_name,
             if text.len() > 30 { format!("{}...", &text[..30]) } else { text.clone() });
