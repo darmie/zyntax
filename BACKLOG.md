@@ -5,6 +5,12 @@
 
 **Recent Progress**:
 
+- ✅ **Switch Expression Pattern Matching Complete** (November 27, 2025)
+  - Multi-case switch with literal patterns and else clause
+  - Tagged union patterns (`.some`, `.none`) with graceful non-enum handling
+  - Error patterns (`error.OutOfMemory`)
+  - Grammar support for all pattern types (literal, wildcard, range, struct, enum, array, pointer, error)
+  - Documentation updated (`book/05-semantic-actions.md`, `book/08-zig-example.md`)
 - ✅ **LLVM Backend Working** (AOT and JIT modes fully functional - functions, structs, generics)
   - Parameter value mapping for function calls
   - Struct initialization with InsertValue
@@ -285,16 +291,32 @@ Stack-unwinding exceptions for Haxe/Java-style languages. Required for Reflaxe i
 - [x] Switch expressions with literal and wildcard patterns
 - [x] `test_pattern_match_runtime_execution` passing (Some/None)
 - [x] `test_zig_jit_switch_expression` passing
+- [x] **Multi-case switch expressions** (multiple literal cases with else)
+- [x] **Tagged union patterns** (`.some`, `.none` - graceful handling for non-enum scrutinee)
+- [x] **Error patterns** (`error.OutOfMemory`)
+- [x] **Grammar support for all pattern types**:
+  - `literal_pattern` - Match exact values
+  - `wildcard_pattern` - Match anything (`_` or `else`)
+  - `range_pattern` - Match value ranges (`1..10`)
+  - `identifier_pattern` - Bind matched value to variable
+  - `struct_pattern` - Match struct fields
+  - `field_pattern` - Match individual struct field
+  - `enum_pattern` - Match tagged union variant
+  - `array_pattern` - Match array elements
+  - `pointer_pattern` - Match through pointer dereference
+  - `error_pattern` - Match error values
+- [x] **Documentation updated** (`book/05-semantic-actions.md`, `book/08-zig-example.md`)
 
 **Known Issue** (minor):
+
 - [ ] None literal (arena symbol resolution - Symbol 7 doesn't resolve)
   - Root cause: Parser and SSA arena symbol lookup mismatch
   - Impact: Minor - workaround exists using if-let on None branch
 
 **Pending Features**:
+
 - [ ] Or patterns (`Some(x) | None`)
 - [ ] Pattern guards (`if` conditions)
-- [ ] Range patterns (`1..=10`)
 - [ ] Slice patterns (`[first, .., last]`)
 
 ---

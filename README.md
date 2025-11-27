@@ -253,10 +253,11 @@ Goodbye!
 ### Available Node Types
 
 - **Literals**: `int_literal`, `float_literal`, `string_literal`, `bool_literal`, `char_literal`
-- **Expressions**: `variable`, `binary_op`, `unary_op`, `call_expr`, `method_call`, `field_access`, `index`, `array`, `struct_literal`, `cast`, `lambda`
+- **Expressions**: `variable`, `binary_op`, `unary_op`, `call_expr`, `method_call`, `field_access`, `index`, `array`, `struct_literal`, `cast`, `lambda`, `switch_expr`
 - **Statements**: `let_stmt`, `assignment`, `return_stmt`, `if_stmt`, `while_stmt`, `for_stmt`, `break_stmt`, `continue_stmt`, `expression_stmt`, `block`
 - **Declarations**: `function`, `param`, `program`
 - **Types**: `primitive_type`, `pointer_type`, `array_type`, `named_type`, `function_type`
+- **Patterns**: `literal_pattern`, `wildcard_pattern`, `range_pattern`, `identifier_pattern`, `struct_pattern`, `field_pattern`, `enum_pattern`, `array_pattern`, `pointer_pattern`, `error_pattern`, `switch_case`
 
 See [Zyn Grammar Specification](./docs/ZYN_GRAMMAR_SPEC.md) for complete documentation.
 
@@ -466,7 +467,7 @@ cargo build --release
 - Basic arithmetic (`+`, `-`, `*`, `/`)
 - Function calls (including recursive)
 - Local variables with stack allocation
-- Pattern matching (basic)
+- Switch expressions with pattern matching (literals, wildcards, ranges, structs, enums, errors)
 - Async/await syntax and runtime
 
 #### ✅ Tiered JIT Compilation
@@ -549,11 +550,13 @@ See [BACKLOG.md](BACKLOG.md) for detailed tasks.
 - ✅ Zig-style error handling (try/catch/orelse on error unions)
 - ✅ Pattern matching (if let, switch, Some/None/Ok/Err)
 - ✅ Generic functions with monomorphization
+- ✅ Switch expressions with multi-case patterns and else clause
+- ✅ Pattern matching grammar (literals, wildcards, ranges, structs, enums, errors, pointers)
 
 ### Q1 2026: Production Features
 
 - ✅ LLVM AOT/JIT backend core complete (functions, structs, generics, control flow)
-- 🔄 LLVM backend: advanced features (switch, pattern matching, error unions)
+- ✅ Switch expression pattern matching in LLVM backend
 - 🔄 Haxe-style exception handling (throw/catch/finally with stack unwinding)
 - 🔄 Complete I/O and networking standard library
 - 🔄 String operations (needs stdlib integration via plugin system)

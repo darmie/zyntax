@@ -275,6 +275,99 @@ primitive_type = { "i32" | "i64" | "bool" | "void" }
   }
 ```
 
+#### Pattern Matching
+
+These commands create pattern nodes for switch expressions and pattern matching:
+
+| Method | Arguments | Creates |
+|--------|-----------|---------|
+| `literal_pattern` | `value` | Match a literal value (int, string) |
+| `wildcard_pattern` | | Match anything (`_` or `else`) |
+| `range_pattern` | `start`, `end`, `inclusive` | Match a range (`1..10`) |
+| `identifier_pattern` | `name` | Bind matched value to variable |
+| `struct_pattern` | `name`, `fields` | Match struct with field patterns |
+| `field_pattern` | `name`, `pattern`? | Match a struct field |
+| `enum_pattern` | `name`, `variant`, `fields` | Match enum/tagged union variant |
+| `array_pattern` | `elements` | Match array elements |
+| `pointer_pattern` | `inner`, `mutable` | Match pointer dereference |
+| `error_pattern` | `name` | Match error value (`error.OutOfMemory`) |
+| `switch_expr` | `scrutinee`, `cases` | Switch expression |
+| `switch_case` | `pattern`, `body` | Single switch case arm |
+
+```zyn
+// Literal pattern: match exact value
+switch_literal_pattern = { integer_literal }
+  -> TypedExpression {
+      "commands": [
+          { "define": "literal_pattern", "args": { "value": "$1" } }
+      ]
+  }
+
+// Wildcard pattern: match anything
+switch_wildcard_pattern = { "_" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "wildcard_pattern" }
+      ]
+  }
+
+// Range pattern: match value in range
+switch_range_pattern = { integer_literal ~ ".." ~ integer_literal }
+  -> TypedExpression {
+      "commands": [
+          { "define": "range_pattern", "args": {
+              "start": { "define": "literal_pattern", "args": { "value": "$1" } },
+              "end": { "define": "literal_pattern", "args": { "value": "$2" } },
+              "inclusive": false
+          }}
+      ]
+  }
+
+// Struct pattern: match struct fields
+switch_struct_pattern = { identifier ~ "{" ~ struct_field_patterns? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "struct_pattern", "args": {
+              "name": { "text": "$1" },
+              "fields": "$2"
+          }}
+      ]
+  }
+
+// Tagged union pattern: .some, .none
+switch_tagged_union_pattern = { "." ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "enum_pattern", "args": {
+              "name": "",
+              "variant": { "text": "$1" },
+              "fields": []
+          }}
+      ]
+  }
+
+// Error pattern: error.OutOfMemory
+switch_error_pattern = { "error" ~ "." ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "error_pattern", "args": {
+              "name": { "text": "$1" }
+          }}
+      ]
+  }
+
+// Pointer pattern: *x
+switch_pointer_pattern = { "*" ~ switch_pattern }
+  -> TypedExpression {
+      "commands": [
+          { "define": "pointer_pattern", "args": {
+              "inner": "$1",
+              "mutable": false
+          }}
+      ]
+  }
+```
+
 ## The `fold_binary` Command
 
 This special command builds left-associative binary expression trees from repetition patterns.

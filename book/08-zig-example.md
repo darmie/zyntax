@@ -356,6 +356,269 @@ block = { "{" ~ statement* ~ "}" }
   }
 ```
 
+## Switch Expressions
+
+Zig supports switch expressions for pattern matching against values. The grammar handles multiple pattern types including literals, ranges, struct patterns, tagged union patterns, and error patterns.
+
+### Basic Structure
+
+```zyn
+switch_expr = { "switch" ~ "(" ~ expr ~ ")" ~ "{" ~ switch_cases? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "switch_expr", "args": {
+              "scrutinee": "$1",
+              "cases": "$2"
+          }}
+      ]
+  }
+
+switch_cases = { switch_case ~ ("," ~ switch_case)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+```
+
+The `switch_expr` command creates a switch expression node with:
+
+- `scrutinee`: The expression being matched against
+- `cases`: List of case arms
+
+### Switch Cases
+
+Each case has a pattern and a body:
+
+```zyn
+// Value case: pattern => expr
+switch_case_value = { switch_pattern ~ "=>" ~ expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "switch_case", "args": {
+              "pattern": { "get_child": { "index": 0 } },
+              "body": { "get_child": { "index": 1 } }
+          }}
+      ]
+  }
+
+// Else case: else => expr
+switch_case_else = { "else" ~ "=>" ~ expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "switch_case", "args": {
+              "pattern": { "define": "wildcard_pattern" },
+              "body": "$1"
+          }}
+      ]
+  }
+```
+
+Note the `else` case uses an inline `{ "define": "wildcard_pattern" }` to create the pattern directly in the args.
+
+### Pattern Types
+
+#### Literal Patterns
+
+Match exact values:
+
+```zyn
+switch_literal_pattern = { integer_literal | string_literal }
+  -> TypedExpression {
+      "commands": [
+          { "define": "literal_pattern", "args": { "value": "$1" } }
+      ]
+  }
+```
+
+Example:
+```zig
+const result = switch (x) {
+    1 => 10,
+    2 => 20,
+    else => 0,
+};
+```
+
+#### Wildcard Pattern
+
+Match anything (used for `_` or `else`):
+
+```zyn
+switch_wildcard_pattern = { "_" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "wildcard_pattern" }
+      ]
+  }
+```
+
+#### Range Patterns
+
+Match values within a range:
+
+```zyn
+switch_range_pattern = { integer_literal ~ ".." ~ integer_literal }
+  -> TypedExpression {
+      "commands": [
+          { "define": "range_pattern", "args": {
+              "start": { "define": "literal_pattern", "args": { "value": "$1" } },
+              "end": { "define": "literal_pattern", "args": { "value": "$2" } },
+              "inclusive": false
+          }}
+      ]
+  }
+```
+
+Example:
+
+```zig
+const result = switch (x) {
+    0..9 => "single digit",
+    10..99 => "double digit",
+    else => "other",
+};
+```
+
+#### Tagged Union Patterns
+
+Match enum or tagged union variants (Zig uses `.variant` syntax):
+
+```zyn
+switch_tagged_union_pattern = { "." ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "enum_pattern", "args": {
+              "name": "",
+              "variant": { "text": "$1" },
+              "fields": []
+          }}
+      ]
+  }
+```
+
+Example:
+
+```zig
+const result = switch (optional_value) {
+    .some => 100,
+    .none => 0,
+};
+```
+
+**Note**: Tagged union patterns against non-enum types (like integers) gracefully return `false` in the backend, allowing the else case to match.
+
+#### Struct Patterns
+
+Match struct values by field:
+
+```zyn
+switch_struct_pattern = { identifier ~ "{" ~ struct_field_patterns? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "struct_pattern", "args": {
+              "name": { "text": "$1" },
+              "fields": "$2"
+          }}
+      ]
+  }
+
+switch_struct_field_pattern = { "." ~ identifier ~ ("=" ~ switch_pattern)? }
+  -> TypedExpression {
+      "commands": [
+          { "define": "field_pattern", "args": {
+              "name": { "text": "$1" },
+              "pattern": "$2"
+          }}
+      ]
+  }
+```
+
+Example:
+
+```zig
+const result = switch (point) {
+    Point{ .x = 0, .y = 0 } => "origin",
+    Point{ .x = 0 } => "on y-axis",
+    else => "elsewhere",
+};
+```
+
+#### Error Patterns
+
+Match error values from error unions:
+
+```zyn
+switch_error_pattern = { "error" ~ "." ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "error_pattern", "args": {
+              "name": { "text": "$1" }
+          }}
+      ]
+  }
+```
+
+Example:
+
+```zig
+const result = switch (error_union) {
+    error.OutOfMemory => "memory error",
+    error.NotFound => "not found",
+    else => "success or other",
+};
+```
+
+#### Pointer Patterns
+
+Match through pointer dereference:
+
+```zyn
+switch_pointer_pattern = { "*" ~ switch_pattern }
+  -> TypedExpression {
+      "commands": [
+          { "define": "pointer_pattern", "args": {
+              "inner": "$1",
+              "mutable": false
+          }}
+      ]
+  }
+```
+
+### Testing Switch Expressions
+
+```zig
+// Literal pattern match
+fn main() i32 {
+    const x = 2;
+    const result = switch (x) {
+        1 => 10,
+        2 => 20,
+        else => 0,
+    };
+    return result;
+}
+```
+
+```bash
+# Returns: 20
+```
+
+```zig
+// Else case (no match)
+fn main() i32 {
+    const x = 99;
+    const result = switch (x) {
+        1 => 10,
+        2 => 20,
+        else => 0,
+    };
+    return result;
+}
+```
+
+```bash
+# Returns: 0
+```
+
 ## Expressions
 
 ### The Precedence Chain
