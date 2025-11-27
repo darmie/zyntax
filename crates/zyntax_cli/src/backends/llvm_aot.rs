@@ -14,6 +14,7 @@ pub fn compile_llvm(
     module: HirModule,
     output: Option<PathBuf>,
     opt_level: u8,
+    _entry_point: Option<&str>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use inkwell::context::Context;
@@ -135,6 +136,7 @@ pub fn compile_llvm(
     _module: HirModule,
     output: Option<PathBuf>,
     _opt_level: u8,
+    _entry_point: Option<&str>,
     _verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let output_path = output.unwrap_or_else(|| PathBuf::from("a.out"));
@@ -151,6 +153,7 @@ pub fn compile_llvm(
 pub fn compile_and_run_llvm(
     module: HirModule,
     opt_level: u8,
+    entry_point: Option<&str>,
     verbose: bool,
 ) -> Result<i64, Box<dyn std::error::Error>> {
     use inkwell::context::Context;
@@ -288,6 +291,7 @@ pub fn compile_and_run_llvm(
 pub fn compile_and_run_llvm(
     _module: HirModule,
     _opt_level: u8,
+    _entry_point: Option<&str>,
     _verbose: bool,
 ) -> Result<i64, Box<dyn std::error::Error>> {
     error!("LLVM JIT backend not enabled");

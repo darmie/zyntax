@@ -5,10 +5,14 @@ use zyntax_compiler::cranelift_backend::CraneliftBackend;
 use zyntax_compiler::hir::HirModule;
 
 /// Compile HIR module with Cranelift JIT backend
+///
+/// - `entry_candidates`: Pre-resolved entry point candidates from EntryPointResolver
+///   These are in order of preference (most likely first).
 pub fn compile_jit(
     module: HirModule,
     _opt_level: u8,
     run: bool,
+    entry_candidates: &[String],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create plugin registry and register all available runtime plugins
@@ -54,10 +58,10 @@ pub fn compile_jit(
 
     if run {
         if verbose {
-            println!("{} Running main function...", "info:".green().bold());
+            println!("{} Looking for entry point...", "info:".green().bold());
         }
 
-        execute_main(&backend, &module, verbose)?;
+        execute_entry(&backend, &module, entry_candidates, verbose)?;
     } else {
         println!("{} Compilation successful", "success:".green().bold());
     }
@@ -65,83 +69,103 @@ pub fn compile_jit(
     Ok(())
 }
 
-/// Find and execute the main function
-fn execute_main(
+/// Find and execute the entry point function
+///
+/// Takes pre-resolved candidates from EntryPointResolver.
+/// Candidates are in order of preference (most likely first).
+fn execute_entry(
     backend: &CraneliftBackend,
     module: &HirModule,
+    candidates: &[String],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Find main function by name
-    let (main_id, main_fn) = module
+    if verbose {
+        println!("{} Looking for entry point candidates: {:?}", "debug:".cyan(), candidates);
+    }
+
+    // Find entry function by name - try all candidates in order
+    let (entry_id, matched_name) = module
         .functions
         .iter()
-        .find(|(_, func)| {
-            // Resolve the function name from global interner
+        .find_map(|(id, func)| {
             func.name.resolve_global()
-                .map(|name| name == "main")
-                .unwrap_or(false)
+                .and_then(|name| {
+                    candidates.iter()
+                        .find(|c| c.as_str() == name)
+                        .map(|matched| (*id, matched.clone()))
+                })
         })
-        .ok_or("No 'main' function found in module")?;
+        .ok_or_else(|| {
+            // List available functions in error message for debugging
+            let available: Vec<String> = module.functions.values()
+                .filter_map(|f| f.name.resolve_global())
+                .collect();
+            format!("No entry point found. Tried: {:?}. Available functions: {:?}", candidates, available)
+        })?;
 
-    let main_id = *main_id;
+    // Get the function for return type info
+    let entry_fn = module.functions.get(&entry_id)
+        .ok_or_else(|| format!("Entry function '{}' not found", matched_name))?;
 
     // Get function pointer
     let fn_ptr = backend
-        .get_function_ptr(main_id)
-        .ok_or("Failed to get main function pointer")?;
+        .get_function_ptr(entry_id)
+        .ok_or_else(|| format!("Failed to get '{}' function pointer", matched_name))?;
 
     if verbose {
         println!(
-            "{} Executing main() at {:?}...",
+            "{} Executing {}() at {:?}...",
             "info:".cyan(),
+            matched_name,
             fn_ptr
         );
     }
 
     // Determine return type and call function
-    let result = unsafe {
-        if main_fn.signature.returns.is_empty() {
+    let _result = unsafe {
+        if entry_fn.signature.returns.is_empty() {
             // Void return
             let f: fn() = std::mem::transmute(fn_ptr);
             f();
-            println!("{} main() completed", "result:".green().bold());
+            println!("{} {}() completed", "result:".green().bold(), matched_name);
             0
         } else {
-            match &main_fn.signature.returns[0] {
+            match &entry_fn.signature.returns[0] {
                 zyntax_compiler::hir::HirType::I32 => {
                     let f: fn() -> i32 = std::mem::transmute(fn_ptr);
                     let ret = f();
-                    println!("{} main() returned: {}", "result:".green().bold(), ret);
+                    println!("{} {}() returned: {}", "result:".green().bold(), matched_name, ret);
                     ret as i64
                 }
                 zyntax_compiler::hir::HirType::I64 => {
                     let f: fn() -> i64 = std::mem::transmute(fn_ptr);
                     let ret = f();
-                    println!("{} main() returned: {}", "result:".green().bold(), ret);
+                    println!("{} {}() returned: {}", "result:".green().bold(), matched_name, ret);
                     ret
                 }
                 zyntax_compiler::hir::HirType::F32 => {
                     let f: fn() -> f32 = std::mem::transmute(fn_ptr);
                     let ret = f();
-                    println!("{} main() returned: {}", "result:".green().bold(), ret);
+                    println!("{} {}() returned: {}", "result:".green().bold(), matched_name, ret);
                     0
                 }
                 zyntax_compiler::hir::HirType::F64 => {
                     let f: fn() -> f64 = std::mem::transmute(fn_ptr);
                     let ret = f();
-                    println!("{} main() returned: {}", "result:".green().bold(), ret);
+                    println!("{} {}() returned: {}", "result:".green().bold(), matched_name, ret);
                     0
                 }
                 zyntax_compiler::hir::HirType::Void => {
                     let f: fn() = std::mem::transmute(fn_ptr);
                     f();
-                    println!("{} main() completed", "result:".green().bold());
+                    println!("{} {}() completed", "result:".green().bold(), matched_name);
                     0
                 }
                 _ => {
                     return Err(format!(
-                        "Unsupported main return type: {:?}",
-                        main_fn.signature.returns[0]
+                        "Unsupported {} return type: {:?}",
+                        matched_name,
+                        entry_fn.signature.returns[0]
                     )
                     .into());
                 }
@@ -150,7 +174,7 @@ fn execute_main(
     };
 
     if verbose {
-        println!("{} Execution completed with code: {}", "info:".green(), result);
+        println!("{} Execution completed with code: {}", "info:".green(), _result);
     }
 
     Ok(())

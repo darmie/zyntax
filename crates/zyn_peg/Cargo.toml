@@ -19,6 +19,9 @@ syn = { version = "2.0", features = ["full", "parsing"] }
 # Error handling
 thiserror = "1.0"
 
+# Logging
+log = "0.4"
+
 # Serialization (for zpeg runtime format)
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

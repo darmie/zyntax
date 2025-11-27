@@ -8,6 +8,10 @@
 //! Multiple backends:
 //! - Cranelift JIT - Fast compilation for development
 //! - LLVM AOT - Optimized compilation for production
+//!
+//! Import Resolution:
+//! - Multiple module architectures (Haxe, Java, Rust, Python, TypeScript, Go, Deno)
+//! - Incremental compilation with ZBC caching
 
 mod backends;
 mod cli;
@@ -37,6 +41,13 @@ fn main() {
                     args.opt_level,
                     args.format,
                     args.jit,
+                    args.entry_point,
+                    args.resolver,
+                    args.source_roots,
+                    args.lib_paths,
+                    args.import_map,
+                    args.cache_dir,
+                    args.no_cache,
                     cli.verbose,
                 )
             } else {
@@ -50,10 +61,21 @@ fn main() {
                     args.grammar,
                     args.backend,
                     args.opt_level,
+                    args.resolver,
+                    args.source_roots,
+                    args.lib_paths,
                     cli.verbose,
                 )
             } else {
                 unreachable!("Repl command should have repl args")
+            }
+        }
+
+        Commands::Cache { .. } => {
+            if let Some(action) = cli.command.cache_args() {
+                commands::cache(action, cli.verbose)
+            } else {
+                unreachable!("Cache command should have cache args")
             }
         }
 

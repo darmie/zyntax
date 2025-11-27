@@ -66,6 +66,7 @@ pub mod constraint_solver;
 pub mod smt_solver;
 pub mod type_checker;
 pub mod advanced_analysis;
+pub mod import_resolver;
 
 // Universal Type System - supporting multiple language paradigms
 // pub(crate) mod universal_type_system; // Internal use only - deprecated
@@ -137,6 +138,8 @@ pub use typed_ast::{
     TypedDefer,
     // Class/Struct/Enum types
     TypedClass, TypedEnum, TypedField, TypedVariant, TypedTypeParam,
+    // Import types
+    TypedImport, TypedImportItem, TypedModule,
 };
 
 pub use type_inference::{
@@ -208,6 +211,13 @@ pub use effect_system::{
     EffectTransformation, EffectRequirement, EffectCapability,
     CompositionOperator, HandlerType, EffectScopeKind,
     EffectInferenceContext, EffectId,
+};
+
+pub use import_resolver::{
+    ImportResolver, ImportContext, ImportManager, ImportError,
+    ResolvedImport, ExportedSymbol, SymbolKind,
+    ChainedResolver, BuiltinResolver, ModuleArchitecture, ModuleSource,
+    CompiledCacheFormat, CompiledModuleCache, EntryPointResolver,
 };
 
 // Note: universal_type_system is deprecated and only used internally by some type checkers

@@ -496,8 +496,10 @@ impl LoweringContext {
                     for (i, _ctor) in class_decl.constructors.iter().enumerate() {
                         let ctor_id = crate::hir::HirId::new();
                         // Constructors: ClassName_constructor_N
+                        // Use resolve_global() for portability across interner sources
+                        let class_name_str = class_decl.name.resolve_global()
+                            .unwrap_or_else(|| "UnknownClass".to_string());
                         let mut arena = self.arena.lock().unwrap();
-                        let class_name_str = arena.resolve_string(class_decl.name).unwrap().to_string();
                         let ctor_name = arena.intern_string(&format!("{}_constructor_{}", class_name_str, i));
                         drop(arena);
                         self.symbols.functions.insert(ctor_name, ctor_id);
@@ -1445,9 +1447,11 @@ impl LoweringContext {
         use zyntax_typed_ast::type_registry::{Type, NullabilityKind, TypeId};
 
         // Constructor name: ClassName_constructor_N
+        // Use resolve_global() for portability across interner sources
         let ctor_name = {
+            let class_name_str = class_name.resolve_global()
+                .unwrap_or_else(|| "UnknownClass".to_string());
             let mut arena = self.arena.lock().unwrap();
-            let class_name_str = arena.resolve_string(class_name).unwrap().to_string();
             arena.intern_string(&format!("{}_constructor_{}", class_name_str, index))
         };
 
@@ -1494,9 +1498,13 @@ impl LoweringContext {
 
     /// Mangle method name: ClassName_methodName
     fn mangle_method_name(&self, class_name: InternedString, method_name: InternedString) -> InternedString {
+        // Use resolve_global() since InternedStrings may come from different sources
+        // (global interner from ZynPEG runtime, local arena from JSON deserialization, etc.)
+        let class_name_str = class_name.resolve_global()
+            .unwrap_or_else(|| "UnknownClass".to_string());
+        let method_name_str = method_name.resolve_global()
+            .unwrap_or_else(|| "unknown_method".to_string());
         let mut arena = self.arena.lock().unwrap();
-        let class_name_str = arena.resolve_string(class_name).unwrap().to_string();
-        let method_name_str = arena.resolve_string(method_name).unwrap().to_string();
         arena.intern_string(&format!("{}_{}", class_name_str, method_name_str))
     }
 
