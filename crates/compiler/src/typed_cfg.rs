@@ -782,6 +782,22 @@ impl TypedCfgBuilder {
                     exit_id = block_exit;
                 }
 
+                TypedStatement::Expression(expr) => {
+                    // Check if expression is a Block - if so, flatten it
+                    if let TypedExpression::Block(block) = &expr.node {
+                        log::debug!("[CFG] Expression(Block): flattening block with {} statements", block.statements.len());
+                        // Recursively process the block's statements
+                        let (block_blocks, _block_entry, block_exit) = self.split_at_control_flow(block, current_block_id)?;
+                        all_blocks.extend(block_blocks);
+                        current_statements = Vec::new();
+                        current_block_id = block_exit;
+                        exit_id = block_exit;
+                    } else {
+                        // Regular expression - add as statement
+                        current_statements.push(stmt.clone());
+                    }
+                }
+
                 TypedStatement::Break(value_opt) => {
                     // Break jumps to loop exit
                     if let Some(&(_header_id, exit_id)) = self.loop_stack.last() {

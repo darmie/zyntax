@@ -1737,7 +1737,14 @@ impl CraneliftBackend {
                     }
 
                     HirTerminator::Unreachable => {
-                        builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
+                        // For void-returning functions, emit a return instead of trap
+                        // This handles Haxe/other languages where main() returns Void and has no explicit return
+                        if function.signature.returns.is_empty() ||
+                           function.signature.returns.iter().all(|r| matches!(r, HirType::Void)) {
+                            builder.ins().return_(&[]);
+                        } else {
+                            builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
+                        }
                     }
 
                     _ => {

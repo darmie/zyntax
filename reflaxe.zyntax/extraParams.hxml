@@ -7,6 +7,9 @@
 # Define Zyntax target for conditional compilation
 -D zyntax
 
+# Enable Zyntax runtime transformers (StringOperatorTransformer, TraceTransformer)
+-D zyntax_runtime
+
 # Initialize the Zyntax compiler
 --macro zyntax.ZyntaxCompilerInit.Start()
 
