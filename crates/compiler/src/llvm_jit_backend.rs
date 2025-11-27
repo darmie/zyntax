@@ -7,15 +7,19 @@
 //! - On-demand compilation with full LLVM optimizations
 //! - Function pointer retrieval for direct calls
 //! - Memory-efficient: only compiles functions that are actually hot
-//! - Wraps LLVMBackend for HIR → LLVM IR translation (composition pattern)
+//! - Uses LLVMBackend for HIR → LLVM IR translation
 //!
 //! ## vs AOT LLVM Backend
 //! - AOT (`llvm_backend.rs`): Compiles entire program to object files/executables
 //! - JIT (this file): Compiles individual functions to memory at runtime
 //!
 //! Both use the same HIR → LLVM IR translation logic.
+//!
+//! ## MCJIT Architecture Note
+//! MCJIT requires the module to be fully populated before the execution engine is created.
+//! We compile HIR → LLVM IR first, then create the execution engine from the populated module.
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use inkwell::{
     OptimizationLevel,
     context::Context,
@@ -29,17 +33,17 @@ use crate::llvm_backend::LLVMBackend;
 
 /// LLVM JIT backend using MCJIT
 ///
-/// Wraps the AOT LLVMBackend to reuse HIR → LLVM IR translation,
-/// then adds JIT execution capabilities via MCJIT.
+/// This backend compiles HIR modules to native code using LLVM's MCJIT.
+/// The execution engine is created lazily after the module is compiled.
 pub struct LLVMJitBackend<'ctx> {
-    /// AOT backend for HIR → LLVM IR translation
-    backend: LLVMBackend<'ctx>,
+    /// LLVM context reference
+    context: &'ctx Context,
 
-    /// Execution engine (MCJIT)
-    execution_engine: ExecutionEngine<'ctx>,
+    /// Execution engine (MCJIT) - created after module compilation
+    execution_engine: Option<ExecutionEngine<'ctx>>,
 
     /// Function pointers cache (stored as usize for thread safety)
-    function_pointers: HashMap<HirId, usize>,
+    function_pointers: IndexMap<HirId, usize>,
 
     /// Optimization level
     opt_level: OptimizationLevel,
@@ -60,18 +64,10 @@ impl<'ctx> LLVMJitBackend<'ctx> {
         // Link in MCJIT
         ExecutionEngine::link_in_mc_jit();
 
-        // Create backend for HIR → LLVM IR translation
-        let backend = LLVMBackend::new(context, "zyntax_jit");
-
-        // Create JIT execution engine from the backend's module
-        let execution_engine = backend.module()
-            .create_jit_execution_engine(opt_level)
-            .map_err(|e| CompilerError::Backend(format!("Failed to create JIT execution engine: {}", e)))?;
-
         Ok(Self {
-            backend,
-            execution_engine,
-            function_pointers: HashMap::new(),
+            context,
+            execution_engine: None,
+            function_pointers: IndexMap::new(),
             opt_level,
         })
     }
@@ -80,22 +76,36 @@ impl<'ctx> LLVMJitBackend<'ctx> {
     ///
     /// Translates all functions to LLVM IR and JIT compiles them.
     /// Function pointers become available via get_function_pointer().
+    ///
+    /// IMPORTANT: The execution engine is created AFTER compilation to ensure
+    /// MCJIT sees all functions in the module.
     pub fn compile_module(&mut self, hir_module: &HirModule) -> CompilerResult<()> {
-        // Use the wrapped backend to translate HIR → LLVM IR
-        self.backend.compile_module(hir_module)?;
+        // Step 1: Create backend and compile HIR → LLVM IR
+        let mut backend = LLVMBackend::new(self.context, "zyntax_jit");
+        let _llvm_ir = backend.compile_module(hir_module)?;
 
-        // Extract function pointers from the execution engine
+        // Step 2: Create execution engine from the FULLY POPULATED module
+        // This is critical - MCJIT takes ownership of the module and compiles it
+        let execution_engine = backend.into_module()
+            .create_jit_execution_engine(self.opt_level)
+            .map_err(|e| CompilerError::Backend(format!("Failed to create JIT execution engine: {}", e)))?;
+
+        // Step 3: Extract function pointers from the execution engine
         for (id, function) in &hir_module.functions {
-            let fn_name = if function.is_external {
-                // External functions use their actual name for linking
-                function.name.to_string()
+            // Must match naming logic in llvm_backend.rs:
+            // - External functions use their actual name for linking
+            // - Main function uses actual name for entry point
+            // - Other functions use mangled name with HirId
+            let actual_name = function.name.resolve_global()
+                .unwrap_or_else(|| format!("{:?}", function.name));
+            let fn_name = if function.is_external || actual_name == "main" {
+                actual_name
             } else {
-                // Regular functions use mangled name matching llvm_backend.rs
                 format!("func_{:?}", id)
             };
 
             // Get function address from JIT execution engine
-            let fn_ptr = self.execution_engine
+            let fn_ptr = execution_engine
                 .get_function_address(&fn_name)
                 .map_err(|e| CompilerError::Backend(
                     format!("Failed to get function address for '{}': {:?}", fn_name, e)
@@ -104,6 +114,9 @@ impl<'ctx> LLVMJitBackend<'ctx> {
             // Cache the pointer (stored as usize for thread safety)
             self.function_pointers.insert(*id, fn_ptr as usize);
         }
+
+        // Store execution engine (keeps JIT code alive)
+        self.execution_engine = Some(execution_engine);
 
         Ok(())
     }
@@ -115,14 +128,13 @@ impl<'ctx> LLVMJitBackend<'ctx> {
     pub fn compile_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
         // Create a temporary module with just this function
         use std::collections::HashSet;
-        use zyntax_typed_ast::TypeId;
 
         let temp_module = HirModule {
             id: HirId::new(),
             name: function.name,
             functions: [(id, function.clone())].iter().cloned().collect(),
-            globals: HashMap::new(),
-            types: HashMap::new(),
+            globals: IndexMap::new(),
+            types: IndexMap::new(),
             imports: Vec::new(),
             exports: Vec::new(),
             version: 0,

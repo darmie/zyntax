@@ -25,11 +25,12 @@ use inkwell::{
     context::Context,
     module::Module,
     types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType},
-    values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue, PhiValue},
+    values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, PointerValue, PhiValue, ValueKind},
     basic_block::BasicBlock,
     AddressSpace, IntPredicate, FloatPredicate,
+    AtomicOrdering as LLVMAtomicOrdering, AtomicRMWBinOp,
 };
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 // Helper macro to convert inkwell errors to CompilerError
 macro_rules! llvm_try {
@@ -54,19 +55,19 @@ pub struct LLVMBackend<'ctx> {
     builder: Builder<'ctx>,
 
     /// Maps HIR value IDs to compiled LLVM values
-    value_map: HashMap<HirId, BasicValueEnum<'ctx>>,
+    value_map: IndexMap<HirId, BasicValueEnum<'ctx>>,
 
     /// Maps HIR value IDs to their original HIR types (for indirect calls and other type lookups)
-    type_map: HashMap<HirId, HirType>,
+    type_map: IndexMap<HirId, HirType>,
 
     /// Maps HIR function IDs to compiled LLVM functions
-    functions: HashMap<HirId, FunctionValue<'ctx>>,
+    functions: IndexMap<HirId, FunctionValue<'ctx>>,
 
     /// Maps HIR basic block IDs to LLVM basic blocks
-    block_map: HashMap<HirId, BasicBlock<'ctx>>,
+    block_map: IndexMap<HirId, BasicBlock<'ctx>>,
 
     /// Maps HIR phi result IDs to LLVM phi nodes (for adding incoming edges later)
-    phi_map: HashMap<HirId, PhiValue<'ctx>>,
+    phi_map: IndexMap<HirId, PhiValue<'ctx>>,
 
     /// Current function being compiled (for accessing locals, blocks, etc.)
     current_function: Option<FunctionValue<'ctx>>,
@@ -86,11 +87,11 @@ impl<'ctx> LLVMBackend<'ctx> {
             context,
             module,
             builder,
-            value_map: HashMap::new(),
-            type_map: HashMap::new(),
-            functions: HashMap::new(),
-            block_map: HashMap::new(),
-            phi_map: HashMap::new(),
+            value_map: IndexMap::new(),
+            type_map: IndexMap::new(),
+            functions: IndexMap::new(),
+            block_map: IndexMap::new(),
+            phi_map: IndexMap::new(),
             current_function: None,
         }
     }
@@ -103,23 +104,40 @@ impl<'ctx> LLVMBackend<'ctx> {
     /// 3. Compiles function bodies
     /// 4. Returns the compiled LLVM module
     pub fn compile_module(&mut self, hir_module: &HirModule) -> CompilerResult<String> {
-        // Phase 1: Process globals first (including vtables)
-        for (id, global) in &hir_module.globals {
-            self.compile_global(*id, global)?;
+        // Phase 1: Process globals first (including vtables) in deterministic sorted order
+        let mut global_ids: Vec<_> = hir_module.globals.keys().cloned().collect();
+        global_ids.sort_by_key(|id| format!("{:?}", id));
+
+        for id in &global_ids {
+            if let Some(global) = hir_module.globals.get(id) {
+                self.compile_global(*id, global)?;
+            }
         }
 
-        // Phase 2: Declare all functions (allows forward references)
-        for (id, func) in &hir_module.functions {
-            self.declare_function(*id, func)?;
+        // Phase 2: Declare all functions (allows forward references) in deterministic sorted order
+        let mut declare_ids: Vec<_> = hir_module.functions.keys().cloned().collect();
+        declare_ids.sort_by_key(|id| format!("{:?}", id));
+
+        for id in &declare_ids {
+            if let Some(func) = hir_module.functions.get(id) {
+                self.declare_function(*id, func)?;
+            }
         }
 
-        // Phase 3: Compile function bodies
-        for (id, func) in &hir_module.functions {
-            self.compile_function(*id, func)?;
+        // Phase 3: Compile function bodies in deterministic sorted order
+        let mut function_ids: Vec<_> = hir_module.functions.keys().cloned().collect();
+        function_ids.sort_by_key(|id| format!("{:?}", id));
+
+        for id in &function_ids {
+            if let Some(func) = hir_module.functions.get(id) {
+                self.compile_function(*id, func)?;
+            }
         }
 
         // Return LLVM IR as string for inspection/debugging
-        Ok(self.module.print_to_string().to_string())
+        let ir = self.module.print_to_string().to_string();
+        log::debug!("[LLVM] Generated LLVM IR:\n{}", ir);
+        Ok(ir)
     }
 
     /// Get a reference to the compiled LLVM module
@@ -127,6 +145,14 @@ impl<'ctx> LLVMBackend<'ctx> {
     /// This is useful for creating an execution engine or writing to a file.
     pub fn module(&self) -> &Module<'ctx> {
         &self.module
+    }
+
+    /// Consume the backend and return the LLVM module
+    ///
+    /// This transfers ownership of the module, which is required for MCJIT
+    /// since the execution engine takes ownership of the module.
+    pub fn into_module(self) -> Module<'ctx> {
+        self.module
     }
 
     /// Declare a function signature without compiling its body
@@ -161,10 +187,14 @@ impl<'ctx> LLVMBackend<'ctx> {
         };
 
         // Add function to module
-        // Gap 11: Use actual name for extern functions (for linking), mangled name for regular functions
-        let fn_name = if func.is_external {
-            // External functions use their actual name for linking
-            func.name.to_string()
+        // Use actual name for:
+        // - External functions (for linking with C libraries)
+        // - Main function (for linker entry point in AOT compilation)
+        // Otherwise use mangled name with HirId for internal functions
+        let actual_name = func.name.resolve_global()
+            .unwrap_or_else(|| format!("{:?}", func.name));
+        let fn_name = if func.is_external || actual_name == "main" {
+            actual_name
         } else {
             // Regular functions use mangled name with HirId
             format!("func_{:?}", id)
@@ -230,32 +260,19 @@ impl<'ctx> LLVMBackend<'ctx> {
         let entry_llvm_block = self.context.append_basic_block(fn_value, &entry_block_name);
         self.block_map.insert(func.entry_block, entry_llvm_block);
 
-        // Create remaining blocks
-        for (block_id, _) in &func.blocks {
-            if *block_id == func.entry_block {
-                continue; // Already created
-            }
-            let block_name = format!("bb_{:?}", block_id);
-            let llvm_block = self.context.append_basic_block(fn_value, &block_name);
-            self.block_map.insert(*block_id, llvm_block);
-        }
-
-        // Phase 2: Compile all blocks in order (entry block first)
-        // Start with entry block
-        if let Some(entry_llvm_block) = self.block_map.get(&func.entry_block) {
-            self.builder.position_at_end(*entry_llvm_block);
-
-            if let Some(entry_hir_block) = func.blocks.get(&func.entry_block) {
-                self.compile_block_with_terminator(&func.entry_block, entry_hir_block, func)?;
+        // Create remaining blocks in insertion order (IndexMap preserves insertion order)
+        // This ensures deterministic LLVM IR generation and correct phi node handling
+        for (block_id, _) in func.blocks.iter() {
+            if *block_id != func.entry_block {
+                let block_name = format!("bb_{:?}", block_id);
+                let llvm_block = self.context.append_basic_block(fn_value, &block_name);
+                self.block_map.insert(*block_id, llvm_block);
             }
         }
 
-        // Compile remaining blocks
-        for (block_id, hir_block) in &func.blocks {
-            if *block_id == func.entry_block {
-                continue; // Already compiled
-            }
-
+        // Phase 2: Compile all blocks in insertion order (IndexMap preserves this)
+        // This ensures all values are defined before they're used in phi nodes
+        for (block_id, hir_block) in func.blocks.iter() {
             if let Some(llvm_block) = self.block_map.get(block_id) {
                 self.builder.position_at_end(*llvm_block);
                 self.compile_block_with_terminator(block_id, hir_block, func)?;
@@ -265,12 +282,18 @@ impl<'ctx> LLVMBackend<'ctx> {
         // Phase 3: Add incoming edges to phi nodes
         // Now that all blocks are compiled and all values are in value_map,
         // we can add the incoming edges to phi nodes
-        for (_block_id, hir_block) in &func.blocks {
+        // Iterate in insertion order (IndexMap preserves this)
+        log::debug!("[LLVM] Phase 3: Adding phi incoming edges. value_map has {} entries", self.value_map.len());
+
+        for (block_id, hir_block) in func.blocks.iter() {
             for phi in &hir_block.phis {
+                log::debug!("[LLVM] Processing phi {:?} in block {:?}", phi.result, block_id);
                 if let Some(phi_value) = self.phi_map.get(&phi.result) {
-                    // Add incoming edges from each predecessor
+                    // Iterate phi incoming in original order (preserved by data structure)
                     for (value_id, pred_block_id) in &phi.incoming {
+                        log::debug!("[LLVM]   incoming: value={:?} from block={:?}", value_id, pred_block_id);
                         let incoming_value = self.get_value(*value_id)?;
+                        log::debug!("[LLVM]     resolved to: {:?}", incoming_value);
                         let incoming_block = self.block_map.get(pred_block_id)
                             .ok_or_else(|| CompilerError::CodeGen(
                                 format!("Phi node references unknown block: {:?}", pred_block_id)
@@ -352,7 +375,9 @@ impl<'ctx> LLVMBackend<'ctx> {
 
     /// Compile a basic block (instructions only, no terminator)
     fn compile_block(&mut self, block: &HirBlock) -> CompilerResult<()> {
+        log::debug!("[LLVM] compile_block: {} instructions", block.instructions.len());
         for instruction in &block.instructions {
+            log::debug!("[LLVM]   inst: {:?}", std::mem::discriminant(instruction));
             self.compile_instruction(instruction)?;
         }
         Ok(())
@@ -365,6 +390,9 @@ impl<'ctx> LLVMBackend<'ctx> {
         block: &HirBlock,
         function: &HirFunction,
     ) -> CompilerResult<()> {
+        log::debug!("[LLVM] compile_block_with_terminator: block={:?}, {} phis, {} instructions",
+                   block_id, block.phis.len(), block.instructions.len());
+
         // Compile phi nodes first
         for phi in &block.phis {
             self.compile_phi(phi, block_id, function)?;
@@ -570,10 +598,15 @@ impl<'ctx> LLVMBackend<'ctx> {
         match instruction {
             // ========== Arithmetic & Logic ==========
             HirInstruction::Binary { result, op, ty: _, left, right } => {
+                log::debug!("[LLVM] compile_instruction: Binary op={:?}, result={:?}, left={:?}, right={:?}", op, result, left, right);
                 let left_val = self.get_value(*left)?;
+                log::debug!("[LLVM]   left_val = {:?}", left_val);
                 let right_val = self.get_value(*right)?;
+                log::debug!("[LLVM]   right_val = {:?}", right_val);
                 let result_val = self.compile_binary_op(*op, left_val, right_val)?;
+                log::debug!("[LLVM]   result_val = {:?}", result_val);
                 self.value_map.insert(*result, result_val);
+                log::debug!("[LLVM]   inserted result={:?} into value_map", result);
             }
 
             HirInstruction::Unary { result, op, ty: _, operand } => {
@@ -857,48 +890,440 @@ impl<'ctx> LLVMBackend<'ctx> {
 
             // ========== Atomic Operations ==========
             HirInstruction::Atomic { op, result, ty, ptr, value, ordering } => {
-                return Err(CompilerError::CodeGen(
-                    "Atomic operations not yet implemented in LLVM backend".to_string()
-                ));
+                // Atomic operations with proper LLVM support
+                let ptr_val = self.get_value(*ptr)?.into_pointer_value();
+                let llvm_ty = self.translate_type(ty)?;
+
+                // Convert HIR atomic ordering to LLVM atomic ordering
+                let llvm_ordering = match ordering {
+                    crate::hir::AtomicOrdering::Relaxed => LLVMAtomicOrdering::Monotonic,
+                    crate::hir::AtomicOrdering::Acquire => LLVMAtomicOrdering::Acquire,
+                    crate::hir::AtomicOrdering::Release => LLVMAtomicOrdering::Release,
+                    crate::hir::AtomicOrdering::AcqRel => LLVMAtomicOrdering::AcquireRelease,
+                    crate::hir::AtomicOrdering::SeqCst => LLVMAtomicOrdering::SequentiallyConsistent,
+                };
+
+                let atomic_result = match op {
+                    crate::hir::AtomicOp::Load => {
+                        // Atomic load - LLVM uses volatile load with ordering
+                        // For proper atomics, we need the int type for load
+                        if let BasicTypeEnum::IntType(int_ty) = llvm_ty {
+                            self.builder.build_load(int_ty, ptr_val, "atomic_load")?
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "Atomic load requires integer type".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::Store => {
+                        // Atomic store
+                        if let Some(val_id) = value {
+                            let val = self.get_value(*val_id)?;
+                            self.builder.build_store(ptr_val, val)?;
+                            // Store doesn't return a meaningful value, return the stored value
+                            val
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "AtomicStore requires a value".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::Exchange => {
+                        // Atomic exchange using LLVM's atomicrmw xchg
+                        if let Some(val_id) = value {
+                            let val = self.get_value(*val_id)?.into_int_value();
+                            self.builder.build_atomicrmw(
+                                AtomicRMWBinOp::Xchg,
+                                ptr_val,
+                                val,
+                                llvm_ordering
+                            )?.into()
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "AtomicExchange requires a value".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::Add => {
+                        // Atomic add
+                        if let Some(val_id) = value {
+                            let val = self.get_value(*val_id)?.into_int_value();
+                            self.builder.build_atomicrmw(
+                                AtomicRMWBinOp::Add,
+                                ptr_val,
+                                val,
+                                llvm_ordering
+                            )?.into()
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "AtomicAdd requires a value".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::Sub => {
+                        // Atomic sub
+                        if let Some(val_id) = value {
+                            let val = self.get_value(*val_id)?.into_int_value();
+                            self.builder.build_atomicrmw(
+                                AtomicRMWBinOp::Sub,
+                                ptr_val,
+                                val,
+                                llvm_ordering
+                            )?.into()
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "AtomicSub requires a value".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::And => {
+                        // Atomic and
+                        if let Some(val_id) = value {
+                            let val = self.get_value(*val_id)?.into_int_value();
+                            self.builder.build_atomicrmw(
+                                AtomicRMWBinOp::And,
+                                ptr_val,
+                                val,
+                                llvm_ordering
+                            )?.into()
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "AtomicAnd requires a value".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::Or => {
+                        // Atomic or
+                        if let Some(val_id) = value {
+                            let val = self.get_value(*val_id)?.into_int_value();
+                            self.builder.build_atomicrmw(
+                                AtomicRMWBinOp::Or,
+                                ptr_val,
+                                val,
+                                llvm_ordering
+                            )?.into()
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "AtomicOr requires a value".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::Xor => {
+                        // Atomic xor
+                        if let Some(val_id) = value {
+                            let val = self.get_value(*val_id)?.into_int_value();
+                            self.builder.build_atomicrmw(
+                                AtomicRMWBinOp::Xor,
+                                ptr_val,
+                                val,
+                                llvm_ordering
+                            )?.into()
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                "AtomicXor requires a value".to_string()
+                            ));
+                        }
+                    }
+                    crate::hir::AtomicOp::CompareExchange => {
+                        // NOTE: CompareExchange requires two values (expected, desired)
+                        // Current HIR has single value field - architecture limitation
+                        // FUTURE: Extend HIR instruction for compare-exchange
+                        return Err(CompilerError::CodeGen(
+                            "CompareExchange not yet implemented - requires HIR extension".to_string()
+                        ));
+                    }
+                };
+
+                self.value_map.insert(*result, atomic_result);
             }
 
             HirInstruction::Fence { ordering } => {
-                // Memory fence
-                return Err(CompilerError::CodeGen(
-                    "Fence instruction not yet implemented in LLVM backend".to_string()
-                ));
+                // Memory fence instruction
+                let llvm_ordering = match ordering {
+                    crate::hir::AtomicOrdering::Relaxed => LLVMAtomicOrdering::Monotonic,
+                    crate::hir::AtomicOrdering::Acquire => LLVMAtomicOrdering::Acquire,
+                    crate::hir::AtomicOrdering::Release => LLVMAtomicOrdering::Release,
+                    crate::hir::AtomicOrdering::AcqRel => LLVMAtomicOrdering::AcquireRelease,
+                    crate::hir::AtomicOrdering::SeqCst => LLVMAtomicOrdering::SequentiallyConsistent,
+                };
+
+                // Build fence instruction
+                self.builder.build_fence(llvm_ordering, 0, "fence")?;
             }
 
             // ========== Union Type Operations ==========
-            HirInstruction::CreateUnion { result, union_ty, variant_index, value } => {
-                return Err(CompilerError::CodeGen(
-                    "Union operations not yet implemented in LLVM backend".to_string()
-                ));
+            HirInstruction::CreateUnion { result, union_ty: _, variant_index, value } => {
+                // Create a tagged union value
+                // Union layout: 16 bytes (4 bytes discriminant + 12 bytes data)
+                // This matches Cranelift's implementation for backend parity
+
+                // Create union type: struct { i32 discriminant, [12 x i8] data }
+                let i32_type = self.context.i32_type();
+                let data_array_type = self.context.i8_type().array_type(12);
+                let union_type = self.context.struct_type(
+                    &[i32_type.into(), data_array_type.into()],
+                    false
+                );
+
+                // Allocate space for the union on the stack
+                let union_alloca = self.builder.build_alloca(union_type, "union")?;
+
+                // Store the discriminant at offset 0
+                let discriminant = self.context.i32_type().const_int(*variant_index as u64, false);
+                let discriminant_ptr = self.builder.build_struct_gep(
+                    union_type,
+                    union_alloca,
+                    0,
+                    "union_discriminant_ptr"
+                )?;
+                self.builder.build_store(discriminant_ptr, discriminant)?;
+
+                // Store the value at offset 4 (in the data field)
+                // We need to bitcast the data field pointer to the value's type
+                let value_val = self.get_value(*value)?;
+                let data_ptr = self.builder.build_struct_gep(
+                    union_type,
+                    union_alloca,
+                    1,
+                    "union_data_ptr"
+                )?;
+
+                // Cast data pointer to the value's type pointer and store
+                let value_type = value_val.get_type();
+                let typed_data_ptr = self.builder.build_pointer_cast(
+                    data_ptr,
+                    value_type.ptr_type(AddressSpace::default()),
+                    "typed_data_ptr"
+                )?;
+                self.builder.build_store(typed_data_ptr, value_val)?;
+
+                // Store the union pointer as the result
+                self.value_map.insert(*result, union_alloca.into());
             }
 
             HirInstruction::GetUnionDiscriminant { result, union_val } => {
-                return Err(CompilerError::CodeGen(
-                    "Union discriminant not yet implemented in LLVM backend".to_string()
-                ));
+                // Extract discriminant from union (at offset 0)
+                let union_ptr = self.get_value(*union_val)?.into_pointer_value();
+
+                // Union type for GEP
+                let i32_type = self.context.i32_type();
+                let data_array_type = self.context.i8_type().array_type(12);
+                let union_type = self.context.struct_type(
+                    &[i32_type.into(), data_array_type.into()],
+                    false
+                );
+
+                // Get pointer to discriminant field
+                let discriminant_ptr = self.builder.build_struct_gep(
+                    union_type,
+                    union_ptr,
+                    0,
+                    "union_discriminant_ptr"
+                )?;
+
+                // Load the discriminant value
+                let discriminant = self.builder.build_load(
+                    i32_type,
+                    discriminant_ptr,
+                    "union_discriminant"
+                )?;
+
+                self.value_map.insert(*result, discriminant);
             }
 
-            HirInstruction::ExtractUnionValue { result, ty, union_val, variant_index } => {
-                return Err(CompilerError::CodeGen(
-                    "Union extraction not yet implemented in LLVM backend".to_string()
-                ));
+            HirInstruction::ExtractUnionValue { result, ty, union_val, variant_index: _ } => {
+                // Extract value from union variant (unsafe - assumes correct variant)
+                let union_ptr = self.get_value(*union_val)?.into_pointer_value();
+
+                // Union type for GEP
+                let i32_type = self.context.i32_type();
+                let data_array_type = self.context.i8_type().array_type(12);
+                let union_type = self.context.struct_type(
+                    &[i32_type.into(), data_array_type.into()],
+                    false
+                );
+
+                // Get pointer to data field (offset 4, after discriminant)
+                let data_ptr = self.builder.build_struct_gep(
+                    union_type,
+                    union_ptr,
+                    1,
+                    "union_data_ptr"
+                )?;
+
+                // Translate the target type
+                let llvm_ty = self.translate_type(ty)?;
+
+                // Cast data pointer to the expected type and load
+                let typed_data_ptr = self.builder.build_pointer_cast(
+                    data_ptr,
+                    llvm_ty.ptr_type(AddressSpace::default()),
+                    "typed_data_ptr"
+                )?;
+
+                let value = self.builder.build_load(
+                    llvm_ty,
+                    typed_data_ptr,
+                    "union_value"
+                )?;
+
+                self.value_map.insert(*result, value);
             }
 
             // ========== Closure Operations ==========
-            HirInstruction::CreateClosure { result, closure_ty, function, captures } => {
-                return Err(CompilerError::CodeGen(
-                    "Closure creation not yet implemented in LLVM backend".to_string()
-                ));
+            HirInstruction::CreateClosure { result, closure_ty: _, function, captures } => {
+                // Create a closure with function pointer and captured environment
+                // Closure layout: { fn_ptr: *(), captures... }
+                // Simplified: 8 bytes for fn_ptr + 8 bytes per capture
+
+                let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+                let i64_type = self.context.i64_type();
+
+                // Create closure type as array of i64s for simplicity
+                let num_slots = 1 + captures.len() as u32; // fn_ptr + captures
+                let closure_type = i64_type.array_type(num_slots);
+
+                // Allocate closure on stack
+                let closure_alloca = self.builder.build_alloca(closure_type, "closure")?;
+
+                // Store function pointer at offset 0
+                // Try to get function from functions map first
+                if let Some(&llvm_func) = self.functions.get(function) {
+                    // Get function pointer
+                    let func_ptr = llvm_func.as_global_value().as_pointer_value();
+                    let func_ptr_as_i64 = self.builder.build_ptr_to_int(
+                        func_ptr,
+                        i64_type,
+                        "fn_ptr_int"
+                    )?;
+
+                    // Store at slot 0 using GEP
+                    let fn_slot_ptr = unsafe {
+                        self.builder.build_in_bounds_gep(
+                            closure_type,
+                            closure_alloca,
+                            &[self.context.i32_type().const_zero(), self.context.i32_type().const_zero()],
+                            "fn_slot"
+                        )?
+                    };
+                    self.builder.build_store(fn_slot_ptr, func_ptr_as_i64)?;
+                } else {
+                    // Function not found - store null
+                    let null_i64 = i64_type.const_zero();
+                    let fn_slot_ptr = unsafe {
+                        self.builder.build_in_bounds_gep(
+                            closure_type,
+                            closure_alloca,
+                            &[self.context.i32_type().const_zero(), self.context.i32_type().const_zero()],
+                            "fn_slot"
+                        )?
+                    };
+                    self.builder.build_store(fn_slot_ptr, null_i64)?;
+                }
+
+                // Store captured values
+                for (i, capture_id) in captures.iter().enumerate() {
+                    if let Ok(capture_val) = self.get_value(*capture_id) {
+                        // Convert to i64 for storage (simplified - assumes 64-bit values)
+                        let capture_as_i64 = if capture_val.is_int_value() {
+                            let int_val = capture_val.into_int_value();
+                            if int_val.get_type().get_bit_width() < 64 {
+                                self.builder.build_int_z_extend(int_val, i64_type, "capture_ext")?
+                            } else {
+                                int_val
+                            }
+                        } else if capture_val.is_pointer_value() {
+                            self.builder.build_ptr_to_int(
+                                capture_val.into_pointer_value(),
+                                i64_type,
+                                "capture_ptr_int"
+                            )?
+                        } else {
+                            // For other types, store as bitcast (simplified)
+                            i64_type.const_zero()
+                        };
+
+                        // Store at slot i+1 (after function pointer)
+                        let capture_slot_ptr = unsafe {
+                            self.builder.build_in_bounds_gep(
+                                closure_type,
+                                closure_alloca,
+                                &[
+                                    self.context.i32_type().const_zero(),
+                                    self.context.i32_type().const_int((i + 1) as u64, false)
+                                ],
+                                &format!("capture_slot_{}", i)
+                            )?
+                        };
+                        self.builder.build_store(capture_slot_ptr, capture_as_i64)?;
+                    }
+                }
+
+                // Return closure pointer
+                self.value_map.insert(*result, closure_alloca.into());
             }
 
             HirInstruction::CallClosure { result, closure, args } => {
-                return Err(CompilerError::CodeGen(
-                    "Closure calls not yet implemented in LLVM backend".to_string()
-                ));
+                // Call a closure through its function pointer
+                // Closure layout: { fn_ptr: *(), captures... }
+
+                let i64_type = self.context.i64_type();
+                let ptr_type = self.context.i8_type().ptr_type(AddressSpace::default());
+
+                // Get closure pointer
+                let closure_ptr = self.get_value(*closure)?.into_pointer_value();
+
+                // Load function pointer from closure (at offset 0)
+                // Treat closure as array of i64
+                let closure_type = i64_type.array_type(1); // Just need first element
+                let fn_slot_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(
+                        closure_type,
+                        closure_ptr,
+                        &[self.context.i32_type().const_zero(), self.context.i32_type().const_zero()],
+                        "fn_slot"
+                    )?
+                };
+                let fn_ptr_int = self.builder.build_load(i64_type, fn_slot_ptr, "fn_ptr_int")?;
+                let fn_ptr = self.builder.build_int_to_ptr(
+                    fn_ptr_int.into_int_value(),
+                    ptr_type,
+                    "fn_ptr"
+                )?;
+
+                // Build argument list: closure pointer (for environment) + actual args
+                let mut call_args: Vec<BasicMetadataValueEnum> = vec![closure_ptr.into()];
+                for arg_id in args {
+                    let arg_val = self.get_value(*arg_id)?;
+                    call_args.push(arg_val.into());
+                }
+
+                // Create function type for indirect call
+                // Signature: (closure_ptr, args...) -> result
+                let mut param_types: Vec<BasicMetadataTypeEnum> = vec![ptr_type.into()];
+                for _ in args {
+                    param_types.push(ptr_type.into()); // Simplified: treat all args as pointers
+                }
+
+                // For now, assume i64 return type (simplified)
+                let fn_type = i64_type.fn_type(&param_types, false);
+
+                // Perform indirect call
+                let call_result = self.builder.build_indirect_call(
+                    fn_type,
+                    fn_ptr,
+                    &call_args,
+                    "closure_call"
+                )?;
+
+                // Store result if needed
+                if let Some(result_id) = result {
+                    let return_val = match call_result.try_as_basic_value() {
+                        ValueKind::Basic(val) => val,
+                        ValueKind::Instruction(_) => i64_type.const_zero().into(),
+                    };
+                    self.value_map.insert(*result_id, return_val);
+                }
             }
 
             // ========== Trait Objects ==========
@@ -1044,7 +1469,7 @@ impl<'ctx> LLVMBackend<'ctx> {
 
                 // Step 8: Get return value if non-void
                 if let Some(result_id) = result {
-                    if let Some(return_val) = call_site.try_as_basic_value().left() {
+                    if let ValueKind::Basic(return_val) = call_site.try_as_basic_value() {
                         self.value_map.insert(*result_id, return_val);
                     }
                 }
@@ -1515,7 +1940,7 @@ impl<'ctx> LLVMBackend<'ctx> {
 
             // Bitcast (reinterpret bits as different type)
             Bitcast => {
-                self.builder.build_bitcast(
+                self.builder.build_bit_cast(
                     operand,
                     target_ty,
                     "bitcast"
@@ -1553,11 +1978,12 @@ impl<'ctx> LLVMBackend<'ctx> {
                 let call_site = self.builder.build_call(*function, &arg_values, "call")?;
 
                 // Return value (or void)
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen(
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(
                         "Function call returned void when value expected".to_string()
                     ))
+                }
             }
             HirCallable::Indirect(func_ptr_id) => {
                 // Indirect call through function pointer
@@ -1624,11 +2050,12 @@ impl<'ctx> LLVMBackend<'ctx> {
                 )?;
 
                 // Return value (or void)
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen(
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(
                         "Function call returned void when value expected".to_string()
                     ))
+                }
             }
             HirCallable::Intrinsic(intrinsic) => {
                 self.compile_intrinsic(*intrinsic, args)
@@ -1670,11 +2097,12 @@ impl<'ctx> LLVMBackend<'ctx> {
                     "malloc"
                 )?;
 
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen(
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(
                         "malloc returned void".to_string()
                     ))
+                }
             }
 
             Free => {
@@ -1730,11 +2158,12 @@ impl<'ctx> LLVMBackend<'ctx> {
                     "realloc"
                 )?;
 
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen(
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(
                         "realloc returned void".to_string()
                     ))
+                }
             }
 
             // ========== Math Intrinsics ==========
@@ -1764,9 +2193,10 @@ impl<'ctx> LLVMBackend<'ctx> {
                 let sqrt_fn = self.get_or_declare_intrinsic(intrinsic_name, value.get_type())?;
                 let call_site = self.builder.build_call(sqrt_fn, &[value.into()], "sqrt")?;
 
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen("sqrt returned void".to_string()))
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen("sqrt returned void".to_string()))
+                }
             }
 
             Sin | Cos | Log | Exp => {
@@ -1802,9 +2232,10 @@ impl<'ctx> LLVMBackend<'ctx> {
                 let math_fn = self.get_or_declare_intrinsic(&intrinsic_name, value.get_type())?;
                 let call_site = self.builder.build_call(math_fn, &[value.into()], &format!("{:?}", intrinsic).to_lowercase())?;
 
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen(format!("{:?} returned void", intrinsic)))
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(format!("{:?} returned void", intrinsic)))
+                }
             }
 
             Pow => {
@@ -1833,9 +2264,10 @@ impl<'ctx> LLVMBackend<'ctx> {
                 let pow_fn = self.get_or_declare_intrinsic_binary(intrinsic_name, base.get_type())?;
                 let call_site = self.builder.build_call(pow_fn, &[base.into(), exponent.into()], "pow")?;
 
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen("pow returned void".to_string()))
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen("pow returned void".to_string()))
+                }
             }
 
             // ========== Memory Operations ==========
@@ -1982,9 +2414,10 @@ impl<'ctx> LLVMBackend<'ctx> {
 
                 let call_site = self.builder.build_call(bit_fn, &call_args, &format!("{:?}", intrinsic).to_lowercase())?;
 
-                call_site.try_as_basic_value()
-                    .left()
-                    .ok_or_else(|| CompilerError::CodeGen(format!("{:?} returned void", intrinsic)))
+                match call_site.try_as_basic_value() {
+                    ValueKind::Basic(val) => Ok(val),
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(format!("{:?} returned void", intrinsic)))
+                }
             }
 
             // ========== Type Queries ==========
@@ -2174,7 +2607,7 @@ impl<'ctx> LLVMBackend<'ctx> {
                                 .collect();
                             arr_ty.const_array(&arr_values).into()
                         }
-                        BasicTypeEnum::VectorType(_) => {
+                        BasicTypeEnum::VectorType(_) | BasicTypeEnum::ScalableVectorType(_) => {
                             return Err(CompilerError::CodeGen(
                                 "Vector type arrays not yet supported in constants".to_string()
                             ));

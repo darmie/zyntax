@@ -12,7 +12,8 @@
 //! - Enables hot-reloading via function versioning
 //! - Memory safe with explicit lifetime tracking
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use indexmap::IndexMap;
 use std::sync::Arc;
 use zyntax_typed_ast::{Type, TypeId, InternedString, Span};
 use uuid::Uuid;
@@ -98,9 +99,9 @@ impl HirId {
 pub struct HirModule {
     pub id: HirId,
     pub name: InternedString,
-    pub functions: HashMap<HirId, HirFunction>,
-    pub globals: HashMap<HirId, HirGlobal>,
-    pub types: HashMap<TypeId, HirType>,
+    pub functions: IndexMap<HirId, HirFunction>,
+    pub globals: IndexMap<HirId, HirGlobal>,
+    pub types: IndexMap<TypeId, HirType>,
     pub imports: Vec<HirImport>,
     pub exports: Vec<HirExport>,
     /// Metadata for hot-reloading support
@@ -115,10 +116,10 @@ pub struct HirFunction {
     pub name: InternedString,
     pub signature: HirFunctionSignature,
     pub entry_block: HirId,
-    pub blocks: HashMap<HirId, HirBlock>,
-    pub locals: HashMap<HirId, HirLocal>,
+    pub blocks: IndexMap<HirId, HirBlock>,
+    pub locals: IndexMap<HirId, HirLocal>,
     /// SSA values defined in this function
-    pub values: HashMap<HirId, HirValue>,
+    pub values: IndexMap<HirId, HirValue>,
     /// For hot-reloading: previous version of this function
     pub previous_version: Option<HirId>,
     pub is_external: bool,
@@ -494,8 +495,8 @@ pub enum HirTerminator {
 
 impl HirInstruction {
     /// Replace uses of old values with new values according to the replacement map
-    pub fn replace_uses(&mut self, replacements: &std::collections::HashMap<HirId, HirId>) {
-        fn replace(id: &mut HirId, map: &std::collections::HashMap<HirId, HirId>) {
+    pub fn replace_uses(&mut self, replacements: &IndexMap<HirId, HirId>) {
+        fn replace(id: &mut HirId, map: &IndexMap<HirId, HirId>) {
             if let Some(&new_id) = map.get(id) {
                 *id = new_id;
             }
@@ -616,8 +617,8 @@ impl HirInstruction {
 
 impl HirTerminator {
     /// Replace uses of old values with new values according to the replacement map
-    pub fn replace_uses(&mut self, replacements: &std::collections::HashMap<HirId, HirId>) {
-        fn replace(id: &mut HirId, map: &std::collections::HashMap<HirId, HirId>) {
+    pub fn replace_uses(&mut self, replacements: &IndexMap<HirId, HirId>) {
+        fn replace(id: &mut HirId, map: &IndexMap<HirId, HirId>) {
             if let Some(&new_id) = map.get(id) {
                 *id = new_id;
             }
@@ -1187,13 +1188,13 @@ pub enum TypeConstraint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BorrowCheckContext {
     /// Active borrows at each program point
-    pub active_borrows: HashMap<HirId, Vec<BorrowInfo>>,
+    pub active_borrows: IndexMap<HirId, Vec<BorrowInfo>>,
     /// Move information
-    pub moves: HashMap<HirId, MoveInfo>,
+    pub moves: IndexMap<HirId, MoveInfo>,
     /// Lifetime constraints
     pub lifetime_constraints: Vec<LifetimeConstraint>,
     /// Local variable lifetimes
-    pub local_lifetimes: HashMap<HirId, HirLifetime>,
+    pub local_lifetimes: IndexMap<HirId, HirLifetime>,
 }
 
 /// Information about an active borrow
@@ -1238,10 +1239,10 @@ pub enum OwnershipMode {
 impl BorrowCheckContext {
     pub fn new() -> Self {
         Self {
-            active_borrows: HashMap::new(),
-            moves: HashMap::new(),
+            active_borrows: IndexMap::new(),
+            moves: IndexMap::new(),
             lifetime_constraints: Vec::new(),
-            local_lifetimes: HashMap::new(),
+            local_lifetimes: IndexMap::new(),
         }
     }
     
@@ -1276,9 +1277,9 @@ impl HirModule {
         Self {
             id: HirId::new(),
             name,
-            functions: HashMap::new(),
-            globals: HashMap::new(),
-            types: HashMap::new(),
+            functions: IndexMap::new(),
+            globals: IndexMap::new(),
+            types: IndexMap::new(),
             imports: Vec::new(),
             exports: Vec::new(),
             version: 0,
@@ -1305,17 +1306,17 @@ impl HirModule {
 impl HirFunction {
     pub fn new(name: InternedString, signature: HirFunctionSignature) -> Self {
         let entry_block_id = HirId::new();
-        let mut blocks = HashMap::new();
+        let mut blocks = IndexMap::new();
         blocks.insert(entry_block_id, HirBlock::new(entry_block_id));
-        
+
         Self {
             id: HirId::new(),
             name,
             signature,
             entry_block: entry_block_id,
             blocks,
-            locals: HashMap::new(),
-            values: HashMap::new(),
+            locals: IndexMap::new(),
+            values: IndexMap::new(),
             previous_version: None,
             is_external: false,
             calling_convention: CallingConvention::Fast,

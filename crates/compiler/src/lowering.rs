@@ -216,11 +216,11 @@ pub struct LoweringContext {
 #[derive(Debug, Default)]
 pub struct SymbolTable {
     /// Functions by name
-    pub functions: std::collections::HashMap<InternedString, crate::hir::HirId>,
+    pub functions: indexmap::IndexMap<InternedString, crate::hir::HirId>,
     /// Globals by name
-    pub globals: std::collections::HashMap<InternedString, crate::hir::HirId>,
+    pub globals: indexmap::IndexMap<InternedString, crate::hir::HirId>,
     /// Types by name
-    pub types: std::collections::HashMap<InternedString, zyntax_typed_ast::TypeId>,
+    pub types: indexmap::IndexMap<InternedString, zyntax_typed_ast::TypeId>,
 }
 
 /// Import metadata for debugging and error messages

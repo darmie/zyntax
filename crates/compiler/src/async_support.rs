@@ -4,7 +4,8 @@
 //! async runtime integration for the HIR. This module provides the foundation
 //! for async/await syntax and coroutine-based programming models.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
+use indexmap::IndexMap;
 use crate::hir::*;
 use crate::{CompilerResult, CompilerError};
 use zyntax_typed_ast::InternedString;
@@ -17,7 +18,7 @@ pub struct AsyncStateMachine {
     /// Original async function
     pub original_function: HirId,
     /// States in the state machine
-    pub states: HashMap<AsyncStateId, AsyncState>,
+    pub states: IndexMap<AsyncStateId, AsyncState>,
     /// Initial state
     pub initial_state: AsyncStateId,
     /// Final/completion state
@@ -138,7 +139,7 @@ pub struct AsyncCompiler {
     /// State machine counter
     next_state_id: u32,
     /// Generated state machines
-    state_machines: HashMap<HirId, AsyncStateMachine>,
+    state_machines: IndexMap<HirId, AsyncStateMachine>,
     /// Async runtime configuration
     runtime: Option<AsyncRuntime>,
 }
@@ -147,7 +148,7 @@ impl AsyncCompiler {
     pub fn new() -> Self {
         Self {
             next_state_id: 0,
-            state_machines: HashMap::new(),
+            state_machines: IndexMap::new(),
             runtime: None,
         }
     }
@@ -170,7 +171,7 @@ impl AsyncCompiler {
         let mut state_machine = AsyncStateMachine {
             id: machine_id,
             original_function: func.id,
-            states: HashMap::new(),
+            states: IndexMap::new(),
             initial_state,
             final_state,
             captures: self.analyze_captures(func)?,
@@ -461,8 +462,8 @@ impl AsyncCompiler {
         arena: &mut zyntax_typed_ast::arena::AstArena,
     ) -> HirFunction {
         let entry_block_id = HirId::new();
-        let mut blocks = HashMap::new();
-        let mut values = HashMap::new();
+        let mut blocks = IndexMap::new();
+        let mut values = IndexMap::new();
         let mut instructions = Vec::new();
 
         // Create constant for state = 0
@@ -577,7 +578,7 @@ impl AsyncCompiler {
             },
             entry_block: entry_block_id,
             blocks,
-            locals: HashMap::new(),
+            locals: IndexMap::new(),
             values,
             previous_version: None,
             is_external: false,
@@ -750,7 +751,7 @@ mod tests {
         let state_machine = AsyncStateMachine {
             id: HirId::new(),
             original_function: HirId::new(),
-            states: HashMap::new(),
+            states: IndexMap::new(),
             initial_state: AsyncStateId(0),
             final_state: AsyncStateId(1),
             captures: vec![capture],
@@ -801,9 +802,9 @@ mod tests {
             name: intern_str(&mut arena, "test_async"),
             signature: sig,
             entry_block: HirId::new(),
-            blocks: HashMap::new(),
-            locals: HashMap::new(),
-            values: HashMap::new(),
+            blocks: IndexMap::new(),
+            locals: IndexMap::new(),
+            values: IndexMap::new(),
             previous_version: None,
             is_external: false,
             calling_convention: CallingConvention::C,
@@ -821,7 +822,7 @@ mod tests {
         let state_machine = AsyncStateMachine {
             id: HirId::new(),
             original_function: func_id,
-            states: HashMap::new(),
+            states: IndexMap::new(),
             initial_state: AsyncStateId(0),
             final_state: AsyncStateId(1),
             captures: vec![capture],
@@ -867,7 +868,7 @@ mod tests {
         let state_machine = AsyncStateMachine {
             id: HirId::new(),
             original_function: HirId::new(),
-            states: HashMap::new(),
+            states: IndexMap::new(),
             initial_state: AsyncStateId(0),
             final_state: AsyncStateId(1),
             captures: vec![], // No captures
@@ -929,9 +930,9 @@ mod tests {
             name: intern_str(&mut arena, "multi_param_async"),
             signature: sig,
             entry_block: HirId::new(),
-            blocks: HashMap::new(),
-            locals: HashMap::new(),
-            values: HashMap::new(),
+            blocks: IndexMap::new(),
+            locals: IndexMap::new(),
+            values: IndexMap::new(),
             previous_version: None,
             is_external: false,
             calling_convention: CallingConvention::C,
@@ -963,7 +964,7 @@ mod tests {
         let state_machine = AsyncStateMachine {
             id: HirId::new(),
             original_function: func_id,
-            states: HashMap::new(),
+            states: IndexMap::new(),
             initial_state: AsyncStateId(0),
             final_state: AsyncStateId(1),
             captures,

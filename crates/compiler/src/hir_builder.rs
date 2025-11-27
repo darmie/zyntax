@@ -47,7 +47,7 @@
 //! ```
 
 use crate::hir::*;
-use std::collections::HashMap;
+use indexmap::IndexMap;
 use zyntax_typed_ast::{AstArena, InternedString, TypeId, Span};
 
 /// Main builder for constructing HIR modules
@@ -115,9 +115,9 @@ impl<'arena> HirBuilder<'arena> {
             module: HirModule {
                 id: HirId::new(),
                 name,
-                functions: HashMap::new(),
-                globals: HashMap::new(),
-                types: HashMap::new(),
+                functions: IndexMap::new(),
+                globals: IndexMap::new(),
+                types: IndexMap::new(),
                 imports: Vec::new(),
                 exports: Vec::new(),
                 version: 0,

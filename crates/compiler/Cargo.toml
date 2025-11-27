@@ -17,7 +17,7 @@ crossbeam = { workspace = true }
 # Analysis and optimization
 petgraph = "0.6.4"  # Graph algorithms
 smallvec = "1.13.2"  # Optimized small vectors
-indexmap = "2.2.6"  # Ordered maps
+indexmap = { version = "2.2.6", features = ["serde"] }  # Ordered maps with serde support
 bit-set = "0.5.3"  # Bit sets for liveness analysis
 
 # Serialization for caching
@@ -47,7 +47,7 @@ cranelift-frontend = { version = "0.106", optional = true }
 cranelift-jit = { version = "0.106", optional = true }
 cranelift-module = { version = "0.106", optional = true }
 cranelift-native = { version = "0.106", optional = true }
-inkwell = { version = "0.4", features = ["llvm17-0"], optional = true }  # LLVM bindings
+inkwell = { version = "0.7.1", features = ["llvm21-1"], optional = true }  # LLVM bindings
 
 [dev-dependencies]
 env_logger = "0.11"

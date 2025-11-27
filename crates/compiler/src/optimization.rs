@@ -3,7 +3,8 @@
 //! Provides optimization passes that work on the HIR representation.
 //! These optimizations are shared between Cranelift and LLVM backends.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use indexmap::IndexMap;
 use crate::hir::{HirModule, HirFunction, HirBlock, HirId, HirInstruction};
 use crate::analysis::ModuleAnalysis;
 use crate::CompilerResult;
@@ -177,7 +178,7 @@ pub mod passes {
             )
         }
         
-        fn is_used(&self, inst: &HirInstruction, values: &HashMap<HirId, crate::hir::HirValue>) -> bool {
+        fn is_used(&self, inst: &HirInstruction, values: &IndexMap<HirId, crate::hir::HirValue>) -> bool {
             if let Some(result) = self.get_result(inst) {
                 if let Some(value) = values.get(&result) {
                     return !value.uses.is_empty();

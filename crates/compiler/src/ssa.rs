@@ -4,7 +4,8 @@
 //! Uses the efficient algorithm from "Simple and Efficient Construction of SSA Form"
 //! by Braun et al.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
+use indexmap::IndexMap;
 use std::sync::Arc;
 use zyntax_typed_ast::{InternedString, Type, ConstValue, typed_ast::{TypedNode, TypedExpression}};
 use petgraph::visit::EdgeRef; // For .source() method on edges
@@ -20,13 +21,13 @@ pub struct SsaBuilder {
     /// Current function being built
     function: HirFunction,
     /// Variable definitions per block
-    definitions: HashMap<HirId, HashMap<InternedString, HirId>>,
+    definitions: IndexMap<HirId, IndexMap<InternedString, HirId>>,
     /// Incomplete phi nodes to be filled
-    incomplete_phis: HashMap<(HirId, InternedString), HirId>,
+    incomplete_phis: IndexMap<(HirId, InternedString), HirId>,
     /// Variable counter for versioning
-    var_counter: HashMap<InternedString, u32>,
+    var_counter: IndexMap<InternedString, u32>,
     /// Type information for variables
-    var_types: HashMap<InternedString, HirType>,
+    var_types: IndexMap<InternedString, HirType>,
     /// Sealed blocks (all predecessors known)
     sealed_blocks: HashSet<HirId>,
     /// Filled blocks (all definitions complete)
@@ -38,11 +39,11 @@ pub struct SsaBuilder {
     /// Generated closure functions (collected during translation)
     closure_functions: Vec<HirFunction>,
     /// Function symbol table for resolving function references
-    function_symbols: HashMap<InternedString, HirId>,
+    function_symbols: IndexMap<InternedString, HirId>,
     /// Generated string globals (collected during translation)
     string_globals: Vec<crate::hir::HirGlobal>,
     /// Track which variables are written in each block (for loop phi placement)
-    variable_writes: HashMap<HirId, HashSet<InternedString>>,
+    variable_writes: IndexMap<HirId, HashSet<InternedString>>,
     /// Flag: after IDF placement, don't create new phis
     idf_placement_done: bool,
     /// Current match context (scrutinee and discriminant for pattern matching)
@@ -55,7 +56,7 @@ pub struct SsaBuilder {
     /// Variables that have their address taken (need stack allocation)
     address_taken_vars: HashSet<InternedString>,
     /// Stack slots for address-taken variables (var name -> alloca result)
-    stack_slots: HashMap<InternedString, HirId>,
+    stack_slots: IndexMap<InternedString, HirId>,
 }
 
 /// Context for pattern matching
@@ -74,9 +75,9 @@ struct MatchContext {
 pub struct SsaForm {
     pub function: HirFunction,
     /// Def-use chains for optimization
-    pub def_use_chains: HashMap<HirId, HashSet<HirId>>,
+    pub def_use_chains: IndexMap<HirId, HashSet<HirId>>,
     /// Use-def chains for analysis
-    pub use_def_chains: HashMap<HirId, HirId>,
+    pub use_def_chains: IndexMap<HirId, HirId>,
     /// Closure functions generated during translation
     pub closure_functions: Vec<HirFunction>,
     /// String globals generated during translation
@@ -97,9 +98,9 @@ pub struct PhiNode {
 #[derive(Debug, Clone)]
 struct DominanceInfo {
     /// Immediate dominator for each block
-    idom: HashMap<HirId, HirId>,
+    idom: IndexMap<HirId, HirId>,
     /// Dominance frontiers for each block
-    dom_frontier: HashMap<HirId, HashSet<HirId>>,
+    dom_frontier: IndexMap<HirId, HashSet<HirId>>,
     /// Reverse postorder traversal
     rpo: Vec<HirId>,
 }
@@ -117,7 +118,7 @@ impl DominanceInfo {
         rpo.reverse();
 
         // Step 2: Compute immediate dominators using Cooper-Harvey-Kennedy
-        let mut idom: HashMap<HirId, HirId> = HashMap::new();
+        let mut idom: IndexMap<HirId, HirId> = IndexMap::new();
         let entry_id = cfg.node_map[&cfg.entry];
         idom.insert(entry_id, entry_id); // Entry dominates itself
 
@@ -182,14 +183,14 @@ impl DominanceInfo {
 
     /// Find intersection of two dominators
     fn intersect(
-        idom: &HashMap<HirId, HirId>,
+        idom: &IndexMap<HirId, HirId>,
         mut b1: HirId,
         mut b2: HirId,
         rpo: &[petgraph::graph::NodeIndex],
         cfg: &crate::typed_cfg::TypedControlFlowGraph,
     ) -> HirId {
         // Get RPO indices for blocks
-        let rpo_map: HashMap<HirId, usize> = rpo.iter()
+        let rpo_map: IndexMap<HirId, usize> = rpo.iter()
             .enumerate()
             .map(|(i, &idx)| (cfg.graph[idx].id, i))
             .collect();
@@ -208,11 +209,11 @@ impl DominanceInfo {
     /// Compute dominance frontiers
     fn compute_frontiers(
         cfg: &crate::typed_cfg::TypedControlFlowGraph,
-        idom: &HashMap<HirId, HirId>,
-    ) -> HashMap<HirId, HashSet<HirId>> {
+        idom: &IndexMap<HirId, HirId>,
+    ) -> IndexMap<HirId, HashSet<HirId>> {
         use petgraph::Direction;
 
-        let mut frontiers: HashMap<HirId, HashSet<HirId>> = HashMap::new();
+        let mut frontiers: IndexMap<HirId, HashSet<HirId>> = IndexMap::new();
 
         for node_idx in cfg.graph.node_indices() {
             let block = &cfg.graph[node_idx];
@@ -264,14 +265,14 @@ impl SsaBuilder {
         function: HirFunction,
         type_registry: Arc<zyntax_typed_ast::TypeRegistry>,
         arena: Arc<std::sync::Mutex<zyntax_typed_ast::AstArena>>,
-        function_symbols: HashMap<InternedString, HirId>,
+        function_symbols: IndexMap<InternedString, HirId>,
     ) -> Self {
         Self {
             function,
-            definitions: HashMap::new(),
-            incomplete_phis: HashMap::new(),
-            var_counter: HashMap::new(),
-            var_types: HashMap::new(),
+            definitions: IndexMap::new(),
+            incomplete_phis: IndexMap::new(),
+            var_counter: IndexMap::new(),
+            var_types: IndexMap::new(),
             sealed_blocks: HashSet::new(),
             filled_blocks: HashSet::new(),
             type_registry,
@@ -279,13 +280,13 @@ impl SsaBuilder {
             closure_functions: Vec::new(),
             function_symbols,
             string_globals: Vec::new(),
-            variable_writes: HashMap::new(),
+            variable_writes: IndexMap::new(),
             idf_placement_done: false,
             match_context: None,
             continuation_block: None,
             original_return_type: None,
             address_taken_vars: HashSet::new(),
-            stack_slots: HashMap::new(),
+            stack_slots: IndexMap::new(),
         }
     }
 
@@ -300,7 +301,7 @@ impl SsaBuilder {
     pub fn build_from_cfg(mut self, cfg: &ControlFlowGraph) -> CompilerResult<SsaForm> {
         // Initialize blocks
         for (block_id, _) in &self.function.blocks {
-            self.definitions.insert(*block_id, HashMap::new());
+            self.definitions.insert(*block_id, IndexMap::new());
         }
 
         // Process blocks in dominance order
@@ -361,7 +362,7 @@ impl SsaBuilder {
 
         // Initialize definitions for all blocks
         for (block_id, _) in &self.function.blocks {
-            self.definitions.insert(*block_id, HashMap::new());
+            self.definitions.insert(*block_id, IndexMap::new());
         }
 
         // CRITICAL FIX: Initialize function parameters as HIR values in entry block
@@ -1578,9 +1579,9 @@ impl SsaBuilder {
                 self.function.blocks.insert(merge_block_id, HirBlock::new(merge_block_id));
 
                 // Initialize definitions for new blocks
-                self.definitions.insert(then_block_id, HashMap::new());
-                self.definitions.insert(else_block_id, HashMap::new());
-                self.definitions.insert(merge_block_id, HashMap::new());
+                self.definitions.insert(then_block_id, IndexMap::new());
+                self.definitions.insert(else_block_id, IndexMap::new());
+                self.definitions.insert(merge_block_id, IndexMap::new());
 
                 // Set conditional branch terminator for current block
                 self.function.blocks.get_mut(&block_id).unwrap().terminator = HirTerminator::CondBranch {
@@ -2272,10 +2273,10 @@ impl SsaBuilder {
 
     /// Scan CFG to find which blocks write which variables
     /// This is done by analyzing TypedCFG WITHOUT translating to HIR
-    fn scan_cfg_for_variable_writes(&self, cfg: &crate::typed_cfg::TypedControlFlowGraph) -> HashMap<HirId, HashSet<InternedString>> {
+    fn scan_cfg_for_variable_writes(&self, cfg: &crate::typed_cfg::TypedControlFlowGraph) -> IndexMap<HirId, HashSet<InternedString>> {
         use zyntax_typed_ast::typed_ast::{TypedExpression, TypedStatement, BinaryOp};
 
-        let mut writes: HashMap<HirId, HashSet<InternedString>> = HashMap::new();
+        let mut writes: IndexMap<HirId, HashSet<InternedString>> = IndexMap::new();
 
         for node_idx in cfg.graph.node_indices() {
             let typed_block = &cfg.graph[node_idx];
@@ -2407,7 +2408,7 @@ impl SsaBuilder {
 
         // Group variable writes by variable name
         // This creates a map: variable -> set of blocks that define it
-        let mut defs_per_var: HashMap<InternedString, HashSet<HirId>> = HashMap::new();
+        let mut defs_per_var: IndexMap<InternedString, HashSet<HirId>> = IndexMap::new();
 
         // Use scanned writes instead of self.variable_writes
         for (block_id, vars) in &scanned_writes {
@@ -2591,6 +2592,10 @@ impl SsaBuilder {
 
     /// Add an instruction to a block
     fn add_instruction(&mut self, block: HirId, inst: HirInstruction) {
+        log::debug!("[SSA] add_instruction: block={:?}, inst={:?}", block, std::mem::discriminant(&inst));
+        if let HirInstruction::Binary { result, op, .. } = &inst {
+            log::debug!("[SSA]   -> Binary op={:?}, result={:?}", op, result);
+        }
         self.function.blocks.get_mut(&block).unwrap().add_instruction(inst);
     }
     
@@ -2626,9 +2631,9 @@ impl SsaBuilder {
     }
     
     /// Build def-use and use-def chains
-    fn build_def_use_chains(&self) -> (HashMap<HirId, HashSet<HirId>>, HashMap<HirId, HirId>) {
-        let mut def_use = HashMap::new();
-        let mut use_def = HashMap::new();
+    fn build_def_use_chains(&self) -> (IndexMap<HirId, HashSet<HirId>>, IndexMap<HirId, HirId>) {
+        let mut def_use = IndexMap::new();
+        let mut use_def = IndexMap::new();
         
         // Process all values
         for (value_id, value) in &self.function.values {
@@ -3118,7 +3123,7 @@ impl SsaBuilder {
         // Create end block for all arms to converge
         let end_block_id = HirId::new();
         self.function.blocks.insert(end_block_id, HirBlock::new(end_block_id));
-        self.definitions.insert(end_block_id, HashMap::new());
+        self.definitions.insert(end_block_id, IndexMap::new());
 
         // Result phi node will collect values from each arm
         let result_hir_ty = self.convert_type(result_ty);
@@ -3132,17 +3137,17 @@ impl SsaBuilder {
             // Create block for testing this arm's pattern
             let test_block_id = HirId::new();
             self.function.blocks.insert(test_block_id, HirBlock::new(test_block_id));
-            self.definitions.insert(test_block_id, HashMap::new());
+            self.definitions.insert(test_block_id, IndexMap::new());
 
             // Create block for executing this arm's body
             let body_block_id = HirId::new();
             self.function.blocks.insert(body_block_id, HirBlock::new(body_block_id));
-            self.definitions.insert(body_block_id, HashMap::new());
+            self.definitions.insert(body_block_id, IndexMap::new());
 
             // Create block for next arm (or unreachable if last)
             let next_block_id = HirId::new();
             self.function.blocks.insert(next_block_id, HirBlock::new(next_block_id));
-            self.definitions.insert(next_block_id, HashMap::new());
+            self.definitions.insert(next_block_id, IndexMap::new());
 
             // Current block jumps to test block
             self.function.blocks.get_mut(&block_id).unwrap().terminator =
@@ -3296,12 +3301,12 @@ impl SsaBuilder {
         // Create error block for early return
         let err_block_id = HirId::new();
         self.function.blocks.insert(err_block_id, HirBlock::new(err_block_id));
-        self.definitions.insert(err_block_id, HashMap::new());
+        self.definitions.insert(err_block_id, IndexMap::new());
 
         // Create continue block for success path
         let continue_block_id = HirId::new();
         self.function.blocks.insert(continue_block_id, HirBlock::new(continue_block_id));
-        self.definitions.insert(continue_block_id, HashMap::new());
+        self.definitions.insert(continue_block_id, IndexMap::new());
 
         // Set up predecessors/successors
         {
@@ -4189,9 +4194,9 @@ impl SsaBuilder {
             name: lambda_name,
             signature,
             entry_block: entry_block_id,
-            blocks: HashMap::new(),
-            locals: HashMap::new(),
-            values: HashMap::new(),
+            blocks: IndexMap::new(),
+            locals: IndexMap::new(),
+            values: IndexMap::new(),
             previous_version: None,
             is_external: false,
             calling_convention: crate::hir::CallingConvention::Fast,
@@ -4211,7 +4216,7 @@ impl SsaBuilder {
 
         // Collect outer scope variables for capture support
         // Get all variables defined in the current block that can be captured
-        let outer_captures: HashMap<InternedString, HirId> = self.definitions
+        let outer_captures: IndexMap<InternedString, HirId> = self.definitions
             .get(&block_id)
             .cloned()
             .unwrap_or_default();
@@ -4282,7 +4287,7 @@ impl SsaBuilder {
         block: &mut crate::hir::HirBlock,
         param_values: &[(HirId, HirType)],
         lambda_params: &[zyntax_typed_ast::typed_ast::TypedLambdaParam],
-        outer_captures: &HashMap<InternedString, HirId>,
+        outer_captures: &IndexMap<InternedString, HirId>,
         expr: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
         result_ty: &HirType,
     ) -> CompilerResult<HirId> {
@@ -4519,7 +4524,7 @@ impl SsaForm {
     /// result with this single value.
     pub fn optimize_trivial_phis(&mut self) {
         // First pass: identify trivial phis and build replacement map
-        let mut replacements: HashMap<HirId, HirId> = HashMap::new();
+        let mut replacements: IndexMap<HirId, HirId> = IndexMap::new();
 
         // Collect all phi results to identify self-referential chains
         let all_phi_results: HashSet<HirId> = self.function.blocks.values()
