@@ -148,6 +148,34 @@ impl AsUuid for crate::hir::HirId {
     }
 }
 
+/// Serialize header to raw 44-byte format (matches deserialize_raw_header)
+fn serialize_raw_header(header: &BytecodeHeader) -> Vec<u8> {
+    const HEADER_SIZE: usize = 44;
+    let mut bytes = Vec::with_capacity(HEADER_SIZE);
+
+    // magic (u32 little-endian)
+    bytes.extend_from_slice(&header.magic.to_le_bytes());
+    // major_version (u16 little-endian)
+    bytes.extend_from_slice(&header.major_version.to_le_bytes());
+    // minor_version (u16 little-endian)
+    bytes.extend_from_slice(&header.minor_version.to_le_bytes());
+    // format (u8)
+    bytes.push(header.format);
+    // padding (3 bytes)
+    bytes.extend_from_slice(&[0u8; 3]);
+    // flags (u32 little-endian)
+    bytes.extend_from_slice(&header.flags.to_le_bytes());
+    // module_id (16 bytes UUID)
+    bytes.extend_from_slice(header.module_id.as_bytes());
+    // payload_size (u64 little-endian)
+    bytes.extend_from_slice(&header.payload_size.to_le_bytes());
+    // checksum (u32 little-endian)
+    bytes.extend_from_slice(&header.checksum.to_le_bytes());
+
+    debug_assert_eq!(bytes.len(), HEADER_SIZE);
+    bytes
+}
+
 /// Serialize a HIR module to bytecode
 pub fn serialize_module(module: &HirModule, format: Format) -> Result<Vec<u8>> {
     // Serialize the module payload
@@ -174,9 +202,8 @@ pub fn serialize_module(module: &HirModule, format: Format) -> Result<Vec<u8>> {
     header.payload_size = payload.len() as u64;
     header.checksum = checksum;
 
-    // Serialize header (always use bincode for header for consistency)
-    let header_bytes = bincode::serialize(&header)
-        .map_err(|e| BytecodeError::SerializationError(format!("Failed to serialize header: {}", e)))?;
+    // Serialize header using raw 44-byte format (matches deserialize_raw_header)
+    let header_bytes = serialize_raw_header(&header);
 
     // Combine header and payload
     let mut result = Vec::with_capacity(header_bytes.len() + payload.len());
@@ -221,6 +248,11 @@ fn deserialize_raw_header(bytes: &[u8]) -> Result<(BytecodeHeader, usize)> {
     let mut buf4 = [0u8; 4];
     cursor.read_exact(&mut buf4)?;
     let magic = u32::from_le_bytes(buf4);
+
+    // Early validation: if magic doesn't match, this isn't raw format
+    if magic != BytecodeHeader::MAGIC {
+        return Err(BytecodeError::InvalidFormat);
+    }
 
     // Read major_version (u16 little-endian)
     let mut buf2 = [0u8; 2];
@@ -274,22 +306,13 @@ fn deserialize_raw_header(bytes: &[u8]) -> Result<(BytecodeHeader, usize)> {
 
 /// Deserialize a HIR module from bytecode
 pub fn deserialize_module(bytes: &[u8]) -> Result<HirModule> {
-    if bytes.len() < 64 {
+    const HEADER_SIZE: usize = 44;
+    if bytes.len() < HEADER_SIZE {
         return Err(BytecodeError::InvalidFormat);
     }
 
-    // Try raw header first (for Haxe compatibility), then fall back to bincode
-    let (header, header_size) = match deserialize_raw_header(bytes) {
-        Ok(result) => result,
-        Err(_) => {
-            // Fall back to bincode header
-            let header: BytecodeHeader = bincode::deserialize(bytes)
-                .map_err(|e| BytecodeError::DeserializationError(format!("Failed to deserialize header: {}", e)))?;
-            let header_size = bincode::serialized_size(&header)
-                .map_err(|e| BytecodeError::DeserializationError(format!("Failed to get header size: {}", e)))? as usize;
-            (header, header_size)
-        }
-    };
+    // Use raw 44-byte header format (matches serialize_raw_header)
+    let (header, header_size) = deserialize_raw_header(bytes)?;
 
     // Validate header
     header.validate()?;
@@ -338,17 +361,15 @@ pub fn deserialize_module_from_file(path: &std::path::Path) -> Result<HirModule>
 
 /// Get bytecode statistics
 pub fn bytecode_stats(bytes: &[u8]) -> Result<BytecodeStats> {
-    if bytes.len() < 64 {
+    const HEADER_SIZE: usize = 44;
+    if bytes.len() < HEADER_SIZE {
         return Err(BytecodeError::InvalidFormat);
     }
 
-    let header: BytecodeHeader = bincode::deserialize(bytes)
-        .map_err(|e| BytecodeError::DeserializationError(format!("Failed to deserialize header: {}", e)))?;
+    // Use raw header format (matches serialize_raw_header)
+    let (header, header_size) = deserialize_raw_header(bytes)?;
 
     header.validate()?;
-
-    let header_size = bincode::serialized_size(&header)
-        .map_err(|e| BytecodeError::DeserializationError(format!("Failed to get header size: {}", e)))? as usize;
 
     Ok(BytecodeStats {
         total_size: bytes.len(),
@@ -390,7 +411,7 @@ impl std::fmt::Display for BytecodeStats {
 mod tests {
     use super::*;
     use crate::hir::*;
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
     use zyntax_typed_ast::InternedString;
 
     fn create_test_module() -> HirModule {
@@ -401,9 +422,9 @@ mod tests {
         HirModule {
             id: HirId::new(),
             name,
-            functions: HashMap::new(),
-            globals: HashMap::new(),
-            types: HashMap::new(),
+            functions: IndexMap::new(),
+            globals: IndexMap::new(),
+            types: IndexMap::new(),
             imports: Vec::new(),
             exports: Vec::new(),
             version: 1,

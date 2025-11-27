@@ -64,29 +64,40 @@ impl<'de> Deserialize<'de> for InternedString {
     where
         D: serde::Deserializer<'de>,
     {
-        use serde::de::Error;
+        // Use a visitor pattern to support all serde formats (postcard, bincode, JSON, etc.)
+        // We serialize as a string, so we deserialize as a string
+        struct InternedStringVisitor;
 
-        // Try to deserialize as either a string or a usize
-        let value = serde_json::Value::deserialize(deserializer)?;
+        impl<'de> serde::de::Visitor<'de> for InternedStringVisitor {
+            type Value = InternedString;
 
-        match value {
-            // If it's a number, treat it as an index (legacy format)
-            serde_json::Value::Number(n) => {
-                let index = n.as_u64()
-                    .ok_or_else(|| D::Error::custom("InternedString index must be a positive integer"))?
-                    as usize;
-                let symbol = Symbol::try_from_usize(index)
-                    .ok_or_else(|| D::Error::custom(format!("Invalid symbol index: {}", index)))?;
-                Ok(InternedString(symbol))
-            },
-            // If it's a string, intern it (new format for Reflaxe compatibility)
-            serde_json::Value::String(s) => {
-                // SAFETY: We use a global arena for deserialization
-                // This is a temporary solution - ideally we'd pass arena context through deserializer
-                Ok(InternedString::new_global(&s))
-            },
-            _ => Err(D::Error::custom("InternedString must be either a string or a number")),
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(InternedString::new_global(value))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(InternedString::new_global(&value))
+            }
+
+            fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(InternedString::new_global(value))
+            }
         }
+
+        deserializer.deserialize_str(InternedStringVisitor)
     }
 }
 
