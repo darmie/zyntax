@@ -120,9 +120,23 @@ fn_decl_no_params = { "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
       ]
   }
 
-fn_params = { fn_param ~ ("," ~ fn_param)* }
+fn_params = { fn_param_any ~ ("," ~ fn_param_any)* }
   -> List {
       "get_all_children": true
+  }
+
+// Match either comptime param or regular param
+fn_param_any = { comptime_param | fn_param }
+  -> TypedParameter {
+      "get_child": { "index": 0 }
+  }
+
+// Comptime parameter: comptime T: type
+comptime_param = { "comptime" ~ identifier ~ ":" ~ type_expr }
+  -> TypedParameter {
+      "commands": [
+          { "define": "type_param", "args": { "name": "$1", "type": "$2" } }
+      ]
   }
 
 // Children (non-silent): identifier, type_expr
@@ -227,7 +241,7 @@ array_type = { "[" ~ integer_literal? ~ "]" ~ type_expr }
       ]
   }
 
-primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" }
+primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" | "type" }
   -> Type {
       "get_text": true,
       "define": "primitive_type",
@@ -481,8 +495,22 @@ call_args = { expr ~ ("," ~ expr)* }
   }
 
 // Atom: the base of postfix expressions
-atom = { try_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr }
+atom = { try_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | type_value | identifier_expr | paren_expr }
   -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Type as a value (for comptime type parameters)
+type_value = { type_expr_as_value }
+  -> TypedExpression {
+      "commands": [
+          { "define": "type_value", "args": { "type": "$1" } }
+      ]
+  }
+
+// Types that can be used as values in expressions (for comptime)
+type_expr_as_value = { primitive_type }
+  -> Type {
       "get_child": { "index": 0 }
   }
 
@@ -569,6 +597,7 @@ escape_seq = { "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "0") }
 keyword = @{
     ("struct" | "enum" | "fn" | "const" | "var" | "if" | "else" | "while" | "for" |
      "return" | "break" | "continue" | "try" | "and" | "or" | "true" | "false" |
+     "comptime" | "type" |
      "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void")
     ~ !(ASCII_ALPHANUMERIC | "_")
 }
