@@ -4,6 +4,12 @@ package zyntax;
 
 import haxe.Json;
 import haxe.macro.Expr.Position;
+using Lambda;
+using StringTools;
+
+// Track runtime functions encountered during generation
+// Maps function name -> {params: [...], return_type: ...}
+private var runtimeFunctions: Map<String, {params: Array<AST.ZType>, returnType: AST.ZType}> = new Map();
 
 /**
  * Convert Haxe Position to span {start, end}
@@ -25,6 +31,9 @@ function posToSpan(pos: Position): Dynamic {
  * Generate Zyntax TypedAST JSON from Module
  */
 function generateModule(m: AST.Module): Null<String> {
+    // Reset runtime functions tracking for each module
+    runtimeFunctions = new Map();
+
     var declarations = [];
 
     for (func in m.functions) {
@@ -46,7 +55,7 @@ function generateModule(m: AST.Module): Null<String> {
                     visibility: "Public",
                     is_async: false,
                     is_external: func.is_external,
-                    calling_convention: func.is_external ? "C" : "Rust",
+                    calling_convention: func.is_external ? "Cdecl" : "Rust",
                     link_name: func.link_name
                 }
             },
@@ -54,6 +63,38 @@ function generateModule(m: AST.Module): Null<String> {
             span: posToSpan(func.pos)
         };
         declarations.push(funcDecl);
+    }
+
+    // Emit external declarations for all runtime functions encountered
+    for (funcName => funcInfo in runtimeFunctions) {
+        var params = funcInfo.params.mapi((i, p) -> {
+            name: "arg" + i,
+            ty: generateType(p),
+            mutability: "Immutable",
+            kind: "Regular",
+            default_value: null,
+            attributes: [],
+            span: {start: 0, end: 0}
+        });
+
+        var externDecl = {
+            node: {
+                Function: {
+                    name: funcName,
+                    params: params,
+                    return_type: generateType(funcInfo.returnType),
+                    body: null,  // External functions have no body
+                    visibility: "Public",
+                    is_async: false,
+                    is_external: true,
+                    calling_convention: "Cdecl",
+                    link_name: funcName  // Use the $ prefixed name as link name
+                }
+            },
+            ty: {Primitive: "Unit"},
+            span: {start: 0, end: 0}
+        };
+        declarations.push(externDecl);
     }
 
     var program = {
@@ -280,6 +321,19 @@ function generateExpression(exprWithPos: AST.ExprWithPos): Dynamic {
             };
 
         case Call(callee, args):
+            // Track runtime functions (those starting with $)
+            switch(callee.expr) {
+                case Variable(name) if (StringTools.startsWith(name, "$")):
+                    // Extract function type from callee
+                    switch(callee.ty) {
+                        case Function(paramTypes, returnType):
+                            if (!runtimeFunctions.exists(name)) {
+                                runtimeFunctions.set(name, {params: paramTypes, returnType: returnType});
+                            }
+                        default:
+                    }
+                default:
+            }
             {
                 node: {
                     Call: {

@@ -71,6 +71,9 @@ pub struct LLVMBackend<'ctx> {
 
     /// Current function being compiled (for accessing locals, blocks, etc.)
     current_function: Option<FunctionValue<'ctx>>,
+
+    /// Maps HIR global IDs to compiled LLVM global values (persists across functions)
+    globals_map: IndexMap<HirId, BasicValueEnum<'ctx>>,
 }
 
 impl<'ctx> LLVMBackend<'ctx> {
@@ -93,6 +96,7 @@ impl<'ctx> LLVMBackend<'ctx> {
             block_map: IndexMap::new(),
             phi_map: IndexMap::new(),
             current_function: None,
+            globals_map: IndexMap::new(),
         }
     }
 
@@ -259,6 +263,20 @@ impl<'ctx> LLVMBackend<'ctx> {
                     let undef_value = llvm_type.const_zero(); // or use undef if available
                     self.value_map.insert(*value_id, undef_value);
                 }
+                HirValueKind::Undef => {
+                    // Map undef values to zero constants (for IDF-based SSA)
+                    // This handles void-returning function calls where SSA creates undef placeholders
+                    let llvm_type = self.translate_type(&value.ty)?;
+                    let undef_value = llvm_type.const_zero();
+                    self.value_map.insert(*value_id, undef_value);
+                }
+                HirValueKind::Global(global_id) => {
+                    // Map global references to their LLVM global values
+                    // The global should have been compiled in phase 1
+                    if let Some(&global_value) = self.globals_map.get(global_id) {
+                        self.value_map.insert(*value_id, global_value);
+                    }
+                }
                 _ => {}
             }
         }
@@ -325,11 +343,47 @@ impl<'ctx> LLVMBackend<'ctx> {
     /// This creates LLVM global variables with appropriate linkage and initializers.
     /// For vtables, the initializer contains an array of function pointers.
     fn compile_global(&mut self, id: HirId, global: &HirGlobal) -> CompilerResult<()> {
-        // Translate the global's type to LLVM type
-        let llvm_ty = self.translate_type(&global.ty)?;
-
         // Create unique name for the global
         let global_name = format!("global__{:?}", id);
+
+        // Handle string constants specially - emit in Haxe String format: [length: i32][utf8_bytes...]
+        // This matches the Cranelift backend format so runtime functions work correctly
+        if let Some(HirConstant::String(s)) = &global.initializer {
+            let actual_string = s.resolve_global().unwrap_or_else(|| {
+                log::warn!("Could not resolve InternedString for global, using empty string");
+                std::string::String::new()
+            });
+
+            // Get UTF-8 bytes
+            let bytes = actual_string.as_bytes();
+            let length = bytes.len() as i32;
+
+            // Create Haxe String structure: [length: i32][utf8_bytes...]
+            // The struct is { i32, [N x i8] }
+            let i32_type = self.context.i32_type();
+            let byte_array_type = self.context.i8_type().array_type(bytes.len() as u32);
+            let haxe_string_type = self.context.struct_type(&[i32_type.into(), byte_array_type.into()], false);
+
+            // Create the length constant
+            let length_const = i32_type.const_int(length as u64, false);
+
+            // Create the byte array constant (no null terminator needed)
+            let byte_const = self.context.const_string(bytes, false);
+
+            // Create the struct constant
+            let haxe_string_const = haxe_string_type.const_named_struct(&[length_const.into(), byte_const.into()]);
+
+            let global_value = self.module.add_global(haxe_string_type, Some(AddressSpace::default()), &global_name);
+            global_value.set_linkage(inkwell::module::Linkage::External);
+            global_value.set_initializer(&haxe_string_const);
+
+            // Store the pointer to the global (address of the Haxe string struct)
+            self.globals_map.insert(id, global_value.as_pointer_value().into());
+            return Ok(());
+        }
+
+        // Translate the global's type to LLVM type
+        let llvm_ty = self.translate_type(&global.ty)?;
 
         // Add global variable to module
         let global_value = self.module.add_global(llvm_ty, Some(AddressSpace::default()), &global_name);
@@ -376,8 +430,8 @@ impl<'ctx> LLVMBackend<'ctx> {
             global_value.set_initializer(&llvm_ty.const_zero());
         }
 
-        // Store the global in value_map so it can be referenced
-        self.value_map.insert(id, global_value.as_pointer_value().into());
+        // Store the global in globals_map so it can be referenced across functions
+        self.globals_map.insert(id, global_value.as_pointer_value().into());
 
         Ok(())
     }
@@ -547,7 +601,32 @@ impl<'ctx> LLVMBackend<'ctx> {
             }
 
             HirTerminator::Unreachable => {
-                self.builder.build_unreachable()?;
+                // For void-returning functions, emit a return instead of unreachable/trap
+                // This handles Haxe/other languages where main() returns Void and has no explicit return
+                if let Some(func) = self.current_function {
+                    let return_type = func.get_type().get_return_type();
+                    if return_type.is_none() {
+                        // Void function - emit return
+                        self.builder.build_return(None)?;
+                    } else if let Some(ty) = return_type {
+                        // Check if it's an empty struct (our representation of Unit/Void type)
+                        if let inkwell::types::BasicTypeEnum::StructType(st) = ty {
+                            if st.count_fields() == 0 {
+                                // Empty struct (Unit) - emit return with undef value
+                                let ret_val = st.get_undef();
+                                self.builder.build_return(Some(&ret_val))?;
+                            } else {
+                                self.builder.build_unreachable()?;
+                            }
+                        } else {
+                            self.builder.build_unreachable()?;
+                        }
+                    } else {
+                        self.builder.build_unreachable()?;
+                    }
+                } else {
+                    self.builder.build_unreachable()?;
+                }
             }
 
             HirTerminator::PatternMatch { value, patterns, default } => {
@@ -2725,7 +2804,12 @@ impl<'ctx> LLVMBackend<'ctx> {
 
             // String constant
             String(s) => {
-                let string_value = self.context.const_string(s.to_string().as_bytes(), true);
+                // Resolve the InternedString to get the actual string value
+                let actual_string = s.resolve_global().unwrap_or_else(|| {
+                    log::warn!("Could not resolve InternedString, using empty string");
+                    std::string::String::new()
+                });
+                let string_value = self.context.const_string(actual_string.as_bytes(), true);
                 string_value.into()
             }
 
