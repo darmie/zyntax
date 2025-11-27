@@ -561,7 +561,7 @@ switch_or_pattern = { switch_primary_pattern ~ ("|" ~ switch_primary_pattern)* }
   }
 
 // Primary patterns (non-or)
-switch_primary_pattern = { switch_range_pattern | switch_array_pattern | switch_literal_pattern | switch_wildcard_pattern | switch_identifier_pattern }
+switch_primary_pattern = { switch_struct_pattern | switch_tagged_union_pattern | switch_error_pattern | switch_pointer_pattern | switch_range_pattern | switch_array_pattern | switch_literal_pattern | switch_wildcard_pattern | switch_identifier_pattern }
   -> TypedExpression {
       "get_child": { "index": 0 }
   }
@@ -617,6 +617,67 @@ switch_identifier_pattern = { identifier }
   -> TypedExpression {
       "commands": [
           { "define": "identifier_pattern", "args": { "name": { "text": "$1" } } }
+      ]
+  }
+
+// Struct pattern: Point{ .x, .y } or Point{ .x = px, .y = py }
+switch_struct_pattern = { identifier ~ "{" ~ switch_struct_field_patterns? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "struct_pattern", "args": {
+              "name": { "text": "$1" },
+              "fields": "$2"
+          }}
+      ]
+  }
+
+switch_struct_field_patterns = { switch_struct_field_pattern ~ ("," ~ switch_struct_field_pattern)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+// Struct field pattern: .x or .x = pattern
+switch_struct_field_pattern = { "." ~ identifier ~ ("=" ~ switch_pattern)? }
+  -> TypedExpression {
+      "commands": [
+          { "define": "field_pattern", "args": {
+              "name": { "text": "$1" },
+              "pattern": "$2"
+          }}
+      ]
+  }
+
+// Tagged union pattern: .some, .none, .value
+// In Zig, tagged unions are matched with .variant or .variant => |capture|
+switch_tagged_union_pattern = { "." ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "enum_pattern", "args": {
+              "name": "",
+              "variant": { "text": "$1" },
+              "fields": []
+          }}
+      ]
+  }
+
+// Error pattern: error.OutOfMemory
+switch_error_pattern = { "error" ~ "." ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "error_pattern", "args": {
+              "name": { "text": "$1" }
+          }}
+      ]
+  }
+
+// Pointer pattern: *x (dereference pattern)
+switch_pointer_pattern = { "*" ~ switch_primary_pattern }
+  -> TypedExpression {
+      "commands": [
+          { "define": "pointer_pattern", "args": {
+              "inner": "$1",
+              "mutable": false
+          }}
       ]
   }
 

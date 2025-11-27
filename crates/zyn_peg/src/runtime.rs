@@ -384,6 +384,15 @@ pub trait AstHostFunctions {
     /// Create an or pattern: x | y | z
     fn create_or_pattern(&mut self, patterns: Vec<NodeHandle>) -> NodeHandle;
 
+    /// Create a pointer/reference pattern: *x, &x
+    fn create_pointer_pattern(&mut self, inner: NodeHandle, mutable: bool) -> NodeHandle;
+
+    /// Create a slice pattern: arr[0..5]
+    fn create_slice_pattern(&mut self, prefix: Vec<NodeHandle>, middle: Option<NodeHandle>, suffix: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create an error pattern: error.X (Zig-style)
+    fn create_error_pattern(&mut self, error_name: &str) -> NodeHandle;
+
     // ========== Types ==========
 
     /// Create a primitive type (i32, i64, f32, f64, bool, etc.)
@@ -2089,6 +2098,99 @@ impl AstHostFunctions for TypedAstBuilder {
 
         self.store_pattern(pattern)
     }
+
+    fn create_pointer_pattern(&mut self, inner: NodeHandle, mutable: bool) -> NodeHandle {
+        let span = self.default_span();
+
+        // Get the inner pattern
+        let inner_pattern = self.get_pattern(inner)
+            .unwrap_or_else(|| {
+                TypedNode {
+                    node: TypedPattern::Wildcard,
+                    ty: Type::Primitive(PrimitiveType::I32),
+                    span,
+                }
+            });
+
+        let mutability = if mutable { Mutability::Mutable } else { Mutability::Immutable };
+        let inner_ty = inner_pattern.ty.clone();
+
+        // Create a Reference pattern (Zig uses * for pointers, Rust uses &)
+        let pattern = TypedNode {
+            node: TypedPattern::Reference {
+                pattern: Box::new(inner_pattern),
+                mutability,
+            },
+            ty: Type::Reference {
+                ty: Box::new(inner_ty),
+                mutability,
+                lifetime: None,
+                nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+            },
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_slice_pattern(&mut self, prefix: Vec<NodeHandle>, middle: Option<NodeHandle>, suffix: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect prefix patterns
+        let prefix_patterns: Vec<TypedNode<TypedPattern>> = prefix.iter()
+            .filter_map(|h| self.get_pattern(*h))
+            .collect();
+
+        // Get middle (rest) pattern if provided
+        let middle_pattern = middle.and_then(|h| self.get_pattern(h));
+
+        // Collect suffix patterns
+        let suffix_patterns: Vec<TypedNode<TypedPattern>> = suffix.iter()
+            .filter_map(|h| self.get_pattern(*h))
+            .collect();
+
+        // Determine element type from first available pattern
+        let elem_ty = prefix_patterns.first()
+            .or(middle_pattern.as_ref())
+            .or(suffix_patterns.first())
+            .map(|p| p.ty.clone())
+            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+
+        let pattern = TypedNode {
+            node: TypedPattern::Slice {
+                prefix: prefix_patterns,
+                middle: middle_pattern.map(Box::new),
+                suffix: suffix_patterns,
+            },
+            // Use Array type for slices (similar to how Zig handles slices)
+            ty: Type::Array {
+                element_type: Box::new(elem_ty),
+                size: None, // dynamic size for slices
+                nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+            },
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_error_pattern(&mut self, error_name: &str) -> NodeHandle {
+        let span = self.default_span();
+        let name = InternedString::new_global(error_name);
+
+        // Error patterns in Zig are like enum variant patterns
+        // error.OutOfMemory is essentially an enum variant
+        let pattern = TypedNode {
+            node: TypedPattern::Path {
+                path: vec![InternedString::new_global("error"), name],
+                args: None,
+            },
+            ty: Type::Error,
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
 }
 
 // ============================================================================
@@ -3337,6 +3439,59 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => vec![],
                 };
                 let handle = self.host.create_or_pattern(patterns);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "pointer_pattern" | "reference_pattern" => {
+                let inner = match args.get("inner").or(args.get("pattern")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_wildcard_pattern(),
+                };
+                let mutable = match args.get("mutable") {
+                    Some(RuntimeValue::Bool(b)) => *b,
+                    _ => false,
+                };
+                let handle = self.host.create_pointer_pattern(inner, mutable);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "slice_pattern" => {
+                let prefix: Vec<NodeHandle> = match args.get("prefix") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let middle = match args.get("middle").or(args.get("rest")) {
+                    Some(RuntimeValue::Node(h)) => Some(*h),
+                    _ => None,
+                };
+                let suffix: Vec<NodeHandle> = match args.get("suffix") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_slice_pattern(prefix, middle, suffix);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "error_pattern" => {
+                let name = match args.get("name").or(args.get("error_name")) {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "Error".to_string(),
+                };
+                let handle = self.host.create_error_pattern(&name);
                 Ok(RuntimeValue::Node(handle))
             }
 
