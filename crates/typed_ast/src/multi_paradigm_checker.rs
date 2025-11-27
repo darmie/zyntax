@@ -407,8 +407,10 @@ impl TypeChecker {
             | TypedDeclaration::Interface(_)
             | TypedDeclaration::Enum(_)
             | TypedDeclaration::Module(_)
-            | TypedDeclaration::Import(_) => {
+            | TypedDeclaration::Import(_)
+            | TypedDeclaration::Extern(_) => {
                 // Type declarations are handled by the registry
+                // Extern declarations are resolved to runtime symbols
                 Ok(())
             }
         }

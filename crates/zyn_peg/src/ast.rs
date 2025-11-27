@@ -1,7 +1,7 @@
 //! AST types for parsed .zyn grammar files
 
 use pest::iterators::Pair;
-use crate::{Rule, ZynGrammar, LanguageInfo, Imports, ContextVar, TypeHelpers, RuleDef, RuleModifier, ActionBlock, ActionField};
+use crate::{Rule, ZynGrammar, LanguageInfo, Imports, ContextVar, TypeHelpers, BuiltinMappings, RuleDef, RuleModifier, ActionBlock, ActionField};
 
 /// Build a ZynGrammar from parsed pest pairs
 pub fn build_grammar(pairs: pest::iterators::Pairs<Rule>) -> Result<ZynGrammar, String> {
@@ -38,6 +38,7 @@ fn process_top_level(grammar: &mut ZynGrammar, pair: Pair<Rule>) -> Result<(), S
         Rule::imports_directive => grammar.imports = build_imports(pair)?,
         Rule::context_directive => grammar.context = build_context(pair)?,
         Rule::type_helpers_directive => grammar.type_helpers = build_type_helpers(pair)?,
+        Rule::builtin_directive => grammar.builtins = build_builtins(pair)?,
         Rule::EOI => {}
         _ => {}
     }
@@ -51,6 +52,7 @@ fn process_directive(grammar: &mut ZynGrammar, pair: Pair<Rule>) -> Result<(), S
             Rule::imports_directive => grammar.imports = build_imports(inner)?,
             Rule::context_directive => grammar.context = build_context(inner)?,
             Rule::type_helpers_directive => grammar.type_helpers = build_type_helpers(inner)?,
+            Rule::builtin_directive => grammar.builtins = build_builtins(inner)?,
             Rule::error_messages_directive => {
                 // TODO: Parse error messages
             }
@@ -154,6 +156,27 @@ fn build_type_helpers(pair: Pair<Rule>) -> Result<TypeHelpers, String> {
     }
 
     Ok(helpers)
+}
+
+/// Parse @builtin { name: "symbol", ... } directive
+fn build_builtins(pair: Pair<Rule>) -> Result<BuiltinMappings, String> {
+    let mut builtins = BuiltinMappings::default();
+
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::builtin_def {
+            // Parse: identifier : string_literal
+            let mut parts = inner.into_inner();
+            if let Some(name_pair) = parts.next() {
+                let name = name_pair.as_str().to_string();
+                if let Some(symbol_pair) = parts.next() {
+                    let symbol = extract_string_value(&symbol_pair);
+                    builtins.functions.insert(name, symbol);
+                }
+            }
+        }
+    }
+
+    Ok(builtins)
 }
 
 fn build_rule_def(pair: Pair<Rule>) -> Result<RuleDef, String> {

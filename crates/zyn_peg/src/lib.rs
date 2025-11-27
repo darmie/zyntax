@@ -77,6 +77,14 @@ pub struct TypeHelpers {
     pub code: String,
 }
 
+/// Built-in function mapping from @builtin directive
+#[derive(Debug, Clone, Default)]
+pub struct BuiltinMappings {
+    /// Map of function name -> runtime symbol name
+    /// e.g., "trace" -> "$haxe$trace$int"
+    pub functions: std::collections::HashMap<String, String>,
+}
+
 /// A parsed .zyn grammar file
 #[derive(Debug, Clone, Default)]
 pub struct ZynGrammar {
@@ -84,6 +92,8 @@ pub struct ZynGrammar {
     pub imports: Imports,
     pub context: Vec<ContextVar>,
     pub type_helpers: TypeHelpers,
+    /// Built-in function mappings from @builtin directive
+    pub builtins: BuiltinMappings,
     pub rules: Vec<RuleDef>,
 }
 

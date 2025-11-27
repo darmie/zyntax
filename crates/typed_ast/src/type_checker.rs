@@ -665,6 +665,10 @@ impl TypeChecker {
                     .emit()
                     .ok();
             }
+            TypedDeclaration::Extern(_) => {
+                // Extern declarations are validated at the grammar level,
+                // their methods are resolved to runtime symbols
+            }
         }
     }
 

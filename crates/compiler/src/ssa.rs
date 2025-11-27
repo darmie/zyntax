@@ -1412,23 +1412,28 @@ impl SsaBuilder {
                 let callee = &call.callee;
                 let args = &call.positional_args;
 
-                // Check for enum constructors (Some, Ok, Err)
-                if let TypedExpression::Variable(func_name) = &callee.node {
-                    let name_str = {
+                // Check if callee is a function name (direct call) vs expression (indirect call)
+                let (hir_callable, indirect_callee_val) = if let TypedExpression::Variable(func_name) = &callee.node {
+                    // Resolve the function name string using global interner
+                    // (InternedString.resolve_global() returns the actual string value)
+                    let name_str = func_name.resolve_global().unwrap_or_else(|| {
+                        // Fallback to local arena if global resolution fails
                         let arena = self.arena.lock().unwrap();
                         arena.resolve_string(*func_name).map(|s| s.to_string()).unwrap_or_default()
-                    };
+                    });
 
+                    // Check for enum constructors (Some, Ok, Err)
                     if name_str == "Some" || name_str == "Ok" || name_str == "Err" {
                         return self.translate_enum_constructor(block_id, &name_str, args, &expr.ty);
                     }
-                }
 
-                // Check if callee is a function name (direct call) vs expression (indirect call)
-                let (hir_callable, indirect_callee_val) = if let TypedExpression::Variable(func_name) = &callee.node {
-                    // Check if this variable is a function in the symbol table
-                    if let Some(&func_id) = self.function_symbols.get(func_name) {
-                        // Direct function call
+                    // Check if this is an external runtime symbol (e.g., "$haxe$trace$int")
+                    // External symbols start with '$' and are resolved at link time
+                    if name_str.starts_with('$') {
+                        log::debug!("[SSA] Detected external symbol call: {}", name_str);
+                        (crate::hir::HirCallable::Symbol(name_str), None)
+                    } else if let Some(&func_id) = self.function_symbols.get(func_name) {
+                        // Direct function call to known function
                         (crate::hir::HirCallable::Function(func_id), None)
                     } else {
                         // Variable lookup (function pointer)
@@ -4242,6 +4247,7 @@ impl SsaBuilder {
             is_external: false,
             calling_convention: crate::hir::CallingConvention::Fast,
             attributes: crate::hir::FunctionAttributes::default(),
+            link_name: None,
         };
 
         // Add parameter values to function

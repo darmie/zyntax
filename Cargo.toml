@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/typed_ast", "crates/compiler", "crates/whirlwind_adapter", "crates/zyntax_cli", "crates/runtime", "crates/zyntax_plugin_macros", "crates/zyn_peg"]
+members = ["crates/typed_ast", "crates/compiler", "crates/whirlwind_adapter", "crates/zyntax_cli", "crates/runtime", "crates/zyntax_plugin_macros", "crates/zyn_peg", "crates/haxe_zyntax_runtime"]
 
 
 [workspace.dependencies]

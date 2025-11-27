@@ -5,7 +5,9 @@ pub mod llvm_aot;
 
 use std::path::PathBuf;
 use zyntax_compiler::hir::HirModule;
+use zyntax_compiler::zpack::ZPack;
 use zyntax_typed_ast::{ModuleArchitecture, EntryPointResolver};
+use log::info;
 
 pub use cranelift_jit::compile_jit;
 pub use llvm_aot::{compile_llvm, compile_and_run_llvm};
@@ -36,6 +38,8 @@ impl Backend {
 /// - `entry_point`: Custom entry point (e.g., "main", "MyClass.run", "com.example.Main.start")
 ///   Falls back to "main" if not specified.
 /// - `resolver_arch`: Module architecture for entry point resolution
+/// - `packs`: Loaded ZPack archives containing runtime symbols (JIT mode only)
+/// - `static_libs`: Static libraries to link (AOT mode only - users provide these directly)
 pub fn compile(
     module: HirModule,
     backend: Backend,
@@ -44,6 +48,8 @@ pub fn compile(
     jit: bool,
     entry_point: Option<String>,
     resolver_arch: &ModuleArchitecture,
+    packs: &[ZPack],
+    static_libs: &[PathBuf],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create entry point resolver based on module architecture
@@ -51,16 +57,30 @@ pub fn compile(
     let entry = entry_point.as_deref().unwrap_or(entry_resolver.default_entry());
     let candidates = entry_resolver.resolve_candidates(entry);
 
+    // Collect runtime symbols from all packs (for JIT mode)
+    let mut pack_symbols: Vec<(&'static str, *const u8)> = Vec::new();
+    for pack in packs.iter() {
+        pack_symbols.extend(pack.runtime_symbols());
+    }
+
+    if verbose && !pack_symbols.is_empty() {
+        info!("Loaded {} symbols from zpacks", pack_symbols.len());
+    }
+
     match (backend, jit) {
-        // JIT execution
-        (Backend::Cranelift, true) => compile_jit(module, opt_level, true, &candidates, verbose),
+        // JIT execution - uses dynamic runtime symbols from ZPack
+        (Backend::Cranelift, true) => compile_jit(module, opt_level, true, &candidates, &pack_symbols, verbose),
         (Backend::Llvm, true) => {
-            compile_and_run_llvm(module, opt_level, Some(entry), verbose)?;
+            compile_and_run_llvm(module, opt_level, Some(entry), &pack_symbols, verbose)?;
             Ok(())
         }
-        // AOT compilation
-        (Backend::Cranelift, false) => compile_jit(module, opt_level, false, &candidates, verbose),
-        (Backend::Llvm, false) => compile_llvm(module, output, opt_level, Some(entry), verbose),
+        // AOT compilation - users link static libraries directly
+        (Backend::Cranelift, false) => compile_jit(module, opt_level, false, &candidates, &pack_symbols, verbose),
+        (Backend::Llvm, false) => {
+            // Static libraries are provided directly by the user via --lib flag
+            // ZPack is for JIT only - AOT users link their runtime libraries directly
+            compile_llvm(module, output, opt_level, Some(entry), &pack_symbols, static_libs, verbose)
+        }
     }
 }
 
@@ -74,6 +94,6 @@ pub fn compile_and_run_repl(
     // REPL uses default entry point
     match backend {
         Backend::Cranelift => cranelift_jit::compile_and_run_repl(module, opt_level, verbose),
-        Backend::Llvm => compile_and_run_llvm(module, opt_level, None, verbose),
+        Backend::Llvm => compile_and_run_llvm(module, opt_level, None, &[], verbose),
     }
 }

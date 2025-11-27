@@ -584,6 +584,7 @@ impl AsyncCompiler {
             is_external: false,
             calling_convention: CallingConvention::C,
             attributes: FunctionAttributes::default(),
+            link_name: None,
         }
     }
 }
@@ -809,6 +810,7 @@ mod tests {
             is_external: false,
             calling_convention: CallingConvention::C,
             attributes: FunctionAttributes::default(),
+            link_name: None,
         };
 
         // Create state machine
@@ -937,6 +939,7 @@ mod tests {
             is_external: false,
             calling_convention: CallingConvention::C,
             attributes: FunctionAttributes::default(),
+            link_name: None,
         };
 
         // Create captures for all 3 parameters

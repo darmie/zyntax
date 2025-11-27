@@ -574,6 +574,20 @@ impl<'arena> HirBuilder<'arena> {
         result
     }
 
+    /// Calls an external symbol by name (e.g., "$haxe$trace$int")
+    pub fn call_symbol(&mut self, symbol: &str, args: Vec<HirId>) -> Option<HirId> {
+        let result = Some(HirId::new());
+        self.emit(HirInstruction::Call {
+            result,
+            callee: HirCallable::Symbol(symbol.to_string()),
+            args,
+            type_args: Vec::new(),
+            const_args: Vec::new(),
+            is_tail: false,
+        });
+        result
+    }
+
     /// Panics with the abort intrinsic
     pub fn panic(&mut self) {
         self.call_intrinsic(Intrinsic::Panic, Vec::new());

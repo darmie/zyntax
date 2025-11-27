@@ -99,3 +99,4 @@ pub extern "C" fn println_i32(value: i32) {
     print_i32(value);
     print_newline();
 }
+

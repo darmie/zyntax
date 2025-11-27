@@ -1,6 +1,10 @@
 //! Cranelift JIT backend compilation
+//!
+//! The Cranelift backend is frontend-agnostic. Runtime symbols are loaded
+//! exclusively from ZPack archives, not compiled into the CLI.
 
 use colored::Colorize;
+use log::info;
 use zyntax_compiler::cranelift_backend::CraneliftBackend;
 use zyntax_compiler::hir::HirModule;
 
@@ -8,33 +12,26 @@ use zyntax_compiler::hir::HirModule;
 ///
 /// - `entry_candidates`: Pre-resolved entry point candidates from EntryPointResolver
 ///   These are in order of preference (most likely first).
+/// - `pack_symbols`: Runtime symbols from loaded ZPack archives
 pub fn compile_jit(
     module: HirModule,
     _opt_level: u8,
     run: bool,
     entry_candidates: &[String],
+    pack_symbols: &[(&'static str, *const u8)],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Create plugin registry and register all available runtime plugins
-    let mut registry = zyntax_compiler::plugin::PluginRegistry::new();
+    // Runtime symbols come exclusively from ZPack archives
+    // This keeps the compiler frontend-agnostic
+    let runtime_symbols: Vec<(&'static str, *const u8)> = pack_symbols.to_vec();
 
-    // Register standard library plugin (generic I/O functions)
-    registry.register(zyntax_runtime::get_plugin())
-        .map_err(|e| format!("Failed to register stdlib plugin: {}", e))?;
-
-    // Register Haxe plugin (frontend-specific runtime)
-    registry.register(haxe_zyntax_runtime::get_plugin())
-        .map_err(|e| format!("Failed to register Haxe plugin: {}", e))?;
-
-    if verbose {
-        println!("{} Registered plugins: {:?}", "info:".blue(), registry.list_plugins());
+    if runtime_symbols.is_empty() && verbose {
+        info!("No runtime symbols loaded - external calls may fail");
+        info!("For JIT with runtime support, use: --pack <runtime.zpack>");
     }
 
-    // Collect all runtime symbols from registered plugins
-    let runtime_symbols = registry.collect_symbols();
-
     if verbose {
-        println!("{} Collected {} runtime symbols", "info:".blue(), runtime_symbols.len());
+        println!("{} Loaded {} runtime symbols from zpacks", "info:".blue(), runtime_symbols.len());
         for (name, _) in &runtime_symbols {
             println!("  - {}", name);
         }
@@ -181,19 +178,21 @@ fn execute_entry(
 }
 
 /// Compile and run for REPL mode - returns the result value directly
+///
+/// Note: REPL mode runs without runtime symbols. For full functionality,
+/// users should use `zyntax compile --jit --pack <runtime.zpack>` instead.
 pub fn compile_and_run_repl(
     module: HirModule,
     _opt_level: u8,
     verbose: bool,
 ) -> Result<i64, Box<dyn std::error::Error>> {
-    // Create plugin registry (minimal for REPL)
-    let mut registry = zyntax_compiler::plugin::PluginRegistry::new();
-    registry.register(zyntax_runtime::get_plugin())
-        .map_err(|e| format!("Failed to register stdlib plugin: {}", e))?;
-    registry.register(haxe_zyntax_runtime::get_plugin())
-        .map_err(|e| format!("Failed to register Haxe plugin: {}", e))?;
+    // REPL runs without runtime symbols - only basic expressions work
+    // For full runtime support, use compile --jit --pack <runtime.zpack>
+    let runtime_symbols: Vec<(&'static str, *const u8)> = Vec::new();
 
-    let runtime_symbols = registry.collect_symbols();
+    if verbose {
+        info!("REPL mode: No runtime symbols (use --pack for full runtime)");
+    }
 
     let mut backend = CraneliftBackend::with_runtime_symbols(&runtime_symbols)
         .map_err(|e| format!("Failed to initialize backend: {}", e))?;

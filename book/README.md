@@ -13,6 +13,8 @@ A comprehensive guide to building language frontends with ZynPEG.
 7. [TypedAST Builder](./07-typed-ast-builder.md) - Building AST nodes programmatically
 8. [Complete Example: Zig](./08-zig-example.md) - A real-world grammar walkthrough
 9. [Reference](./09-reference.md) - Command reference and API
+10. [Packaging & Distribution](./10-packaging-distribution.md) - ZPack format, AOT linking, and distribution
+11. [HIR Builder](./11-hir-builder.md) - Building HIR directly for custom backends
 
 ## Quick Start
 

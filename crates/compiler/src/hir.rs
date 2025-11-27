@@ -125,6 +125,8 @@ pub struct HirFunction {
     pub is_external: bool,
     pub calling_convention: CallingConvention,
     pub attributes: FunctionAttributes,
+    /// Override symbol name for linking (e.g., "$haxe$trace$int" for extern trace)
+    pub link_name: Option<String>,
 }
 
 /// Function signature compatible with both backends
@@ -1114,6 +1116,9 @@ pub enum HirCallable {
     Indirect(HirId),
     /// Intrinsic function
     Intrinsic(Intrinsic),
+    /// External symbol call (e.g., "$haxe$trace$int" for runtime functions)
+    /// The symbol name is looked up in the runtime symbol registry at link time
+    Symbol(String),
 }
 
 /// Compiler intrinsics
@@ -1321,6 +1326,7 @@ impl HirFunction {
             is_external: false,
             calling_convention: CallingConvention::Fast,
             attributes: FunctionAttributes::default(),
+            link_name: None,
         }
     }
     

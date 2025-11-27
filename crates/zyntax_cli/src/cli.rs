@@ -41,7 +41,7 @@ pub enum Commands {
     Compile {
         /// Input file(s) or directory (.json for TypedAST, .zbc for HIR bytecode)
         /// For grammar-based compilation, use --source and --grammar instead
-        #[arg(value_name = "INPUT")]
+        #[arg(value_name = "INPUT", num_args = 0..)]
         input: Vec<PathBuf>,
 
         /// Source code file to compile (used with --grammar for ZynPEG-based parsing)
@@ -107,6 +107,21 @@ pub enum Commands {
         /// Disable incremental compilation cache
         #[arg(long)]
         no_cache: bool,
+
+        // === Runtime Library Options ===
+
+        /// ZPack archive(s) to load runtime symbols from (.zpack files)
+        /// For JIT mode: provides runtime symbols dynamically
+        /// Can be specified multiple times for multiple runtime libraries
+        #[arg(short = 'P', long = "pack", value_name = "ZPACK")]
+        packs: Vec<PathBuf>,
+
+        /// Static library to link for AOT compilation
+        /// Accepts: full path (/path/to/lib.a), library name (foo), or file name (libfoo.a)
+        /// Library names are searched in standard system paths (/usr/local/lib, /usr/lib, etc.)
+        /// Can be specified multiple times for multiple libraries
+        #[arg(long = "lib", value_name = "LIB")]
+        static_libs: Vec<PathBuf>,
     },
 
     /// Start an interactive REPL with a ZynPEG grammar
@@ -142,6 +157,12 @@ pub enum Commands {
         action: CacheAction,
     },
 
+    /// Create or inspect ZPack archives (modules + runtime)
+    Pack {
+        #[command(subcommand)]
+        action: PackAction,
+    },
+
     /// Display version information
     Version,
 }
@@ -174,6 +195,69 @@ pub enum CacheAction {
     },
 }
 
+#[derive(Subcommand)]
+pub enum PackAction {
+    /// Create a new ZPack archive from modules and runtime libraries
+    Create {
+        /// Output .zpack file path
+        #[arg(short, long, value_name = "OUTPUT")]
+        output: PathBuf,
+
+        /// Package name
+        #[arg(short, long)]
+        name: String,
+
+        /// Package version (semver)
+        #[arg(long, default_value = "0.1.0")]
+        version: String,
+
+        /// Source language (e.g., "haxe", "zig")
+        #[arg(long, default_value = "haxe")]
+        language: String,
+
+        /// HIR bytecode modules to include (.zbc files or directories)
+        #[arg(short, long = "module", value_name = "PATH")]
+        modules: Vec<PathBuf>,
+
+        /// Runtime library for a target (format: TARGET:PATH, e.g., x86_64-apple-darwin:/path/to/runtime.zrtl)
+        #[arg(short, long = "runtime", value_name = "TARGET:PATH")]
+        runtimes: Vec<String>,
+
+        /// Package description
+        #[arg(long)]
+        description: Option<String>,
+
+        /// Entry point module path
+        #[arg(long = "entry")]
+        entry_point: Option<String>,
+    },
+
+    /// List contents of a ZPack archive
+    List {
+        /// ZPack file to inspect
+        #[arg(value_name = "ZPACK")]
+        zpack: PathBuf,
+
+        /// Show detailed information
+        #[arg(short, long)]
+        verbose: bool,
+    },
+
+    /// Extract a ZPack archive
+    Extract {
+        /// ZPack file to extract
+        #[arg(value_name = "ZPACK")]
+        zpack: PathBuf,
+
+        /// Output directory (defaults to current directory)
+        #[arg(short, long, value_name = "DIR")]
+        output: Option<PathBuf>,
+    },
+
+    /// Show information about the current platform target
+    Target,
+}
+
 impl Commands {
     pub fn compile_args(&self) -> Option<CompileArgs> {
         match self {
@@ -193,6 +277,8 @@ impl Commands {
                 import_map,
                 cache_dir,
                 no_cache,
+                packs,
+                static_libs,
             } => Some(CompileArgs {
                 input: input.clone(),
                 source: source.clone(),
@@ -209,6 +295,8 @@ impl Commands {
                 import_map: import_map.clone(),
                 cache_dir: cache_dir.clone(),
                 no_cache: *no_cache,
+                packs: packs.clone(),
+                static_libs: static_libs.clone(),
             }),
             _ => None,
         }
@@ -241,6 +329,13 @@ impl Commands {
             _ => None,
         }
     }
+
+    pub fn pack_args(&self) -> Option<&PackAction> {
+        match self {
+            Commands::Pack { action } => Some(action),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -260,6 +355,8 @@ pub struct CompileArgs {
     pub import_map: Option<PathBuf>,
     pub cache_dir: Option<PathBuf>,
     pub no_cache: bool,
+    pub packs: Vec<PathBuf>,
+    pub static_libs: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone)]

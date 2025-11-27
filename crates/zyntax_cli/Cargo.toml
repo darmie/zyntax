@@ -16,12 +16,12 @@ pest_derive = "2.7"
 pest_vm = "2.8"
 pest_meta = "2.8"
 
-# Runtime libraries (statically linked)
-# Standard library runtime (generic I/O functions)
-zyntax_runtime = { path = "../runtime" }
-
-# Frontend runtimes (frontend-specific implementations)
-haxe_zyntax_runtime = { path = "../../reflaxe.zyntax/runtime" }
+# Runtime symbols are loaded from ZPack archives - not compiled directly into CLI
+# This keeps the compiler frontend-agnostic:
+# - JIT mode: Loads .zrtl (dynamic library) from zpack for runtime symbol lookup
+# - AOT mode: Extracts .a (static library) from zpack for linker symbol resolution
+#
+# Example: zyntax compile --pack haxe-runtime.zpack --source main.hx
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
@@ -38,6 +38,7 @@ miette = { workspace = true }
 # File I/O
 glob = "0.3"
 walkdir = "2.5"
+zip = "2.2"
 
 # Logging
 env_logger = "0.11"

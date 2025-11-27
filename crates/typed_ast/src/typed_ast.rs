@@ -57,6 +57,116 @@ pub enum TypedDeclaration {
     TypeAlias(TypedTypeAlias),
     Module(TypedModule),
     Import(TypedImport),
+    /// External declaration - type defined outside the compilation unit
+    /// whose methods are mapped to runtime symbols
+    Extern(TypedExtern),
+}
+
+/// External type declaration - represents types defined outside the compilation unit
+///
+/// This is used for language-specific extern types like:
+/// - Haxe's String, Array, Map classes
+/// - C's opaque struct types
+/// - FFI type declarations
+///
+/// The runtime_prefix is used to map methods to runtime symbols:
+/// e.g., runtime_prefix = "$haxe$String" means method "length" -> "$haxe$String$length"
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TypedExtern {
+    /// External class with methods mapped to runtime symbols
+    Class(TypedExternClass),
+    /// External struct (opaque type)
+    Struct(TypedExternStruct),
+    /// External enum with variants mapped to runtime symbols
+    Enum(TypedExternEnum),
+    /// External type alias (like C typedef)
+    TypeDef(TypedExternTypeDef),
+}
+
+/// External class declaration
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedExternClass {
+    /// Class name (e.g., "String", "Array")
+    pub name: InternedString,
+    /// Runtime symbol prefix for method resolution
+    /// e.g., "$haxe$String" -> method "length" becomes "$haxe$String$length"
+    pub runtime_prefix: InternedString,
+    /// Type parameters for generic extern classes (e.g., Array<T>)
+    #[serde(default)]
+    pub type_params: Vec<TypedTypeParam>,
+    /// Method signatures (the implementations are in the runtime)
+    #[serde(default)]
+    pub methods: Vec<TypedExternMethod>,
+    /// Property signatures
+    #[serde(default)]
+    pub properties: Vec<TypedExternProperty>,
+}
+
+/// External struct (opaque type) declaration
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedExternStruct {
+    pub name: InternedString,
+    pub runtime_prefix: InternedString,
+    #[serde(default)]
+    pub type_params: Vec<TypedTypeParam>,
+}
+
+/// External enum declaration
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedExternEnum {
+    pub name: InternedString,
+    pub runtime_prefix: InternedString,
+    #[serde(default)]
+    pub variants: Vec<TypedExternEnumVariant>,
+}
+
+/// External enum variant
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedExternEnumVariant {
+    pub name: InternedString,
+    /// Runtime symbol for this variant constructor
+    pub symbol: InternedString,
+    #[serde(default)]
+    pub fields: Vec<Type>,
+}
+
+/// External typedef
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedExternTypeDef {
+    pub name: InternedString,
+    pub target_type: Type,
+}
+
+/// External method signature
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedExternMethod {
+    /// Method name in source language
+    pub name: InternedString,
+    /// Runtime symbol to call (if None, derived from class runtime_prefix + method name)
+    pub symbol: Option<InternedString>,
+    #[serde(default)]
+    pub params: Vec<TypedParameter>,
+    #[serde(default)]
+    pub return_type: Type,
+    /// Whether this is a static method
+    #[serde(default)]
+    pub is_static: bool,
+    /// Whether this method mutates self
+    #[serde(default)]
+    pub mutates_self: bool,
+}
+
+/// External property signature
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedExternProperty {
+    /// Property name
+    pub name: InternedString,
+    /// Getter symbol (if None, derived from runtime_prefix)
+    pub getter_symbol: Option<InternedString>,
+    /// Setter symbol (None means read-only)
+    pub setter_symbol: Option<InternedString>,
+    #[serde(default)]
+    pub ty: Type,
 }
 
 /// Function declaration

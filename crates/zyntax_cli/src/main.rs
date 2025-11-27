@@ -48,6 +48,8 @@ fn main() {
                     args.import_map,
                     args.cache_dir,
                     args.no_cache,
+                    args.packs,
+                    args.static_libs,
                     cli.verbose,
                 )
             } else {
@@ -76,6 +78,14 @@ fn main() {
                 commands::cache(action, cli.verbose)
             } else {
                 unreachable!("Cache command should have cache args")
+            }
+        }
+
+        Commands::Pack { .. } => {
+            if let Some(action) = cli.command.pack_args() {
+                commands::pack(action, cli.verbose)
+            } else {
+                unreachable!("Pack command should have pack args")
             }
         }
 

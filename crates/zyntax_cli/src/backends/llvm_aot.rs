@@ -5,8 +5,101 @@
 
 use colored::Colorize;
 use log::{debug, error, info};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use zyntax_compiler::hir::HirModule;
+
+/// Standard library search paths for different platforms
+#[cfg(all(feature = "llvm-backend", target_os = "macos"))]
+const LIBRARY_SEARCH_PATHS: &[&str] = &[
+    "/usr/local/lib",
+    "/opt/homebrew/lib",
+    "/usr/lib",
+    "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib",
+];
+
+#[cfg(all(feature = "llvm-backend", target_os = "linux"))]
+const LIBRARY_SEARCH_PATHS: &[&str] = &[
+    "/usr/local/lib",
+    "/usr/lib",
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib/aarch64-linux-gnu",
+    "/lib/x86_64-linux-gnu",
+    "/lib/aarch64-linux-gnu",
+];
+
+#[cfg(all(feature = "llvm-backend", target_os = "windows"))]
+const LIBRARY_SEARCH_PATHS: &[&str] = &[
+    "C:\\Windows\\System32",
+    "C:\\Program Files\\Common Files",
+];
+
+#[cfg(all(feature = "llvm-backend", not(any(target_os = "macos", target_os = "linux", target_os = "windows"))))]
+const LIBRARY_SEARCH_PATHS: &[&str] = &["/usr/local/lib", "/usr/lib"];
+
+/// Resolve a library path, searching standard locations if needed
+///
+/// If the path exists as-is, returns it unchanged.
+/// If not, searches standard library paths for:
+/// - The exact name
+/// - lib{name}.a (Unix static library convention)
+/// - {name}.lib (Windows static library convention)
+#[cfg(feature = "llvm-backend")]
+fn resolve_library_path(lib: &Path, verbose: bool) -> Option<PathBuf> {
+    // If it's already an absolute path or exists, use it directly
+    if lib.is_absolute() || lib.exists() {
+        return Some(lib.to_path_buf());
+    }
+
+    let lib_name = lib.file_name()?.to_str()?;
+
+    // Generate possible library file names
+    let candidates: Vec<String> = if lib_name.starts_with("lib") && lib_name.ends_with(".a") {
+        // Already in lib*.a format
+        vec![lib_name.to_string()]
+    } else if lib_name.ends_with(".a") || lib_name.ends_with(".lib") {
+        // Has extension but no lib prefix
+        vec![
+            lib_name.to_string(),
+            format!("lib{}", lib_name),
+        ]
+    } else {
+        // Bare name - try common conventions
+        vec![
+            format!("lib{}.a", lib_name),    // Unix: libfoo.a
+            format!("{}.lib", lib_name),      // Windows: foo.lib
+            format!("{}.a", lib_name),        // Alternative: foo.a
+            lib_name.to_string(),             // Exact name
+        ]
+    };
+
+    if verbose {
+        info!("Searching for library '{}' in standard paths...", lib_name);
+    }
+
+    // Search each path for each candidate
+    for search_path in LIBRARY_SEARCH_PATHS {
+        let search_dir = Path::new(search_path);
+        if !search_dir.exists() {
+            continue;
+        }
+
+        for candidate in &candidates {
+            let full_path = search_dir.join(candidate);
+            if full_path.exists() {
+                if verbose {
+                    info!("Found library: {:?}", full_path);
+                }
+                return Some(full_path);
+            }
+        }
+    }
+
+    if verbose {
+        info!("Library '{}' not found in standard paths", lib_name);
+    }
+
+    None
+}
 
 /// Compile HIR module with LLVM AOT backend
 #[cfg(feature = "llvm-backend")]
@@ -15,6 +108,8 @@ pub fn compile_llvm(
     output: Option<PathBuf>,
     opt_level: u8,
     _entry_point: Option<&str>,
+    _pack_symbols: &[(&'static str, *const u8)],
+    static_libs: &[PathBuf],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use inkwell::context::Context;
@@ -107,10 +202,56 @@ pub fn compile_llvm(
         info!("Linking executable...");
     }
 
-    let status = std::process::Command::new("cc")
-        .arg(&obj_path)
-        .arg("-o")
-        .arg(&output_path)
+    // Build linker command
+    let mut linker = std::process::Command::new("cc");
+    linker.arg(&obj_path);
+    linker.arg("-o");
+    linker.arg(&output_path);
+
+    // Resolve and add static libraries
+    // Libraries can be specified as:
+    // - Full path: /path/to/libfoo.a
+    // - Library name: foo (searches for libfoo.a in standard paths)
+    // - Partial name: libfoo.a (searches in standard paths)
+    let mut resolved_count = 0;
+    for lib_path in static_libs {
+        if let Some(resolved) = resolve_library_path(lib_path, verbose) {
+            if verbose {
+                info!("Linking static library: {:?}", resolved);
+            }
+            linker.arg(&resolved);
+            resolved_count += 1;
+        } else {
+            // Library not found - pass to linker anyway, let it report the error
+            // This allows using -l style library names that the linker can resolve
+            let lib_str = lib_path.to_string_lossy();
+            if !lib_str.starts_with('-') {
+                // Pass as -l flag for the linker to search
+                let lib_name = lib_path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.strip_prefix("lib").unwrap_or(s))
+                    .unwrap_or(&lib_str);
+                if verbose {
+                    info!("Library '{}' not found, passing -l{} to linker", lib_path.display(), lib_name);
+                }
+                linker.arg(format!("-l{}", lib_name));
+            } else {
+                linker.arg(lib_path);
+            }
+        }
+    }
+
+    // If no static libs provided, note that external symbols may fail
+    if static_libs.is_empty() {
+        if verbose {
+            info!("No static libraries specified - external symbols may cause linker errors");
+            info!("For AOT with runtime support, use: --lib <library>");
+        }
+    } else if verbose {
+        info!("Resolved {} of {} libraries", resolved_count, static_libs.len());
+    }
+
+    let status = linker
         .status()
         .map_err(|e| format!("Failed to run linker: {}", e))?;
 
@@ -137,6 +278,8 @@ pub fn compile_llvm(
     output: Option<PathBuf>,
     _opt_level: u8,
     _entry_point: Option<&str>,
+    _pack_symbols: &[(&'static str, *const u8)],
+    _static_libs: &[PathBuf],
     _verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let output_path = output.unwrap_or_else(|| PathBuf::from("a.out"));
@@ -154,6 +297,7 @@ pub fn compile_and_run_llvm(
     module: HirModule,
     opt_level: u8,
     entry_point: Option<&str>,
+    pack_symbols: &[(&'static str, *const u8)],
     verbose: bool,
 ) -> Result<i64, Box<dyn std::error::Error>> {
     use inkwell::context::Context;
@@ -164,26 +308,17 @@ pub fn compile_and_run_llvm(
         info!("Initializing LLVM JIT backend...");
     }
 
-    // Create plugin registry and register all available runtime plugins
-    let mut registry = zyntax_compiler::plugin::PluginRegistry::new();
+    // Runtime symbols come exclusively from ZPack archives
+    // This keeps the compiler frontend-agnostic - no built-in runtimes
+    let runtime_symbols: Vec<(&'static str, *const u8)> = pack_symbols.to_vec();
 
-    // Register standard library plugin (generic I/O functions)
-    registry.register(zyntax_runtime::get_plugin())
-        .map_err(|e| format!("Failed to register stdlib plugin: {}", e))?;
-
-    // Register Haxe plugin (frontend-specific runtime)
-    registry.register(haxe_zyntax_runtime::get_plugin())
-        .map_err(|e| format!("Failed to register Haxe plugin: {}", e))?;
-
-    if verbose {
-        info!("Registered plugins: {:?}", registry.list_plugins());
+    if runtime_symbols.is_empty() {
+        info!("No runtime symbols loaded - external calls will fail");
+        info!("For JIT with runtime support, use: --pack <runtime.zpack>");
     }
 
-    // Collect all runtime symbols from registered plugins
-    let runtime_symbols = registry.collect_symbols();
-
     if verbose {
-        info!("Collected {} runtime symbols", runtime_symbols.len());
+        info!("Loaded {} runtime symbols from zpacks", runtime_symbols.len());
         for (name, _) in &runtime_symbols {
             debug!("  - {}", name);
         }
@@ -292,6 +427,7 @@ pub fn compile_and_run_llvm(
     _module: HirModule,
     _opt_level: u8,
     _entry_point: Option<&str>,
+    _pack_symbols: &[(&'static str, *const u8)],
     _verbose: bool,
 ) -> Result<i64, Box<dyn std::error::Error>> {
     error!("LLVM JIT backend not enabled");

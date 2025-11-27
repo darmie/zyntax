@@ -11,6 +11,7 @@ directive = {
   | context_directive
   | type_helpers_directive
   | error_messages_directive
+  | builtin_directive
 }
 
 // @language { name: "Zig", version: "0.11", file_extensions: [".zig", ".zyn"] }
@@ -62,6 +63,16 @@ error_field = {
 }
 
 format_expr = { "format!" ~ "(" ~ string_literal ~ ("," ~ rust_expr)* ~ ")" }
+
+// @builtin { trace: "$haxe$trace$int", print: "$io$print" }
+// Simple function name -> runtime symbol mappings for built-in functions
+builtin_directive = {
+    "@builtin" ~ "{" ~ builtin_def* ~ "}"
+}
+
+builtin_def = {
+    identifier ~ ":" ~ string_literal ~ ","?
+}
 
 // ===== Rule Definitions =====
 

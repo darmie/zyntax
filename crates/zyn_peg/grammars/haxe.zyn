@@ -16,6 +16,15 @@
     entry_point: "main",
 }
 
+// Built-in functions provided by the runtime
+// Maps function names to runtime symbols
+@builtin {
+    // trace(value) - Haxe's standard debug output
+    // Note: Type-specific variants ($haxe$trace$int, $haxe$trace$float, etc.)
+    // are resolved at compile time based on argument type
+    trace: "$haxe$trace$int",
+}
+
 // ===== Program Structure =====
 
 program = { SOI ~ package_decl? ~ import_decls ~ class_decl* ~ EOI }

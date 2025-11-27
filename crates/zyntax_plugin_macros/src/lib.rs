@@ -27,12 +27,14 @@ pub fn runtime_export(attr: TokenStream, item: TokenStream) -> TokenStream {
     let sig = &func.sig;
     let block = &func.block;
 
+    // Use export_name to set the exact symbol name for both JIT and AOT linking
+    // This ensures the function is exported as exactly "$haxe$trace$int" (or whatever name)
     let expanded = quote! {
         #(#attrs)*
-        #[no_mangle]
+        #[export_name = #symbol_name]
         #vis #sig #block
 
-        // Register this symbol in the inventory
+        // Register this symbol in the inventory for JIT runtime lookup
         inventory::submit! {
             crate::RuntimeSymbol {
                 name: #symbol_name,
@@ -147,12 +149,13 @@ pub fn runtime_method(attr: TokenStream, item: TokenStream) -> TokenStream {
     let mutates = args.mutates;
     let returns_self = args.returns_self;
 
+    // Use export_name to set the exact symbol name for both JIT and AOT linking
     let expanded = quote! {
         #(#attrs)*
-        #[no_mangle]
+        #[export_name = #symbol_name]
         #vis #sig #block
 
-        // Register the runtime symbol
+        // Register the runtime symbol for JIT lookup
         inventory::submit! {
             crate::RuntimeSymbol {
                 name: #symbol_name,

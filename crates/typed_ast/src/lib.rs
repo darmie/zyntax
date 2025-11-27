@@ -140,6 +140,9 @@ pub use typed_ast::{
     TypedClass, TypedEnum, TypedField, TypedVariant, TypedTypeParam,
     // Import types
     TypedImport, TypedImportItem, TypedModule,
+    // Extern types for external declarations
+    TypedExtern, TypedExternClass, TypedExternStruct, TypedExternEnum,
+    TypedExternEnumVariant, TypedExternTypeDef, TypedExternMethod, TypedExternProperty,
 };
 
 pub use type_inference::{

@@ -1,5 +1,5 @@
 //! # Cranelift Backend Integration
-//! 
+//!
 //! Provides JIT compilation capabilities using Cranelift for fast development
 //! cycles and hot-reloading support.
 
@@ -804,9 +804,34 @@ impl CraneliftBackend {
                                         }
                                     }
                                 }
-                                _ => {
-                                    // Other callable types not implemented yet
-                                    warn!(" Unsupported callable type");
+                                HirCallable::Symbol(symbol_name) => {
+                                    // Call external runtime symbol by name (e.g., "$haxe$trace$int")
+                                    // Create signature based on argument types
+                                    let mut sig = self.module.make_signature();
+                                    for arg_val in &arg_values {
+                                        let arg_ty = builder.func.dfg.value_type(*arg_val);
+                                        sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
+                                    }
+                                    // Assume void return for now (can be enhanced later)
+                                    // sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I32));
+
+                                    let func = self.module
+                                        .declare_function(symbol_name, Linkage::Import, &sig)
+                                        .expect(&format!("Failed to declare symbol {}", symbol_name));
+
+                                    let local_func = self.module
+                                        .declare_func_in_func(func, builder.func);
+
+                                    let call = builder.ins().call(local_func, &arg_values);
+
+                                    if let Some(result_id) = result {
+                                        if let Some(&ret_val) = builder.inst_results(call).first() {
+                                            self.value_map.insert(*result_id, ret_val);
+                                        } else {
+                                            // No return value - store dummy
+                                            self.value_map.insert(*result_id, builder.ins().iconst(types::I32, 0));
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2986,6 +3011,44 @@ impl CraneliftBackend {
 
                                 builder.ins().call(abort_func_ref, &[]);
                                 builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
+                            }
+                        }
+                    }
+                    HirCallable::Symbol(symbol_name) => {
+                        // External symbol call - import and call by name
+                        // Build signature from argument types
+                        let mut sig = self.module.make_signature();
+                        for arg_val in &arg_vals {
+                            let arg_ty = builder.func.dfg.value_type(*arg_val);
+                            sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
+                        }
+                        // For now, assume void return unless we have result
+                        if result.is_some() {
+                            sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+                        }
+
+                        // Use @___ prefix internally for runtime symbols
+                        let internal_name = if symbol_name.starts_with('$') {
+                            format!("@{}", symbol_name)
+                        } else {
+                            symbol_name.clone()
+                        };
+
+                        let func = self.module
+                            .declare_function(&internal_name, cranelift_module::Linkage::Import, &sig)
+                            .map_err(|e| CompilerError::Backend(format!("Failed to declare symbol {}: {}", symbol_name, e)))?;
+                        let func_ref = self.module.declare_func_in_func(func, builder.func);
+
+                        let call = if *is_tail {
+                            builder.ins().return_call(func_ref, &arg_vals)
+                        } else {
+                            builder.ins().call(func_ref, &arg_vals)
+                        };
+
+                        if let Some(result_id) = result {
+                            let results = builder.inst_results(call);
+                            if !results.is_empty() {
+                                self.value_map.insert(*result_id, results[0]);
                             }
                         }
                     }

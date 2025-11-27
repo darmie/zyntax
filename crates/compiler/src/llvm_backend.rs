@@ -2228,6 +2228,43 @@ impl<'ctx> LLVMBackend<'ctx> {
             HirCallable::Intrinsic(intrinsic) => {
                 self.compile_intrinsic(*intrinsic, args)
             }
+            HirCallable::Symbol(symbol_name) => {
+                // Call external runtime symbol by name (e.g., "$haxe$trace$int")
+                // Compile arguments first to infer their types
+                let arg_values: Vec<BasicMetadataValueEnum> = args
+                    .iter()
+                    .map(|arg_id| {
+                        self.get_value(*arg_id)
+                            .map(|v| v.into())
+                    })
+                    .collect::<CompilerResult<Vec<_>>>()?;
+
+                // Infer parameter types from argument values
+                let param_types: Vec<BasicMetadataTypeEnum> = arg_values
+                    .iter()
+                    .map(|v| match v {
+                        BasicMetadataValueEnum::IntValue(i) => i.get_type().into(),
+                        BasicMetadataValueEnum::FloatValue(f) => f.get_type().into(),
+                        BasicMetadataValueEnum::PointerValue(p) => p.get_type().into(),
+                        BasicMetadataValueEnum::ArrayValue(a) => a.get_type().into(),
+                        BasicMetadataValueEnum::StructValue(s) => s.get_type().into(),
+                        BasicMetadataValueEnum::VectorValue(v) => v.get_type().into(),
+                        _ => self.context.i64_type().into(),
+                    })
+                    .collect();
+
+                // Declare the function (assume void return for now)
+                let fn_type = self.context.void_type().fn_type(&param_types, false);
+                let func = self.module.get_function(symbol_name).unwrap_or_else(|| {
+                    self.module.add_function(symbol_name, fn_type, None)
+                });
+
+                // Build call
+                self.builder.build_call(func, &arg_values, symbol_name)?;
+
+                // Return a dummy value (void functions don't return anything meaningful)
+                Ok(self.context.i32_type().const_zero().into())
+            }
         }
     }
 

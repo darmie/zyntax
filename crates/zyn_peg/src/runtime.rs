@@ -82,6 +82,10 @@ pub struct ZpegMetadata {
     pub entry_point: Option<String>,
     /// ZynPEG version used to compile
     pub zpeg_version: String,
+    /// Built-in function mappings (function name -> runtime symbol)
+    /// e.g., "trace" -> "$haxe$trace$int"
+    #[serde(default)]
+    pub builtins: HashMap<String, String>,
 }
 
 /// Commands for a single grammar rule
@@ -266,6 +270,35 @@ pub trait AstHostFunctions {
 
     /// Create a function call expression
     fn create_call(&mut self, callee: NodeHandle, args: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a function call expression with builtin resolution
+    /// If the callee is a simple identifier matching a builtin, use the runtime symbol instead
+    fn create_call_with_builtin_resolution(
+        &mut self,
+        callee: NodeHandle,
+        args: Vec<NodeHandle>,
+        builtins: &std::collections::HashMap<String, String>,
+    ) -> NodeHandle {
+        // Check if callee is an identifier that matches a builtin
+        if let Some(name) = self.get_identifier_name(callee) {
+            log::trace!("[builtin resolution] callee name='{}', checking {} builtins", name, builtins.len());
+            if let Some(symbol) = builtins.get(&name) {
+                log::trace!("[builtin resolution] found builtin '{}' -> '{}'", name, symbol);
+                // Create a new identifier with the runtime symbol name
+                let resolved_callee = self.create_identifier(symbol);
+                return self.create_call(resolved_callee, args);
+            }
+        } else {
+            log::trace!("[builtin resolution] callee is not an identifier");
+        }
+        // Fall back to normal call
+        self.create_call(callee, args)
+    }
+
+    /// Get the name of an identifier node, if it is one
+    fn get_identifier_name(&self, handle: NodeHandle) -> Option<String> {
+        None // Default implementation returns None
+    }
 
     /// Create a method call expression
     fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle;
@@ -475,6 +508,7 @@ impl ZpegCompiler {
             file_extensions: grammar.language.file_extensions.clone(),
             entry_point: grammar.language.entry_point.clone(),
             zpeg_version: env!("CARGO_PKG_VERSION").to_string(),
+            builtins: grammar.builtins.functions.clone(),
         };
 
         // Generate pest grammar
@@ -1954,13 +1988,10 @@ impl AstHostFunctions for TypedAstBuilder {
     }
 
     fn apply_postfix(&mut self, base: NodeHandle, postfix_op: NodeHandle) -> NodeHandle {
-        // Get the postfix operation node and apply it to the base
-        // For now, this is a placeholder - real postfix handling would inspect the postfix_op
-        // and create call/field/index expressions appropriately
-        let _span = self.default_span();
-
-        // Just return the base for now - postfix ops aren't used with range expressions
-        log::trace!("[apply_postfix] base={:?}, postfix_op={:?}", base, postfix_op);
+        // This is now primarily handled by FoldPostfix command in the interpreter
+        // which directly creates call/field/index nodes
+        // This fallback just returns base for any unhandled cases
+        log::trace!("[apply_postfix] base={:?}, postfix_op={:?} (fallback)", base, postfix_op);
         base
     }
 
@@ -2469,6 +2500,18 @@ impl AstHostFunctions for TypedAstBuilder {
 
         self.store_pattern(pattern)
     }
+
+    fn get_identifier_name(&self, handle: NodeHandle) -> Option<String> {
+        // Get the expression and check if it's a Variable (identifier)
+        if let Some(expr_node) = self.get_expr(handle) {
+            if let TypedExpression::Variable(name) = &expr_node.node {
+                // Use resolve_global() to get the actual string value
+                // (to_string() returns the debug format for InternedString)
+                return name.resolve_global();
+            }
+        }
+        None
+    }
 }
 
 // ============================================================================
@@ -2508,6 +2551,16 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
         &mut self.host
     }
 
+    /// Look up a builtin function by name, returning the runtime symbol if found
+    pub fn lookup_builtin(&self, name: &str) -> Option<&str> {
+        self.module.metadata.builtins.get(name).map(|s| s.as_str())
+    }
+
+    /// Get all builtin mappings
+    pub fn builtins(&self) -> &HashMap<String, String> {
+        &self.module.metadata.builtins
+    }
+
     /// Execute commands for a rule given its parse tree node
     pub fn execute_rule(&mut self, rule_name: &str, text: &str, children: Vec<RuntimeValue>) -> Result<RuntimeValue> {
         // Get commands for this rule
@@ -2533,7 +2586,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
         // Clear previous child variables before storing new ones
         // This is critical - otherwise old $2, $3, etc. from child rules pollute parent rules
-        self.variables.retain(|k, _| !k.starts_with('$') || k == "$text");
+        // But preserve $postfix_* variables which are used for postfix operation info
+        self.variables.retain(|k, _| !k.starts_with('$') || k == "$text" || k.starts_with("$postfix_"));
 
         // Store children as $1, $2, etc.
         for (i, child) in children.into_iter().enumerate() {
@@ -2744,12 +2798,57 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     let mut result = children[0].clone();
 
                     for postfix_op in &children[1..] {
-                        // Each postfix_op should be a node representing the operation
-                        // For now, create a call/field/index expression
+                        // Each postfix_op was created by call_postfix/field_postfix/index_postfix
+                        // and has info stored in self.variables
                         if let (RuntimeValue::Node(base_h), RuntimeValue::Node(op_h)) = (&result, postfix_op) {
-                            // Apply postfix operation
-                            let new_node = self.host.apply_postfix(*base_h, *op_h);
-                            result = RuntimeValue::Node(new_node);
+                            // Check what kind of postfix operation this is
+                            let postfix_key = format!("$postfix_{}", op_h.0);
+                            log::trace!("[FoldPostfix] Looking up postfix_key={} for op_h={:?}", postfix_key, op_h);
+                            log::trace!("[FoldPostfix] All variables with $postfix: {:?}",
+                                self.variables.iter()
+                                    .filter(|(k, _)| k.starts_with("$postfix"))
+                                    .collect::<Vec<_>>());
+                            if let Some(RuntimeValue::String(op_info)) = self.variables.get(&postfix_key) {
+                                if op_info.starts_with("call:") {
+                                    // Get the call arguments
+                                    let args_key = format!("$postfix_{}_args", op_h.0);
+                                    let call_args: Vec<NodeHandle> = self.variables.get(&args_key)
+                                        .and_then(|v| match v {
+                                            RuntimeValue::List(list) => Some(
+                                                list.iter()
+                                                    .filter_map(|v| match v {
+                                                        RuntimeValue::Node(h) => Some(*h),
+                                                        _ => None,
+                                                    })
+                                                    .collect()
+                                            ),
+                                            _ => None,
+                                        })
+                                        .unwrap_or_default();
+                                    log::trace!("[FoldPostfix] creating call with {} args", call_args.len());
+                                    // Use builtin resolution to map function names to runtime symbols
+                                    let new_node = self.host.create_call_with_builtin_resolution(
+                                        *base_h,
+                                        call_args,
+                                        &self.module.metadata.builtins,
+                                    );
+                                    result = RuntimeValue::Node(new_node);
+                                } else if op_info.starts_with("field:") {
+                                    let field_name = op_info.strip_prefix("field:").unwrap_or("");
+                                    let new_node = self.host.create_field_access(*base_h, field_name);
+                                    result = RuntimeValue::Node(new_node);
+                                } else if op_info.starts_with("index:") {
+                                    let index_key = format!("$postfix_{}_index", op_h.0);
+                                    if let Some(RuntimeValue::Node(index_h)) = self.variables.get(&index_key) {
+                                        let new_node = self.host.create_index(*base_h, *index_h);
+                                        result = RuntimeValue::Node(new_node);
+                                    }
+                                }
+                            } else {
+                                // Fallback to apply_postfix (original behavior)
+                                let new_node = self.host.apply_postfix(*base_h, *op_h);
+                                result = RuntimeValue::Node(new_node);
+                            }
                         }
                     }
 
@@ -3223,6 +3322,84 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => return Err(crate::error::ZynPegError::CodeGenError("index: missing index".into())),
                 };
                 let handle = self.host.create_index(object, index);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // Postfix operation markers - store info for later application in apply_postfix
+            // These are handled specially since they need to interact with TypedAstBuilder's postfix_ops
+            "call_postfix" => {
+                // Extract call arguments
+                let call_args: Vec<NodeHandle> = match args.get("args") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    Some(RuntimeValue::Node(h)) => vec![*h], // Single argument
+                    Some(RuntimeValue::Null) => vec![],
+                    None => vec![],
+                    _ => vec![],
+                };
+                log::trace!("[define_node] call_postfix with {} args", call_args.len());
+                // Create a marker handle - we need to downcast to TypedAstBuilder
+                // For now, create a placeholder node and store postfix info
+                let handle = self.host.create_int_literal(0); // Marker placeholder
+                // Store postfix info in a special way - use the handle as key
+                // Note: This requires TypedAstBuilder to have postfix_ops accessible
+                // For the generic case, we'll store this info as a variable
+                self.variables.insert(
+                    format!("$postfix_{}", handle.0),
+                    RuntimeValue::String(format!("call:{}", call_args.len()))
+                );
+                // Store args for later retrieval
+                self.variables.insert(
+                    format!("$postfix_{}_args", handle.0),
+                    RuntimeValue::List(call_args.iter().map(|h| RuntimeValue::Node(*h)).collect())
+                );
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "field_postfix" => {
+                let field_name = match args.get("field") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    Some(RuntimeValue::Node(h)) => {
+                        // Field might be stored as an identifier node - get text from variable
+                        self.variables.get(&format!("${}", h.0))
+                            .and_then(|v| match v {
+                                RuntimeValue::String(s) => Some(s.clone()),
+                                _ => None
+                            })
+                            .unwrap_or_else(|| format!("field_{}", h.0))
+                    }
+                    _ => String::new(),
+                };
+                log::trace!("[define_node] field_postfix with field={}", field_name);
+                let handle = self.host.create_int_literal(0); // Marker placeholder
+                self.variables.insert(
+                    format!("$postfix_{}", handle.0),
+                    RuntimeValue::String(format!("field:{}", field_name))
+                );
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "index_postfix" => {
+                let index = match args.get("index") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("index_postfix: missing index".into())),
+                };
+                log::trace!("[define_node] index_postfix with index={:?}", index);
+                let handle = self.host.create_int_literal(0); // Marker placeholder
+                self.variables.insert(
+                    format!("$postfix_{}", handle.0),
+                    RuntimeValue::String(format!("index:{}", index.0))
+                );
+                self.variables.insert(
+                    format!("$postfix_{}_index", handle.0),
+                    RuntimeValue::Node(index)
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -4200,6 +4377,7 @@ mod tests {
                 file_extensions: vec![".test".to_string()],
                 entry_point: None,
                 zpeg_version: "0.1.0".to_string(),
+                builtins: HashMap::new(),
             },
             pest_grammar: "program = { expr }".to_string(),
             rules: HashMap::from([(

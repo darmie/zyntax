@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 
 use crate::backends::{self, Backend};
-use crate::cli::{ModuleArch, CacheAction, default_cache_dir};
+use crate::cli::{ModuleArch, CacheAction, PackAction, default_cache_dir};
 use crate::formats::{self, InputFormat};
 
 use zyntax_typed_ast::{
@@ -108,6 +108,8 @@ pub fn compile(
     import_map: Option<PathBuf>,
     cache_dir: Option<PathBuf>,
     no_cache: bool,
+    packs: Vec<PathBuf>,
+    static_libs: Vec<PathBuf>,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Determine cache directory
@@ -181,11 +183,42 @@ pub fn compile(
         );
     }
 
+    // Load ZPack archives and collect runtime symbols
+    let mut loaded_packs = Vec::new();
+    for pack_path in &packs {
+        if verbose {
+            println!("{} Loading ZPack: {}", "info:".blue(), pack_path.display());
+        }
+        let zpack = zyntax_compiler::zpack::ZPack::load(pack_path)
+            .map_err(|e| format!("Failed to load zpack {}: {}", pack_path.display(), e))?;
+
+        if verbose {
+            println!("  Name: {}", zpack.manifest.name);
+            println!("  Version: {}", zpack.manifest.package_version);
+            if zpack.has_runtime() {
+                println!("  Runtime: loaded");
+            } else {
+                println!("  Runtime: not available for this platform");
+            }
+        }
+        loaded_packs.push(zpack);
+    }
+
     // Get module architecture for entry point resolution
     let module_arch = to_module_architecture(resolver, &cache_dir);
 
+    // Log static libs if provided
+    if verbose && !static_libs.is_empty() {
+        println!("{} Static libraries for AOT linking:", "info:".blue());
+        for lib in &static_libs {
+            println!("  - {}", lib.display());
+        }
+    }
+
     // Compile with selected backend
-    backends::compile(hir_module, backend, output, opt_level, jit, entry_point, &module_arch, verbose)
+    // - JIT mode: uses ZPack (.zpack) for runtime symbols
+    // - AOT mode: uses static libraries (--lib) for linker
+    backends::compile(hir_module, backend, output, opt_level, jit, entry_point, &module_arch, &loaded_packs, &static_libs, verbose)
 }
 
 /// Display version information
@@ -898,4 +931,347 @@ fn walk_pair_to_value_repl<H: zyn_peg::runtime::AstHostFunctions>(
 
     interpreter.execute_rule(&rule_name, &text, children)
         .unwrap_or(RuntimeValue::Null)
+}
+
+/// Execute pack management commands
+pub fn pack(action: &PackAction, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    match action {
+        PackAction::Create {
+            output,
+            name,
+            version,
+            language,
+            modules,
+            runtimes,
+            description,
+            entry_point,
+        } => pack_create(
+            output,
+            name,
+            version,
+            language,
+            modules,
+            runtimes,
+            description.as_deref(),
+            entry_point.as_deref(),
+            verbose,
+        ),
+        PackAction::List { zpack, verbose: list_verbose } => {
+            pack_list(zpack, *list_verbose || verbose)
+        }
+        PackAction::Extract { zpack, output } => {
+            pack_extract(zpack, output.as_ref(), verbose)
+        }
+        PackAction::Target => pack_target(),
+    }
+}
+
+/// Create a new ZPack archive
+#[allow(clippy::too_many_arguments)]
+fn pack_create(
+    output: &PathBuf,
+    name: &str,
+    version: &str,
+    language: &str,
+    modules: &[PathBuf],
+    runtimes: &[String],
+    description: Option<&str>,
+    entry_point: Option<&str>,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::fs::File;
+    use zyntax_compiler::zpack::{ZPackWriter, ZPackManifest, ZPACK_VERSION};
+
+    println!("{}", "Creating ZPack archive...".green().bold());
+
+    // Create manifest
+    let manifest = ZPackManifest {
+        version: ZPACK_VERSION,
+        name: name.to_string(),
+        package_version: version.to_string(),
+        description: description.unwrap_or("").to_string(),
+        source_language: language.to_string(),
+        entry_point: entry_point.map(String::from),
+        ..Default::default()
+    };
+
+    // Create the output file
+    let file = File::create(output)?;
+    let mut writer = ZPackWriter::new(file, manifest.clone());
+
+    // Add modules
+    let mut module_count = 0;
+    for module_path in modules {
+        if module_path.is_dir() {
+            // Add all .zbc files from directory
+            for entry in walkdir::WalkDir::new(module_path)
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|ext| ext == "zbc").unwrap_or(false))
+            {
+                let path = entry.path();
+                let rel_path = path
+                    .strip_prefix(module_path)
+                    .unwrap_or(path)
+                    .with_extension("");
+                let module_name = rel_path.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+
+                if verbose {
+                    println!("  Adding module: {}", module_name);
+                }
+
+                let data = std::fs::read(path)?;
+                writer.add_module_bytes(&module_name, &data)?;
+                module_count += 1;
+            }
+        } else if module_path.extension().map(|ext| ext == "zbc").unwrap_or(false) {
+            // Single .zbc file
+            let module_name = module_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            if verbose {
+                println!("  Adding module: {}", module_name);
+            }
+
+            let data = std::fs::read(module_path)?;
+            writer.add_module_bytes(&module_name, &data)?;
+            module_count += 1;
+        } else {
+            return Err(format!("Not a .zbc file or directory: {:?}", module_path).into());
+        }
+    }
+
+    // Add runtimes
+    let mut runtime_count = 0;
+    for runtime_spec in runtimes {
+        // Parse TARGET:PATH format
+        let parts: Vec<&str> = runtime_spec.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err(format!(
+                "Invalid runtime format '{}'. Expected TARGET:PATH (e.g., x86_64-apple-darwin:/path/to/runtime.zrtl)",
+                runtime_spec
+            ).into());
+        }
+
+        let target = parts[0];
+        let path = PathBuf::from(parts[1]);
+
+        if !path.exists() {
+            return Err(format!("Runtime file not found: {:?}", path).into());
+        }
+
+        if verbose {
+            println!("  Adding runtime for {}: {:?}", target, path);
+        }
+
+        writer.add_runtime(target, &path)?;
+        runtime_count += 1;
+    }
+
+    // Finish writing
+    writer.finish()?;
+
+    println!(
+        "{} Created {} ({} modules, {} runtimes)",
+        "✓".green(),
+        output.display(),
+        module_count,
+        runtime_count
+    );
+
+    Ok(())
+}
+
+/// List contents of a ZPack archive
+fn pack_list(zpack_path: &PathBuf, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    use zip::read::ZipArchive;
+
+    println!("{} {}", "ZPack:".green().bold(), zpack_path.display());
+    println!();
+
+    let file = std::fs::File::open(zpack_path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    // Try to read and display manifest
+    if let Ok(mut manifest_file) = archive.by_name("manifest.json") {
+        use std::io::Read;
+        let mut manifest_json = String::new();
+        manifest_file.read_to_string(&mut manifest_json)?;
+
+        if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&manifest_json) {
+            println!("{}", "Manifest:".cyan());
+            if let Some(name) = manifest.get("name") {
+                println!("  Name:     {}", name);
+            }
+            if let Some(ver) = manifest.get("package_version") {
+                println!("  Version:  {}", ver);
+            }
+            if let Some(lang) = manifest.get("source_language") {
+                println!("  Language: {}", lang);
+            }
+            if let Some(desc) = manifest.get("description").and_then(|d| d.as_str()) {
+                if !desc.is_empty() {
+                    println!("  Desc:     {}", desc);
+                }
+            }
+            println!();
+        }
+    }
+
+    // Collect entries by type
+    let mut modules = Vec::new();
+    let mut runtimes = Vec::new();
+    let mut other = Vec::new();
+
+    for i in 0..archive.len() {
+        let file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        let size = file.size();
+
+        if name.starts_with("modules/") && name.ends_with(".zbc") {
+            modules.push((name, size));
+        } else if name.starts_with("lib/") && name.ends_with(".zrtl") {
+            runtimes.push((name, size));
+        } else if name != "manifest.json" {
+            other.push((name, size));
+        }
+    }
+
+    // Display modules
+    if !modules.is_empty() {
+        println!("{} ({} files)", "Modules:".cyan(), modules.len());
+        for (name, size) in &modules {
+            let module_name = name
+                .strip_prefix("modules/")
+                .unwrap_or(name)
+                .strip_suffix(".zbc")
+                .unwrap_or(name);
+            if verbose {
+                println!("  {} {}", module_name, format!("[{}]", format_bytes(*size)).dimmed());
+            } else {
+                println!("  {}", module_name);
+            }
+        }
+        println!();
+    }
+
+    // Display runtimes
+    if !runtimes.is_empty() {
+        println!("{} ({} targets)", "Runtimes:".cyan(), runtimes.len());
+        for (name, size) in &runtimes {
+            // Extract target from path like "lib/x86_64-apple-darwin/runtime.zrtl"
+            let target = name
+                .strip_prefix("lib/")
+                .and_then(|s| s.strip_suffix("/runtime.zrtl"))
+                .unwrap_or(name);
+            if verbose {
+                println!("  {} {}", target, format!("[{}]", format_bytes(*size)).dimmed());
+            } else {
+                println!("  {}", target);
+            }
+        }
+        println!();
+    }
+
+    // Display other files if verbose
+    if verbose && !other.is_empty() {
+        println!("{}", "Other files:".dimmed());
+        for (name, size) in &other {
+            println!("  {} [{}]", name, format_bytes(*size));
+        }
+        println!();
+    }
+
+    // Summary
+    let total_size: u64 = modules.iter().map(|(_, s)| *s).sum::<u64>()
+        + runtimes.iter().map(|(_, s)| *s).sum::<u64>()
+        + other.iter().map(|(_, s)| *s).sum::<u64>();
+
+    println!(
+        "{} {} modules, {} runtimes, {} total",
+        "Total:".dimmed(),
+        modules.len(),
+        runtimes.len(),
+        format_bytes(total_size)
+    );
+
+    Ok(())
+}
+
+/// Extract a ZPack archive
+fn pack_extract(
+    zpack_path: &PathBuf,
+    output_dir: Option<&PathBuf>,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+    use zip::read::ZipArchive;
+
+    let output = output_dir.cloned().unwrap_or_else(|| PathBuf::from("."));
+
+    println!("{} {} to {}", "Extracting".green().bold(), zpack_path.display(), output.display());
+
+    let file = std::fs::File::open(zpack_path)?;
+    let mut archive = ZipArchive::new(file)?;
+
+    // Create output directory
+    std::fs::create_dir_all(&output)?;
+
+    let mut extracted = 0;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+
+        let out_path = output.join(&name);
+
+        // Create parent directories
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        // Skip directories
+        if name.ends_with('/') {
+            continue;
+        }
+
+        // Extract file
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        std::fs::write(&out_path, &buffer)?;
+
+        if verbose {
+            println!("  {}", name);
+        }
+
+        extracted += 1;
+    }
+
+    println!("{} Extracted {} files", "✓".green(), extracted);
+
+    Ok(())
+}
+
+/// Show current platform target information
+fn pack_target() -> Result<(), Box<dyn std::error::Error>> {
+    use zyntax_compiler::zpack::{get_current_target_triple, targets};
+
+    let current = get_current_target_triple();
+
+    println!("{}", "Current Platform Target".green().bold());
+    println!();
+    println!("Target Triple: {}", current.cyan());
+    println!();
+    println!("{}", "Commonly Supported Targets:".dimmed());
+    for target in targets::ALL {
+        let marker = if *target == current { " (current)" } else { "" };
+        println!("  {}{}", target, marker.green());
+    }
+    println!();
+    println!("{}", "Usage:".dimmed());
+    println!("  When creating a zpack, use --runtime to add platform-specific runtimes:");
+    println!("  zyntax pack create -o my.zpack -n mylib --runtime {}:/path/to/runtime.zrtl", current);
+
+    Ok(())
 }
