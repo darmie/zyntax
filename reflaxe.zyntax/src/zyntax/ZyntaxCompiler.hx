@@ -156,46 +156,76 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                         // Handle static method calls (like Math.sqrt)
                         switch(fa) {
                             case FStatic(classRef, cf):
-                                // Static method call: Math.sqrt(x) -> $Math$sqrt(x)
-                                var className = classRef.get().name;
-                                var methodName = cf.get().name;
-                                var stdlibFunc = "$" + className + "$" + methodName;
-                                // Use the callee's type (function type) not the call result type
-                                var stdlibCallee: AST.ExprWithPos = {
-                                    expr: AST.Expr.Variable(stdlibFunc),
-                                    ty: convertType(callee.t),
-                                    pos: callee.pos
-                                };
-                                var argExprs = args.map(a -> wrapExpr(a));
-                                AST.Expr.Call(stdlibCallee, argExprs);
+                                var cls = classRef.get();
+                                var field = cf.get();
+                                var className = cls.name;
+                                var methodName = field.name;
 
-                            case FInstance(_, _, cf) | FAnon(cf) | FClosure(_, cf):
-                                // Instance method call: arr.push(x) -> $Array$push(arr, x)
-                                var methodName = cf.get().name;
-                                var objType = switch(obj.t) {
-                                    case TInst(t, _): t.get().name;
+                                // Check if this is an extern function (no implementation)
+                                // A function is extern if: class is extern OR field has no expr
+                                var isExtern = cls.isExtern || field.expr() == null;
+
+                                if (isExtern) {
+                                    // Extern static method: Math.sqrt(x) -> $Math$sqrt(x)
+                                    var stdlibFunc = "$" + className + "$" + methodName;
+                                    var stdlibCallee: AST.ExprWithPos = {
+                                        expr: AST.Expr.Variable(stdlibFunc),
+                                        ty: convertType(callee.t),
+                                        pos: callee.pos
+                                    };
+                                    var argExprs = args.map(a -> wrapExpr(a));
+                                    AST.Expr.Call(stdlibCallee, argExprs);
+                                } else {
+                                    // Non-extern static method - request class compilation and use regular call
+                                    addTypeForCompilation(TInst(classRef, []));
+                                    var calleeExpr = wrapExpr(callee);
+                                    var argExprs = args.map(a -> wrapExpr(a));
+                                    AST.Expr.Call(calleeExpr, argExprs);
+                                }
+
+                            case FInstance(classRef, _, cf):
+                                var field = cf.get();
+                                var methodName = field.name;
+                                var objTypeInfo = switch(obj.t) {
+                                    case TInst(t, params): {name: t.get().name, clsRef: t, params: params, isExtern: t.get().isExtern};
                                     default: null;
                                 };
 
-                                if (methodName != null && objType != null) {
-                                    var stdlibFunc = "$" + objType + "$" + methodName;
-                                    // Build function type: (self, original_args...) -> return_type
-                                    // We need to prepend the object type to the function params
-                                    var funcType = buildInstanceMethodType(obj.t, callee.t);
-                                    var stdlibCallee: AST.ExprWithPos = {
-                                        expr: AST.Expr.Variable(stdlibFunc),
-                                        ty: funcType,
-                                        pos: callee.pos
-                                    };
-                                    var objExpr = wrapExpr(obj);
-                                    var argExprs = args.map(a -> wrapExpr(a));
-                                    AST.Expr.Call(stdlibCallee, [objExpr].concat(argExprs));
+                                if (methodName != null && objTypeInfo != null) {
+                                    // Check if method is extern (no implementation)
+                                    var isExtern = objTypeInfo.isExtern || field.expr() == null;
+
+                                    if (isExtern) {
+                                        // Extern instance method: map.set(k,v) -> $StringMap$set(map, k, v)
+                                        var stdlibFunc = "$" + objTypeInfo.name + "$" + methodName;
+                                        var funcType = buildInstanceMethodType(obj.t, callee.t);
+                                        var stdlibCallee: AST.ExprWithPos = {
+                                            expr: AST.Expr.Variable(stdlibFunc),
+                                            ty: funcType,
+                                            pos: callee.pos
+                                        };
+                                        var objExpr = wrapExpr(obj);
+                                        var argExprs = args.map(a -> wrapExpr(a));
+                                        AST.Expr.Call(stdlibCallee, [objExpr].concat(argExprs));
+                                    } else {
+                                        // Non-extern instance method - request class compilation
+                                        addTypeForCompilation(TInst(objTypeInfo.clsRef, objTypeInfo.params));
+                                        var calleeExpr = wrapExpr(callee);
+                                        var argExprs = args.map(a -> wrapExpr(a));
+                                        AST.Expr.Call(calleeExpr, argExprs);
+                                    }
                                 } else {
                                     // Fallback to regular call
                                     var calleeExpr = wrapExpr(callee);
                                     var argExprs = args.map(a -> wrapExpr(a));
                                     AST.Expr.Call(calleeExpr, argExprs);
                                 }
+
+                            case FAnon(cf) | FClosure(_, cf):
+                                // Anonymous/closure field - use regular call (these have implementations)
+                                var calleeExpr = wrapExpr(callee);
+                                var argExprs = args.map(a -> wrapExpr(a));
+                                AST.Expr.Call(calleeExpr, argExprs);
 
                             default:
                                 // Other field types - regular call
@@ -274,8 +304,17 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                 var cls = clsRef.get();
                 var className = cls.name;
 
-                // Request the class to be compiled (adds to dynamicTypeStack)
-                addTypeForCompilation(TInst(clsRef, params));
+                // Check if this class is extern (no Haxe implementation)
+                // NOTE: Even non-extern classes currently need runtime support because
+                // we don't yet compile instance methods - only static methods are compiled.
+                // Once instance method compilation is added, we can check cls.isExtern
+                // and only use runtime calls for actual extern classes.
+                var isExtern = true; // For now, treat all class instantiations as extern
+
+                if (!isExtern) {
+                    // Non-extern class - request compilation and use regular call
+                    addTypeForCompilation(TInst(clsRef, params));
+                }
 
                 // Generate constructor call: $ClassName$new(args...)
                 var constructorFunc = "$" + className + "$new";
