@@ -1,10 +1,15 @@
 # Zyntax Compiler - Development Backlog
 
-**Last Updated**: November 23, 2025
+**Last Updated**: November 27, 2025
 **Current Status**: Production-Ready Core (100% tests passing, 71/71 Zig tests)
 
 **Recent Progress**:
 
+- ✅ **LLVM Backend Working** (AOT and JIT modes fully functional - functions, structs, generics)
+  - Parameter value mapping for function calls
+  - Struct initialization with InsertValue
+  - Generic function instantiation with comptime
+- ✅ **Comptime Parameter Support** (Zig grammar: `fn foo(comptime T: type, x: T) T`)
 - ✅ **ZynPEG VM Runtime** (No Rust compilation required! JSON command pattern for dynamic AST construction)
   - `pest_vm` for dynamic grammar parsing
   - JSON action blocks in `.zyn` files → runtime interpretation
@@ -199,14 +204,26 @@ No Rust compilation required for grammar users! Dynamic interpretation of JSON a
 
 ## Compiler Infrastructure
 
-### 2. LLVM AOT Backend (MEDIUM PRIORITY)
-**Status**: Framework exists, needs completion
+### 2. LLVM AOT Backend (MEDIUM PRIORITY) ✅ CORE COMPLETE
+
+**Status**: Working for core features (functions, structs, generics)
 **Location**: `crates/compiler/src/llvm_backend.rs`
 
+**Completed (November 27, 2025)**:
+
+- [x] Function calls with parameters (SSA parameter value mapping)
+- [x] Struct initialization (InsertValue instruction)
+- [x] Struct field access (ExtractValue instruction)
+- [x] Generic function instantiation with comptime
+- [x] Both AOT and JIT modes working
+- [x] Basic control flow (if/while)
+- [x] Arithmetic operations
+
 **Remaining Work**:
-- [ ] Complete instruction translation
+
+- [ ] Advanced control flow (switch, pattern matching)
+- [ ] Error union types (try/catch)
 - [ ] Implement optimization passes
-- [ ] Generate executable binaries
 - [ ] Cross-platform testing
 
 ### 3. Bytecode Interpreter (LOW PRIORITY)

@@ -24,7 +24,7 @@
 
 - **Production-Ready stdlib**: Vec, String, HashMap, Iterator (93/100 functions compile)
 
-- **Multi-Backend**: Cranelift JIT (fast) + LLVM AOT (optimized)
+- **Multi-Backend**: Cranelift JIT (fast) + LLVM AOT/JIT (optimized, fully working)
 
 - **HIR Builder API**: Type-safe, fluent interface for IR construction
 
@@ -472,9 +472,10 @@ cargo build --release
 #### ✅ Tiered JIT Compilation
 - **Tier 1**: Cranelift baseline JIT (fast compilation)
 - **Tier 2**: Cranelift optimized (moderate optimizations)
-- **Tier 3**: LLVM JIT (aggressive optimizations for hot paths)
+- **Tier 3**: LLVM JIT (aggressive optimizations for hot paths) - **fully working**
 - Runtime profiling with atomic execution counters
 - Hot-path detection and automatic recompilation
+- LLVM AOT backend for native executables (functions, structs, generics)
 
 #### ✅ Standard Library
 - `Vec<T>` - Dynamic array with push/pop/indexing
@@ -551,7 +552,8 @@ See [BACKLOG.md](BACKLOG.md) for detailed tasks.
 
 ### Q1 2026: Production Features
 
-- 🔄 LLVM AOT backend completion
+- ✅ LLVM AOT/JIT backend core complete (functions, structs, generics, control flow)
+- 🔄 LLVM backend: advanced features (switch, pattern matching, error unions)
 - 🔄 Haxe-style exception handling (throw/catch/finally with stack unwinding)
 - 🔄 Complete I/O and networking standard library
 - 🔄 String operations (needs stdlib integration via plugin system)
