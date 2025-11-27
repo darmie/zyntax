@@ -3971,6 +3971,25 @@ impl SsaBuilder {
     ) -> CompilerResult<HirId> {
         use zyntax_typed_ast::Type as FrontendType;
 
+        // Check if the scrutinee is actually an enum/named type that supports enum patterns
+        // If the scrutinee is a primitive type, enum pattern matching always fails
+        let is_enum_type = matches!(scrutinee_ty,
+            FrontendType::Named { .. } |
+            FrontendType::Union(_) |
+            FrontendType::Optional(_) |
+            FrontendType::Result { .. }
+        );
+
+        if !is_enum_type {
+            // For non-enum types (like integers), enum patterns always fail to match
+            // Return a constant false value
+            let false_val = self.create_value(
+                HirType::Bool,
+                HirValueKind::Constant(crate::hir::HirConstant::Bool(false))
+            );
+            return Ok(false_val);
+        }
+
         // Step 1: Extract discriminant (tag) from enum
         // Enums are typically represented as tagged unions: { tag: u32, payload: union { ... } }
         // The tag is usually at index 0
