@@ -40,18 +40,18 @@ The Zyntax command-line interface provides a unified compilation toolchain with 
 # Build the CLI
 cargo build --release
 
-# Compile and run a program
-zyntax compile input.json -o myprogram --run
+# Compile and run a program with JIT
+zyntax compile input.json --jit
 
 # Multiple input formats supported
-zyntax compile program.zbc --format zbc -o output
-zyntax compile source.zyn --format zyn -o output --jit
+zyntax compile program.zbc --format hir-bytecode -o output
+zyntax compile --source code.calc --grammar calc.zyn --format zyn --jit
 ```
 
 ### CLI Features
 
 - **Dual-Format Support**: Compile from JSON TypedAST or ZBC bytecode
-- **JIT Execution**: Run programs directly with `--run` flag
+- **JIT Execution**: Run programs directly with `--jit` flag
 - **Multiple Backends**: Choose Cranelift (fast) or LLVM (optimized)
 - **Format Auto-Detection**: Automatically detects input format from file extension
 - **Rich Diagnostics**: Clear error messages with source location tracking
@@ -59,17 +59,20 @@ zyntax compile source.zyn --format zyn -o output --jit
 ### Usage Examples
 
 ```bash
-# Compile JSON TypedAST to executable
+# Compile JSON TypedAST to executable (AOT)
 zyntax compile program.json -o myapp
 
-# Compile and run immediately
-zyntax compile program.json --run
+# JIT compile and run immediately
+zyntax compile program.json --jit
 
 # Compile ZBC bytecode format
 zyntax compile program.zbc -o myapp
 
-# Use specific backend
+# Use LLVM backend for maximum optimization
 zyntax compile program.json --backend llvm -o myapp
+
+# JIT with LLVM backend
+zyntax compile program.json --backend llvm --jit
 ```
 
 ---
@@ -192,11 +195,14 @@ WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
 ### CLI Usage
 
 ```bash
-# Compile and run with grammar
-zyntax compile --source input.calc --grammar calc.zyn --format zyn --run
+# JIT compile and run with grammar
+zyntax compile --source input.calc --grammar calc.zyn --format zyn --jit
 
-# Verbose mode shows compilation steps
-zyntax compile -v --source code.mylang --grammar mylang.zyn --format zyn -o output
+# AOT compile to executable
+zyntax compile --source code.mylang --grammar mylang.zyn --format zyn -o output
+
+# Use LLVM backend for maximum optimization
+zyntax compile --source code.mylang --grammar mylang.zyn --backend llvm -o output
 
 # Interactive REPL mode
 zyntax repl --grammar calc.zyn

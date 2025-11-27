@@ -42,12 +42,12 @@ zyntax compile --grammar <grammar.zyn> --source <file> [OPTIONS]
 
 ### Compile and Run (JIT)
 
-The most common workflow - compile and execute immediately:
+The most common workflow - JIT compile and execute immediately:
 
 ```bash
 zyntax compile --grammar crates/zyn_peg/grammars/zig.zyn \
                --source examples/hello.zig \
-               --run
+               --jit
 ```
 
 Output:
@@ -62,11 +62,20 @@ result: main() returned: 42
 | `--grammar` | `-g` | ZynPEG grammar file (.zyn) | Required |
 | `--source` | `-s` | Source file to compile | Required |
 | `--output` | `-o` | Output file path | None |
-| `--backend` | `-b` | Backend: `jit` or `llvm` | `jit` |
+| `--backend` | `-b` | Backend: `cranelift` or `llvm` | `cranelift` |
 | `--opt-level` | `-O` | Optimization: 0-3 | `2` |
-| `--run` | | Execute after compilation (JIT only) | Off |
+| `--jit` | | JIT compile and execute immediately | Off |
 | `--verbose` | `-v` | Show detailed output | Off |
 | `--format` | `-f` | Input format (see below) | `auto` |
+
+### Backends
+
+Zyntax supports two compilation backends:
+
+| Backend | Description | Use Case |
+|---------|-------------|----------|
+| `cranelift` | Fast compilation, good code quality | Development, JIT |
+| `llvm` | Maximum optimization, slower compilation | Production, AOT |
 
 ### Input Formats
 
@@ -81,30 +90,37 @@ The `--format` option controls how input is interpreted:
 
 ### Examples
 
-#### Compile and Run
+#### JIT Compile and Run
 
 ```bash
-# Simple execution
-zyntax compile -g zig.zyn -s test.zig --run
+# Simple execution with Cranelift (fast)
+zyntax compile -g zig.zyn -s test.zig --jit
 
 # With verbose output
-zyntax compile -g zig.zyn -s test.zig --run -v
+zyntax compile -g zig.zyn -s test.zig --jit -v
+
+# JIT with LLVM backend (maximum optimization)
+zyntax compile -g zig.zyn -s test.zig --backend llvm --jit
 ```
 
-#### Compile to Object File (LLVM)
+#### AOT Compile to Executable
 
 ```bash
-zyntax compile -g zig.zyn -s main.zig -b llvm -o main.o
+# Compile to native executable with Cranelift
+zyntax compile -g zig.zyn -s main.zig -o main
+
+# Compile with LLVM for maximum optimization
+zyntax compile -g zig.zyn -s main.zig --backend llvm -o main
 ```
 
 #### Optimization Levels
 
 ```bash
 # No optimization (fastest compile)
-zyntax compile -g zig.zyn -s test.zig -O0 --run
+zyntax compile -g zig.zyn -s test.zig -O0 --jit
 
 # Maximum optimization
-zyntax compile -g zig.zyn -s test.zig -O3 --run
+zyntax compile -g zig.zyn -s test.zig -O3 --jit
 ```
 
 #### Compile TypedAST JSON
@@ -112,7 +128,7 @@ zyntax compile -g zig.zyn -s test.zig -O3 --run
 If you have pre-built TypedAST:
 
 ```bash
-zyntax compile program.json --run
+zyntax compile program.json --jit
 ```
 
 ## The `repl` Command
@@ -130,7 +146,7 @@ zyntax repl --grammar crates/zyn_peg/grammars/zig.zyn
 | Option | Short | Description | Default |
 |--------|-------|-------------|---------|
 | `--grammar` | `-g` | ZynPEG grammar file | Required |
-| `--backend` | `-b` | Backend (JIT only) | `jit` |
+| `--backend` | `-b` | Backend: `cranelift` or `llvm` | `cranelift` |
 | `--opt-level` | `-O` | Optimization: 0-3 | `0` |
 | `--verbose` | `-v` | Show parse details | Off |
 
@@ -223,7 +239,7 @@ When developing a grammar:
 zyntax repl -g mygrammar.zyn
 
 # Test a complete program
-zyntax compile -g mygrammar.zyn -s test.mylang --run
+zyntax compile -g mygrammar.zyn -s test.mylang --jit
 ```
 
 ### Testing Workflow
@@ -239,7 +255,7 @@ fn main() i32 {
 EOF
 
 # Run and verify
-zyntax compile -g zig.zyn -s /tmp/test_arithmetic.zig --run
+zyntax compile -g zig.zyn -s /tmp/test_arithmetic.zig --jit
 # Expected: result: main() returned: 14
 ```
 
@@ -253,7 +269,7 @@ GRAMMAR="crates/zyn_peg/grammars/zig.zyn"
 
 for file in tests/*.zig; do
     echo "Testing: $file"
-    zyntax compile -g "$GRAMMAR" -s "$file" --run
+    zyntax compile -g "$GRAMMAR" -s "$file" --jit
     echo "---"
 done
 ```
@@ -264,7 +280,7 @@ When something doesn't work:
 
 ```bash
 # Step 1: Check parsing with verbose
-zyntax compile -g mygrammar.zyn -s broken.mylang -v --run
+zyntax compile -g mygrammar.zyn -s broken.mylang -v --jit
 
 # Step 2: Simplify the input
 echo "1 + 2" | zyntax repl -g mygrammar.zyn -v
@@ -319,7 +335,7 @@ zyntax repl -g mygrammar.zyn
 When parsing fails unexpectedly:
 
 ```bash
-zyntax compile -g grammar.zyn -s file.src -v --run
+zyntax compile -g grammar.zyn -s file.src -v --jit
 ```
 
 ### 3. Create Minimal Test Cases
@@ -360,7 +376,7 @@ FAIL=0
 
 for test in tests/*.mylang; do
     expected="${test%.mylang}.expected"
-    result=$(zyntax compile -g "$GRAMMAR" -s "$test" --run 2>&1)
+    result=$(zyntax compile -g "$GRAMMAR" -s "$test" --jit 2>&1)
 
     if diff -q <(echo "$result") "$expected" > /dev/null; then
         echo "✓ $test"
@@ -383,10 +399,10 @@ echo "Passed: $PASS, Failed: $FAIL"
 
 ```bash
 # Debug logging
-RUST_LOG=debug zyntax compile -g zig.zyn -s test.zig --run
+RUST_LOG=debug zyntax compile -g zig.zyn -s test.zig --jit
 
 # Full backtrace on errors
-RUST_BACKTRACE=1 zyntax compile -g zig.zyn -s test.zig --run
+RUST_BACKTRACE=1 zyntax compile -g zig.zyn -s test.zig --jit
 ```
 
 ## Next Steps

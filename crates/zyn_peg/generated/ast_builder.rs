@@ -1062,14 +1062,65 @@ impl AstBuilderContext {
             .iter()
             .find(|p| p.as_rule() == Rule::expr)
             .cloned();
+        // Build the actual assignment as a Binary expression with Assign operator
+        let target = child_assign_target
+            .as_ref()
+            .and_then(|p| self.build_assign_target(p.clone()).ok())
+            .unwrap_or_default();
+        let value = child_expr
+            .as_ref()
+            .and_then(|p| self.build_expr(p.clone()).ok())
+            .unwrap_or_default();
+        // Check for compound assignment operators (+=, -=, etc.)
+        let assign_op_str = child_assign_op.as_ref().map(|p| p.as_str()).unwrap_or("=");
+        let assign_expr = if assign_op_str == "=" {
+            // Simple assignment: target = value
+            typed_node(
+                TypedExpression::Binary(TypedBinary {
+                    op: BinaryOp::Assign,
+                    left: Box::new(target),
+                    right: Box::new(value),
+                }),
+                Type::Never,
+                span,
+            )
+        } else {
+            // Compound assignment: target op= value  =>  target = target op value
+            let op = match assign_op_str {
+                "+=" => BinaryOp::Add,
+                "-=" => BinaryOp::Sub,
+                "*=" => BinaryOp::Mul,
+                "/=" => BinaryOp::Div,
+                "%=" => BinaryOp::Mod,
+                "&=" => BinaryOp::BitAnd,
+                "|=" => BinaryOp::BitOr,
+                "^=" => BinaryOp::BitXor,
+                "<<=" => BinaryOp::Shl,
+                ">>=" => BinaryOp::Shr,
+                _ => BinaryOp::Assign, // Fallback
+            };
+            let compound_value = typed_node(
+                TypedExpression::Binary(TypedBinary {
+                    op,
+                    left: Box::new(target.clone()),
+                    right: Box::new(value),
+                }),
+                Type::Never,
+                span,
+            );
+            typed_node(
+                TypedExpression::Binary(TypedBinary {
+                    op: BinaryOp::Assign,
+                    left: Box::new(target),
+                    right: Box::new(compound_value),
+                }),
+                Type::Never,
+                span,
+            )
+        };
         Ok({
             typed_node(
-                TypedStatement::Expression(Box::new(
-                    child_expr
-                        .as_ref()
-                        .and_then(|p| self.build_expr(p.clone()).ok())
-                        .unwrap_or_default(),
-                )),
+                TypedStatement::Expression(Box::new(assign_expr)),
                 Type::Never,
                 span,
             )

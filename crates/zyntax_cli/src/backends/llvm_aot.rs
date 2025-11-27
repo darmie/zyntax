@@ -48,6 +48,13 @@ pub fn compile_llvm(
 
     if verbose {
         info!("Generated {} bytes of LLVM IR", llvm_ir.len());
+        debug!("LLVM IR:\n{}", llvm_ir);
+        // Also write LLVM IR to file for debugging
+        let ir_path = output_path.with_extension("ll");
+        std::fs::write(&ir_path, &llvm_ir).unwrap_or_else(|e| {
+            error!("Failed to write LLVM IR: {}", e);
+        });
+        info!("Wrote LLVM IR to {:?}", ir_path);
     }
 
     // Get target triple for the host machine
@@ -197,36 +204,36 @@ pub fn compile_and_run_llvm(
         .get_function_pointer(main_id)
         .ok_or("Failed to get main function pointer")?;
 
-    if verbose {
-        debug!("Executing main() at {:?}...", fn_ptr);
-    }
+    debug!("Got main function pointer: {:p}", fn_ptr);
+    debug!("About to execute main()...");
 
     // Execute main function
+    // IMPORTANT: Use extern "C" calling convention to match LLVM's default
     let result = unsafe {
         if main_fn.signature.returns.is_empty() {
-            let f: fn() = std::mem::transmute(fn_ptr);
+            let f: extern "C" fn() = std::mem::transmute(fn_ptr);
             f();
             0
         } else {
             match &main_fn.signature.returns[0] {
                 zyntax_compiler::hir::HirType::I32 => {
-                    let f: fn() -> i32 = std::mem::transmute(fn_ptr);
+                    let f: extern "C" fn() -> i32 = std::mem::transmute(fn_ptr);
                     f() as i64
                 }
                 zyntax_compiler::hir::HirType::I64 => {
-                    let f: fn() -> i64 = std::mem::transmute(fn_ptr);
+                    let f: extern "C" fn() -> i64 = std::mem::transmute(fn_ptr);
                     f()
                 }
                 zyntax_compiler::hir::HirType::F32 => {
-                    let f: fn() -> f32 = std::mem::transmute(fn_ptr);
+                    let f: extern "C" fn() -> f32 = std::mem::transmute(fn_ptr);
                     f() as i64
                 }
                 zyntax_compiler::hir::HirType::F64 => {
-                    let f: fn() -> f64 = std::mem::transmute(fn_ptr);
+                    let f: extern "C" fn() -> f64 = std::mem::transmute(fn_ptr);
                     f() as i64
                 }
                 zyntax_compiler::hir::HirType::Void => {
-                    let f: fn() = std::mem::transmute(fn_ptr);
+                    let f: extern "C" fn() = std::mem::transmute(fn_ptr);
                     f();
                     0
                 }

@@ -36,8 +36,8 @@ pub enum Commands {
         #[arg(short, long, value_name = "OUTPUT")]
         output: Option<PathBuf>,
 
-        /// Backend to use (jit, llvm)
-        #[arg(short, long, default_value = "jit")]
+        /// Backend to use (cranelift, llvm)
+        #[arg(short, long, default_value = "cranelift")]
         backend: String,
 
         /// Optimization level (0-3)
@@ -52,9 +52,9 @@ pub enum Commands {
         #[arg(short = 'f', long, default_value = "auto")]
         format: String,
 
-        /// Run the compiled program immediately (JIT only)
+        /// JIT compile and run the program immediately
         #[arg(long)]
-        run: bool,
+        jit: bool,
     },
 
     /// Start an interactive REPL with a ZynPEG grammar
@@ -63,8 +63,8 @@ pub enum Commands {
         #[arg(short, long, value_name = "GRAMMAR")]
         grammar: PathBuf,
 
-        /// Backend to use (jit only for REPL)
-        #[arg(short, long, default_value = "jit")]
+        /// Backend to use (cranelift, llvm)
+        #[arg(short, long, default_value = "cranelift")]
         backend: String,
 
         /// Optimization level (0-3)
@@ -87,7 +87,7 @@ impl Commands {
                 backend,
                 opt_level,
                 format,
-                run,
+                jit,
             } => Some(CompileArgs {
                 input: input.clone(),
                 source: source.clone(),
@@ -96,7 +96,7 @@ impl Commands {
                 backend: backend.clone(),
                 opt_level: *opt_level,
                 format: format.clone(),
-                run: *run,
+                jit: *jit,
             }),
             _ => None,
         }
@@ -127,7 +127,7 @@ pub struct CompileArgs {
     pub backend: String,
     pub opt_level: u8,
     pub format: String,
-    pub run: bool,
+    pub jit: bool,
 }
 
 #[derive(Debug, Clone)]

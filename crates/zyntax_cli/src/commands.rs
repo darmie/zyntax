@@ -15,7 +15,7 @@ pub fn compile(
     backend_str: String,
     opt_level: u8,
     format_str: String,
-    run: bool,
+    jit: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Detect input format
@@ -64,7 +64,7 @@ pub fn compile(
     }
 
     // Compile with selected backend
-    backends::compile(hir_module, backend, output, opt_level, run, verbose)
+    backends::compile(hir_module, backend, output, opt_level, jit, verbose)
 }
 
 /// Display version information

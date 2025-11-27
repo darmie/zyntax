@@ -36,7 +36,7 @@ fn main() {
                     args.backend,
                     args.opt_level,
                     args.format,
-                    args.run,
+                    args.jit,
                     cli.verbose,
                 )
             } else {
