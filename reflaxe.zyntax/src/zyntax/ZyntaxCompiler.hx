@@ -39,58 +39,86 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
             }
         }
 
-        // For now, only process static functions as top-level functions
+        // Build class type for 'self' parameter in instance methods
+        var classInstanceType = AST.ZType.Pointer(AST.ZType.Primitive(classType.name));
+
         var functions = [];
 
         for (func in funcFields) {
+            var params: Array<AST.Param> = [];
+            var funcName: String;
+            var returnType: AST.ZType;
+            var isConstructor = func.field.name == "new";
+
             if (func.isStatic) {
-                var params = func.args.map(arg -> {
+                // Static method: use original name
+                funcName = func.field.name;
+                returnType = convertType(func.ret);
+            } else if (isConstructor) {
+                // Constructor: ClassName$new() -> returns Pointer<ClassName>
+                // Constructors don't take self - they create and return a new instance
+                funcName = classType.name + "$new";
+                returnType = classInstanceType;  // Returns Pointer<ClassName>
+            } else {
+                // Instance method: prefix with ClassName$ and add 'self' parameter
+                funcName = classType.name + "$" + func.field.name;
+                returnType = convertType(func.ret);
+
+                // Add 'self' as first parameter
+                params.push({
+                    name: "self",
+                    ty: classInstanceType,
+                    pos: func.field.pos
+                });
+            }
+
+            // Add regular parameters
+            for (arg in func.args) {
+                params.push({
                     name: arg.getName(),
                     ty: convertType(arg.type),
                     pos: func.field.pos
                 });
+            }
+            var body = func.expr != null ? {
+                expr: compileExpressionOrError(func.expr),
+                ty: convertType(func.expr.t),
+                pos: func.expr.pos
+            } : null;
 
-                var returnType = convertType(func.ret);
-                var body = func.expr != null ? {
-                    expr: compileExpressionOrError(func.expr),
-                    ty: convertType(func.expr.t),
-                    pos: func.expr.pos
-                } : null;
+            // Check if function is external
+            var isExternal = isExternClass || func.expr == null;
+            var linkName: Null<String> = null;
 
-                // Check if function is external
-                var isExternal = isExternClass || func.expr == null;
-                var linkName: Null<String> = null;
+            // For extern class functions, use the function name directly
+            // unless overridden by @:native on the function itself
+            if (isExternal) {
+                linkName = func.field.name;
+            }
 
-                // For extern class functions, use the function name directly
-                // unless overridden by @:native on the function itself
-                if (isExternal) {
-                    linkName = func.field.name;
-                }
-
-                // Check for @:native metadata on the function to override the link name
-                if (func.field.meta != null) {
-                    for (meta in func.field.meta.get()) {
-                        if (meta.name == ":native" && meta.params != null && meta.params.length > 0) {
-                            switch (meta.params[0].expr) {
-                                case EConst(CString(s, _)):
-                                    linkName = s;
-                                    isExternal = true;
-                                default:
-                            }
+            // Check for @:native metadata on the function to override the link name
+            if (func.field.meta != null) {
+                for (meta in func.field.meta.get()) {
+                    if (meta.name == ":native" && meta.params != null && meta.params.length > 0) {
+                        switch (meta.params[0].expr) {
+                            case EConst(CString(s, _)):
+                                linkName = s;
+                                isExternal = true;
+                            default:
                         }
                     }
                 }
-
-                functions.push({
-                    name: func.field.name,
-                    params: params,
-                    return_type: returnType,
-                    body: body,
-                    is_external: isExternal,
-                    link_name: linkName,
-                    pos: func.field.pos
-                });
             }
+
+            functions.push({
+                name: funcName,
+                params: params,
+                return_type: returnType,
+                body: body,
+                is_external: isExternal,
+                link_name: linkName,
+                pos: func.field.pos
+            });
         }
 
         if (functions.length == 0) return null;
@@ -195,25 +223,25 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                                     // Check if method is extern (no implementation)
                                     var isExtern = objTypeInfo.isExtern || field.expr() == null;
 
-                                    if (isExtern) {
-                                        // Extern instance method: map.set(k,v) -> $StringMap$set(map, k, v)
-                                        var stdlibFunc = "$" + objTypeInfo.name + "$" + methodName;
-                                        var funcType = buildInstanceMethodType(obj.t, callee.t);
-                                        var stdlibCallee: AST.ExprWithPos = {
-                                            expr: AST.Expr.Variable(stdlibFunc),
-                                            ty: funcType,
-                                            pos: callee.pos
-                                        };
-                                        var objExpr = wrapExpr(obj);
-                                        var argExprs = args.map(a -> wrapExpr(a));
-                                        AST.Expr.Call(stdlibCallee, [objExpr].concat(argExprs));
-                                    } else {
-                                        // Non-extern instance method - request class compilation
+                                    // Request class compilation for non-extern classes
+                                    if (!isExtern) {
                                         addTypeForCompilation(TInst(objTypeInfo.clsRef, objTypeInfo.params));
-                                        var calleeExpr = wrapExpr(callee);
-                                        var argExprs = args.map(a -> wrapExpr(a));
-                                        AST.Expr.Call(calleeExpr, argExprs);
                                     }
+
+                                    // Instance method call: obj.method(args) -> ClassName$method(obj, args)
+                                    // Use $ prefix for extern (runtime), no prefix for compiled
+                                    var funcName = isExtern
+                                        ? ("$" + objTypeInfo.name + "$" + methodName)
+                                        : (objTypeInfo.name + "$" + methodName);
+                                    var funcType = buildInstanceMethodType(obj.t, callee.t);
+                                    var funcCallee: AST.ExprWithPos = {
+                                        expr: AST.Expr.Variable(funcName),
+                                        ty: funcType,
+                                        pos: callee.pos
+                                    };
+                                    var objExpr = wrapExpr(obj);
+                                    var argExprs = args.map(a -> wrapExpr(a));
+                                    AST.Expr.Call(funcCallee, [objExpr].concat(argExprs));
                                 } else {
                                     // Fallback to regular call
                                     var calleeExpr = wrapExpr(callee);
@@ -300,24 +328,21 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                 compileExpressionImpl(e, topLevel);
 
             case TNew(clsRef, params, args):
-                // Object instantiation: new StringMap<Int>() -> $StringMap$new()
+                // Object instantiation: new Counter() -> Counter$new()
                 var cls = clsRef.get();
                 var className = cls.name;
 
                 // Check if this class is extern (no Haxe implementation)
-                // NOTE: Even non-extern classes currently need runtime support because
-                // we don't yet compile instance methods - only static methods are compiled.
-                // Once instance method compilation is added, we can check cls.isExtern
-                // and only use runtime calls for actual extern classes.
-                var isExtern = true; // For now, treat all class instantiations as extern
+                var isExtern = cls.isExtern;
 
+                // Request the class to be compiled (for non-extern classes)
                 if (!isExtern) {
-                    // Non-extern class - request compilation and use regular call
                     addTypeForCompilation(TInst(clsRef, params));
                 }
 
-                // Generate constructor call: $ClassName$new(args...)
-                var constructorFunc = "$" + className + "$new";
+                // Generate constructor call: ClassName$new(args...) for non-extern
+                // or $ClassName$new(args...) for extern (runtime provided)
+                var constructorFunc = isExtern ? ("$" + className + "$new") : (className + "$new");
                 // Build function type: (arg_types...) -> instance_type
                 var argTypes = args.map(a -> a.t);
                 var constructorType = buildConstructorType(expr.t, argTypes);
