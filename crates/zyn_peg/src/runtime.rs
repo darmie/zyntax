@@ -49,8 +49,8 @@ pub use zyntax_typed_ast::{
     TypedASTBuilder, TypedProgram, TypedNode, TypedDeclaration, TypedExpression,
     TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span, InternedString,
     TypedClass, TypedEnum, TypedField, TypedVariant,
-    typed_ast::TypedVariantFields,
-    type_registry::{Type, PrimitiveType, Mutability, Visibility},
+    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern},
+    type_registry::{Type, PrimitiveType, Mutability, Visibility, ConstValue},
 };
 
 // ============================================================================
@@ -345,6 +345,44 @@ pub trait AstHostFunctions {
 
     /// Create an expression statement (alias)
     fn create_expression_stmt(&mut self, expr: NodeHandle) -> NodeHandle;
+
+    // ========== Pattern Matching ==========
+
+    /// Create a match/switch expression
+    fn create_match_expr(&mut self, scrutinee: NodeHandle, arms: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a match arm (pattern => body)
+    fn create_match_arm(&mut self, pattern: NodeHandle, body: NodeHandle) -> NodeHandle;
+
+    /// Create a literal pattern (matches a specific value)
+    fn create_literal_pattern(&mut self, value: NodeHandle) -> NodeHandle;
+
+    /// Create a wildcard pattern (matches anything, like _ or else)
+    fn create_wildcard_pattern(&mut self) -> NodeHandle;
+
+    /// Create an identifier pattern (variable binding)
+    fn create_identifier_pattern(&mut self, name: &str) -> NodeHandle;
+
+    /// Create a struct pattern: Point { x, y } or Point { x: px }
+    fn create_struct_pattern(&mut self, name: &str, fields: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a struct field pattern: x or x: pattern
+    fn create_field_pattern(&mut self, name: &str, pattern: Option<NodeHandle>) -> NodeHandle;
+
+    /// Create an enum/variant pattern: Some(x), None, Ok(v)
+    fn create_enum_pattern(&mut self, name: &str, variant: &str, fields: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create an array pattern: [x, y, z]
+    fn create_array_pattern(&mut self, elements: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a tuple pattern: (x, y, _)
+    fn create_tuple_pattern(&mut self, elements: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a range pattern: 1..10 or 1..=10
+    fn create_range_pattern(&mut self, start: NodeHandle, end: NodeHandle, inclusive: bool) -> NodeHandle;
+
+    /// Create an or pattern: x | y | z
+    fn create_or_pattern(&mut self, patterns: Vec<NodeHandle>) -> NodeHandle;
 
     // ========== Types ==========
 
@@ -649,6 +687,14 @@ impl ZpegCompiler {
                 // Convert array to a list of command args
                 CommandArg::List(arr.iter().map(Self::json_to_command_arg).collect())
             }
+            serde_json::Value::Object(_) => {
+                // Try to convert to a nested command
+                if let Ok(cmd) = Self::json_value_to_command(value) {
+                    CommandArg::Nested(Box::new(cmd))
+                } else {
+                    CommandArg::StringLit(value.to_string())
+                }
+            }
             _ => CommandArg::StringLit(value.to_string()),
         }
     }
@@ -674,6 +720,22 @@ impl ZpegCompiler {
                     vec![]
                 };
                 return Ok(AstCommand::Call { func: func.to_string(), args });
+            }
+            // Handle nested "define" commands
+            if let Some(node_type) = map.get("define").and_then(|v| v.as_str()) {
+                let args = if let Some(serde_json::Value::Object(obj)) = map.get("args") {
+                    let mut named_args = HashMap::new();
+                    for (key, val) in obj {
+                        named_args.insert(key.clone(), Self::json_to_command_arg(val));
+                    }
+                    NamedArgs(named_args)
+                } else {
+                    NamedArgs::default()
+                };
+                return Ok(AstCommand::Define {
+                    node: node_type.to_string(),
+                    args,
+                });
             }
         }
         Err(ZynPegError::ParseError("Invalid JSON command".into()))
@@ -848,6 +910,12 @@ pub struct TypedAstBuilder {
     variants: HashMap<NodeHandle, TypedVariant>,
     /// Stored struct field initializers (name, value) by handle
     struct_field_inits: HashMap<NodeHandle, (String, NodeHandle)>,
+    /// Stored patterns by handle
+    patterns: HashMap<NodeHandle, TypedNode<TypedPattern>>,
+    /// Stored match arms by handle
+    match_arms: HashMap<NodeHandle, TypedMatchArm>,
+    /// Stored field patterns by handle (for struct patterns)
+    field_patterns: HashMap<NodeHandle, TypedFieldPattern>,
     /// Stored function parameters (name, type) by handle
     params: HashMap<NodeHandle, (String, Type)>,
     /// Stored types by handle (for type resolution)
@@ -878,6 +946,9 @@ impl TypedAstBuilder {
             fields: HashMap::new(),
             variants: HashMap::new(),
             struct_field_inits: HashMap::new(),
+            patterns: HashMap::new(),
+            field_patterns: HashMap::new(),
+            match_arms: HashMap::new(),
             params: HashMap::new(),
             types: HashMap::new(),
             variable_types: HashMap::new(),
@@ -944,6 +1015,30 @@ impl TypedAstBuilder {
     /// Get a variant by handle (cloning it)
     fn get_variant(&self, handle: NodeHandle) -> Option<TypedVariant> {
         self.variants.get(&handle).cloned()
+    }
+
+    /// Get a pattern by handle (cloning it)
+    fn get_pattern(&self, handle: NodeHandle) -> Option<TypedNode<TypedPattern>> {
+        self.patterns.get(&handle).cloned()
+    }
+
+    /// Get a match arm by handle (cloning it)
+    fn get_match_arm(&self, handle: NodeHandle) -> Option<TypedMatchArm> {
+        self.match_arms.get(&handle).cloned()
+    }
+
+    /// Store a pattern and return its handle
+    fn store_pattern(&mut self, pattern: TypedNode<TypedPattern>) -> NodeHandle {
+        let handle = self.alloc_handle();
+        self.patterns.insert(handle, pattern);
+        handle
+    }
+
+    /// Store a match arm and return its handle
+    fn store_match_arm(&mut self, arm: TypedMatchArm) -> NodeHandle {
+        let handle = self.alloc_handle();
+        self.match_arms.insert(handle, arm);
+        handle
     }
 
     /// Get a type from a handle
@@ -1703,6 +1798,297 @@ impl AstHostFunctions for TypedAstBuilder {
         let expr = self.inner.lambda(vec![], body_expr, lambda_type, span);
         self.store_expr(expr)
     }
+
+    fn create_match_expr(&mut self, scrutinee: NodeHandle, arms: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        let scrutinee_expr = self.get_expr(scrutinee)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
+
+        // Collect match arms from handles
+        let typed_arms: Vec<TypedMatchArm> = arms.iter()
+            .filter_map(|h| self.get_match_arm(*h))
+            .collect();
+
+        let match_expr = TypedMatchExpr {
+            scrutinee: Box::new(scrutinee_expr),
+            arms: typed_arms,
+        };
+
+        let expr = TypedNode {
+            node: TypedExpression::Match(match_expr),
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        };
+        self.store_expr(expr)
+    }
+
+    fn create_match_arm(&mut self, pattern: NodeHandle, body: NodeHandle) -> NodeHandle {
+        let span = self.default_span();
+
+        // Get the pattern
+        let typed_pattern = self.get_pattern(pattern)
+            .unwrap_or_else(|| {
+                TypedNode {
+                    node: TypedPattern::Wildcard,
+                    ty: Type::Primitive(PrimitiveType::I32),
+                    span,
+                }
+            });
+
+        // Get the body expression
+        let body_expr = self.get_expr(body)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
+
+        let arm = TypedMatchArm {
+            pattern: Box::new(typed_pattern),
+            guard: None,
+            body: Box::new(body_expr),
+        };
+
+        self.store_match_arm(arm)
+    }
+
+    fn create_literal_pattern(&mut self, value: NodeHandle) -> NodeHandle {
+        let span = self.default_span();
+
+        // Get the expression and extract its literal value for the pattern
+        let literal_pattern = if let Some(expr) = self.get_expr(value) {
+            match &expr.node {
+                TypedExpression::Literal(TypedLiteral::Integer(n)) => {
+                    TypedLiteralPattern::Integer(*n)
+                }
+                TypedExpression::Literal(TypedLiteral::Bool(b)) => {
+                    TypedLiteralPattern::Bool(*b)
+                }
+                TypedExpression::Literal(TypedLiteral::String(s)) => {
+                    TypedLiteralPattern::String(s.clone())
+                }
+                TypedExpression::Literal(TypedLiteral::Char(c)) => {
+                    TypedLiteralPattern::Char(*c)
+                }
+                _ => TypedLiteralPattern::Integer(0),
+            }
+        } else {
+            TypedLiteralPattern::Integer(0)
+        };
+
+        let pattern = TypedNode {
+            node: TypedPattern::Literal(literal_pattern),
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_wildcard_pattern(&mut self) -> NodeHandle {
+        let span = self.default_span();
+
+        let pattern = TypedNode {
+            node: TypedPattern::Wildcard,
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_identifier_pattern(&mut self, name: &str) -> NodeHandle {
+        let span = self.default_span();
+
+        let pattern = TypedNode {
+            node: TypedPattern::Identifier {
+                name: InternedString::new_global(name),
+                mutability: Mutability::Immutable,
+            },
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_struct_pattern(&mut self, name: &str, fields: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect field patterns from handles
+        let typed_fields: Vec<TypedFieldPattern> = fields.iter()
+            .filter_map(|h| self.field_patterns.get(h).cloned())
+            .collect();
+
+        let pattern = TypedNode {
+            node: TypedPattern::Struct {
+                name: InternedString::new_global(name),
+                fields: typed_fields,
+            },
+            // Use a simple primitive type for now - actual type would be resolved by type checker
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_field_pattern(&mut self, name: &str, pattern: Option<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+        let handle = self.alloc_handle();
+
+        // Get the nested pattern, or create an identifier pattern with the same name
+        let nested_pattern = if let Some(p_handle) = pattern {
+            self.get_pattern(p_handle).unwrap_or_else(|| TypedNode {
+                node: TypedPattern::Identifier {
+                    name: InternedString::new_global(name),
+                    mutability: Mutability::Immutable,
+                },
+                ty: Type::Primitive(PrimitiveType::I32),
+                span,
+            })
+        } else {
+            // No explicit pattern means binding with the same name
+            TypedNode {
+                node: TypedPattern::Identifier {
+                    name: InternedString::new_global(name),
+                    mutability: Mutability::Immutable,
+                },
+                ty: Type::Primitive(PrimitiveType::I32),
+                span,
+            }
+        };
+
+        let field_pattern = TypedFieldPattern {
+            name: InternedString::new_global(name),
+            pattern: Box::new(nested_pattern),
+        };
+
+        self.field_patterns.insert(handle, field_pattern);
+        handle
+    }
+
+    fn create_enum_pattern(&mut self, name: &str, variant: &str, fields: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect nested patterns from handles for the enum variant
+        let typed_fields: Vec<TypedNode<TypedPattern>> = fields.iter()
+            .filter_map(|h| self.get_pattern(*h))
+            .collect();
+
+        let pattern = TypedNode {
+            node: TypedPattern::Enum {
+                name: InternedString::new_global(name),
+                variant: InternedString::new_global(variant),
+                fields: typed_fields,
+            },
+            // Use a simple primitive type for now - actual type would be resolved by type checker
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_array_pattern(&mut self, elements: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect nested patterns from handles
+        let typed_elements: Vec<TypedNode<TypedPattern>> = elements.iter()
+            .filter_map(|h| self.get_pattern(*h))
+            .collect();
+
+        let pattern = TypedNode {
+            node: TypedPattern::Array(typed_elements),
+            ty: Type::Array {
+                element_type: Box::new(Type::Primitive(PrimitiveType::I32)),
+                size: Some(ConstValue::Int(elements.len() as i64)),
+                nullability: zyntax_typed_ast::NullabilityKind::NonNull,
+            },
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_tuple_pattern(&mut self, elements: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect nested patterns from handles
+        let typed_elements: Vec<TypedNode<TypedPattern>> = elements.iter()
+            .filter_map(|h| self.get_pattern(*h))
+            .collect();
+
+        // Build tuple type from element types
+        let element_types: Vec<Type> = typed_elements.iter()
+            .map(|p| p.ty.clone())
+            .collect();
+
+        let pattern = TypedNode {
+            node: TypedPattern::Tuple(typed_elements),
+            ty: Type::Tuple(element_types),
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_range_pattern(&mut self, start: NodeHandle, end: NodeHandle, inclusive: bool) -> NodeHandle {
+        let span = self.default_span();
+
+        // Helper to extract literal pattern from a TypedPattern
+        let extract_literal = |pattern_opt: Option<TypedNode<TypedPattern>>| -> TypedNode<TypedLiteralPattern> {
+            if let Some(pattern) = pattern_opt {
+                if let TypedPattern::Literal(lit) = pattern.node {
+                    return TypedNode {
+                        node: lit,
+                        ty: pattern.ty,
+                        span: pattern.span,
+                    };
+                }
+            }
+            // Default to integer 0
+            TypedNode {
+                node: TypedLiteralPattern::Integer(0),
+                ty: Type::Primitive(PrimitiveType::I32),
+                span,
+            }
+        };
+
+        let start_lit = extract_literal(self.get_pattern(start));
+        let end_lit = extract_literal(self.get_pattern(end));
+
+        let pattern = TypedNode {
+            node: TypedPattern::Range {
+                start: Box::new(start_lit),
+                end: Box::new(end_lit),
+                inclusive,
+            },
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
+
+    fn create_or_pattern(&mut self, patterns: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Collect nested patterns from handles
+        let typed_patterns: Vec<TypedNode<TypedPattern>> = patterns.iter()
+            .filter_map(|h| self.get_pattern(*h))
+            .collect();
+
+        // Use the type of the first pattern
+        let ty = typed_patterns.first()
+            .map(|p| p.ty.clone())
+            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+
+        let pattern = TypedNode {
+            node: TypedPattern::Or(typed_patterns),
+            ty,
+            span,
+        };
+
+        self.store_pattern(pattern)
+    }
 }
 
 // ============================================================================
@@ -1962,7 +2348,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
     }
 
     /// Resolve a command argument to a value
-    fn resolve_arg(&self, arg: &CommandArg) -> Result<RuntimeValue> {
+    fn resolve_arg(&mut self, arg: &CommandArg) -> Result<RuntimeValue> {
         match arg {
             CommandArg::ChildRef(ref_str) => {
                 // $1, $2, $name, $text, $result
@@ -1976,17 +2362,58 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             CommandArg::IntLit(n) => Ok(RuntimeValue::Int(*n)),
             CommandArg::BoolLit(b) => Ok(RuntimeValue::Bool(*b)),
             CommandArg::List(items) => {
-                // Resolve each item in the list
-                let resolved: Vec<RuntimeValue> = items.iter()
+                // Resolve each item in the list - need to collect to avoid borrow issues
+                let items_clone: Vec<CommandArg> = items.clone();
+                let resolved: Vec<RuntimeValue> = items_clone.iter()
                     .map(|item| self.resolve_arg(item))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(RuntimeValue::List(resolved))
             }
             CommandArg::Nested(cmd) => {
-                // Execute nested command and return result
-                // This is a simplified version - full impl would need mutable self
-                let _ = cmd;
-                Ok(RuntimeValue::Null)
+                // Execute nested command inline
+                match cmd.as_ref() {
+                    AstCommand::GetChild { index, name } => {
+                        let value = if let Some(idx) = index {
+                            let key = format!("${}", idx + 1);
+                            self.variables.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                        } else if let Some(n) = name {
+                            let key = format!("${}", n);
+                            self.variables.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                        } else {
+                            RuntimeValue::Null
+                        };
+                        Ok(value)
+                    }
+                    AstCommand::GetText => {
+                        let text = self.variables.get("$text")
+                            .cloned()
+                            .unwrap_or(RuntimeValue::String(String::new()));
+                        Ok(text)
+                    }
+                    AstCommand::GetAllChildren => {
+                        let mut children: Vec<RuntimeValue> = Vec::new();
+                        let mut i = 1;
+                        while let Some(val) = self.variables.get(&format!("${}", i)) {
+                            children.push(val.clone());
+                            i += 1;
+                        }
+                        Ok(RuntimeValue::List(children))
+                    }
+                    AstCommand::Define { node, args } => {
+                        // Execute nested define command - resolve its args first
+                        let args_clone = args.clone();
+                        let mut resolved_args: HashMap<String, RuntimeValue> = HashMap::new();
+                        for (key, arg) in &args_clone.0 {
+                            resolved_args.insert(key.clone(), self.resolve_arg(arg)?);
+                        }
+                        self.define_node(node, resolved_args)
+                    }
+                    _ => {
+                        // For other commands that need mutation, we can't execute them here
+                        // This should be rare - most nested args are get_child or define
+                        Ok(RuntimeValue::Null)
+                    }
+                }
             }
         }
     }
@@ -2720,6 +3147,196 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => return Err(crate::error::ZynPegError::CodeGenError("catch: missing rhs".into())),
                 };
                 let handle = self.host.create_binary_op("catch", lhs, rhs);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            // ===== PATTERN MATCHING =====
+
+            "match_expr" | "switch_expr" | "switch" => {
+                let scrutinee = match args.get("scrutinee").or(args.get("expr")).or(args.get("value")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("match_expr: missing scrutinee".into())),
+                };
+                let arms: Vec<NodeHandle> = match args.get("arms").or(args.get("cases")) {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_match_expr(scrutinee, arms);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "match_arm" | "switch_case" | "case" => {
+                let pattern = match args.get("pattern").or(args.get("value")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_wildcard_pattern(),
+                };
+                let body = match args.get("body").or(args.get("result")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("match_arm: missing body".into())),
+                };
+                let handle = self.host.create_match_arm(pattern, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "literal_pattern" => {
+                let value = match args.get("value") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_int_literal(0),
+                };
+                let handle = self.host.create_literal_pattern(value);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "wildcard_pattern" | "else_pattern" => {
+                let handle = self.host.create_wildcard_pattern();
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "identifier_pattern" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "x".to_string(),
+                };
+                let handle = self.host.create_identifier_pattern(&name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "struct_pattern" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "Struct".to_string(),
+                };
+                let fields: Vec<NodeHandle> = match args.get("fields") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_struct_pattern(&name, fields);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "field_pattern" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "field".to_string(),
+                };
+                let pattern = match args.get("pattern") {
+                    Some(RuntimeValue::Node(h)) => Some(*h),
+                    _ => None,
+                };
+                let handle = self.host.create_field_pattern(&name, pattern);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "enum_pattern" | "variant_pattern" => {
+                let name = match args.get("name").or(args.get("enum_name")) {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "Enum".to_string(),
+                };
+                let variant = match args.get("variant") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "Variant".to_string(),
+                };
+                let fields: Vec<NodeHandle> = match args.get("fields") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_enum_pattern(&name, &variant, fields);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "array_pattern" => {
+                let elements: Vec<NodeHandle> = match args.get("elements") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_array_pattern(elements);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "tuple_pattern" => {
+                let elements: Vec<NodeHandle> = match args.get("elements") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_tuple_pattern(elements);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "range_pattern" => {
+                // Create default literal patterns first to avoid double borrow
+                let default_start = {
+                    let int_lit = self.host.create_int_literal(0);
+                    self.host.create_literal_pattern(int_lit)
+                };
+                let default_end = {
+                    let int_lit = self.host.create_int_literal(0);
+                    self.host.create_literal_pattern(int_lit)
+                };
+
+                let start = match args.get("start") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => default_start,
+                };
+                let end = match args.get("end") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => default_end,
+                };
+                let inclusive = match args.get("inclusive") {
+                    Some(RuntimeValue::Bool(b)) => *b,
+                    _ => true,
+                };
+                let handle = self.host.create_range_pattern(start, end, inclusive);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "or_pattern" => {
+                let patterns: Vec<NodeHandle> = match args.get("patterns") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+                let handle = self.host.create_or_pattern(patterns);
                 Ok(RuntimeValue::Node(handle))
             }
 

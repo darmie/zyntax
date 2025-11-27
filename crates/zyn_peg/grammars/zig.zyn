@@ -495,9 +495,129 @@ call_args = { expr ~ ("," ~ expr)* }
   }
 
 // Atom: the base of postfix expressions
-atom = { try_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | type_value | identifier_expr | paren_expr }
+atom = { switch_expr | try_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | type_value | identifier_expr | paren_expr }
   -> TypedExpression {
       "get_child": { "index": 0 }
+  }
+
+// ===== Switch Expression =====
+
+// switch (expr) { cases... }
+switch_expr = { "switch" ~ "(" ~ expr ~ ")" ~ "{" ~ switch_cases? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "switch_expr", "args": {
+              "scrutinee": "$1",
+              "cases": "$2"
+          }}
+      ]
+  }
+
+switch_cases = { switch_case ~ ("," ~ switch_case)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+// Handle both value => expr and else => expr
+switch_case = { switch_case_value | switch_case_else }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Value case: pattern => expr
+switch_case_value = { switch_pattern ~ "=>" ~ expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "switch_case", "args": {
+              "pattern": { "get_child": { "index": 0 } },
+              "body": { "get_child": { "index": 1 } }
+          }}
+      ]
+  }
+
+// Else case: else => expr
+switch_case_else = { "else" ~ "=>" ~ expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "switch_case", "args": {
+              "pattern": { "define": "wildcard_pattern" },
+              "body": "$1"
+          }}
+      ]
+  }
+
+// Pattern for switch case - supports various pattern types
+switch_pattern = { switch_or_pattern }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Or pattern: 1 | 2 | 3
+// For now, simplified to just pass through the first pattern
+// TODO: Implement proper or_pattern support when multiple alternatives
+switch_or_pattern = { switch_primary_pattern ~ ("|" ~ switch_primary_pattern)* }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Primary patterns (non-or)
+switch_primary_pattern = { switch_range_pattern | switch_array_pattern | switch_literal_pattern | switch_wildcard_pattern | switch_identifier_pattern }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Range pattern: 1..10 or 'a'..'z'
+switch_range_pattern = { switch_simple_literal ~ ".." ~ switch_simple_literal }
+  -> TypedExpression {
+      "commands": [
+          { "define": "range_pattern", "args": {
+              "start": { "define": "literal_pattern", "args": { "value": "$1" } },
+              "end": { "define": "literal_pattern", "args": { "value": "$2" } },
+              "inclusive": false
+          }}
+      ]
+  }
+
+// Array pattern: [a, b, c] or .{a, b}
+switch_array_pattern = { ".{" ~ switch_array_elements? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "array_pattern", "args": { "elements": "$1" } }
+      ]
+  }
+
+switch_array_elements = { switch_pattern ~ ("," ~ switch_pattern)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+// Literal patterns (integers, strings, chars, bools)
+switch_literal_pattern = { switch_simple_literal }
+  -> TypedExpression {
+      "commands": [
+          { "define": "literal_pattern", "args": { "value": "$1" } }
+      ]
+  }
+
+switch_simple_literal = { integer_literal | string_literal }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Wildcard pattern: _
+switch_wildcard_pattern = { "_" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "wildcard_pattern" }
+      ]
+  }
+
+// Identifier pattern (variable binding): x, value
+switch_identifier_pattern = { identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "identifier_pattern", "args": { "name": { "text": "$1" } } }
+      ]
   }
 
 // Type as a value (for comptime type parameters)
@@ -597,7 +717,7 @@ escape_seq = { "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "0") }
 keyword = @{
     ("struct" | "enum" | "fn" | "const" | "var" | "if" | "else" | "while" | "for" |
      "return" | "break" | "continue" | "try" | "and" | "or" | "true" | "false" |
-     "comptime" | "type" |
+     "comptime" | "type" | "switch" |
      "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void")
     ~ !(ASCII_ALPHANUMERIC | "_")
 }

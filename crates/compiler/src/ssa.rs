@@ -3412,6 +3412,8 @@ impl SsaBuilder {
     ) -> CompilerResult<HirId> {
         use zyntax_typed_ast::typed_ast::{TypedPattern, TypedLiteralPattern};
 
+        log::debug!("[SSA] translate_pattern_test: pattern={:?}", pattern.node);
+
         match &pattern.node {
             // Wildcard always matches
             TypedPattern::Wildcard => {

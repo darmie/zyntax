@@ -1050,6 +1050,8 @@ impl TypedCfgBuilder {
     ) -> Option<TypedNode<TypedExpression>> {
         use zyntax_typed_ast::typed_ast::{TypedBinary, BinaryOp, TypedLiteral};
 
+        log::debug!("[CFG] generate_pattern_check: pattern={:?}", pattern.node);
+
         match &pattern.node {
             // Wildcard always matches - no check needed
             TypedPattern::Wildcard => None,
