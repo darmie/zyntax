@@ -293,6 +293,18 @@ class HirBuilder {
                 // TODO: Implement loop control flow
                 null;
 
+            case For(varName, varType, iterator, body):
+                // TODO: Implement for-in loop control flow
+                null;
+
+            case Break:
+                // TODO: Implement break in loops
+                null;
+
+            case Continue:
+                // TODO: Implement continue in loops
+                null;
+
             case FloatLiteral(value):
                 createConstant(HirConstant.F64(value), HirType.F64);
         }

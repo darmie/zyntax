@@ -104,41 +104,33 @@ fn merge_programs(
 /// Add runtime function declarations to the TypedProgram so lowering pass knows about them
 fn add_runtime_function_declarations(program: &mut TypedProgram, arena: &mut AstArena) {
     use zyntax_typed_ast::{Type, PrimitiveType, TypedFunction, TypedDeclaration, TypedNode, Span, Visibility, CallingConvention, ParamInfo, NullabilityKind, AsyncKind, Mutability};
-    use zyntax_typed_ast::typed_ast::{TypedBlock, TypedParameter, ParameterKind};
+    use zyntax_typed_ast::typed_ast::{TypedParameter, ParameterKind};
 
     let string_type = Type::Primitive(PrimitiveType::String);
+    let i32_type = Type::Primitive(PrimitiveType::I32);
+    let bool_type = Type::Primitive(PrimitiveType::Bool);
     let unit_type = Type::Primitive(PrimitiveType::Unit);
     let zero_span = Span { start: 0, end: 0 };
 
-    // Declare $String$println
-    let println_name = arena.intern_string("$String$println");
-    let println_func = TypedFunction {
-        name: println_name,
-        type_params: vec![],
-        params: vec![TypedParameter {
-            name: arena.intern_string("s"),
-            ty: string_type.clone(),
-            mutability: Mutability::Immutable,
-            kind: ParameterKind::Regular,
-            default_value: None,
-            attributes: vec![],
-            span: zero_span,
-        }],
-        return_type: unit_type.clone(),
-        body: None, // External function
-        visibility: Visibility::Public,
-        is_async: false,
-        is_external: true,
-        calling_convention: CallingConvention::Cdecl,
-        link_name: None,
-    };
+    // Helper to create an external function declaration
+    let mut add_extern_func = |name: &str, params: Vec<(&str, Type)>, return_type: Type| {
+        let func_name = arena.intern_string(name);
+        let typed_params: Vec<TypedParameter> = params.iter().map(|(pname, ty)| {
+            TypedParameter {
+                name: arena.intern_string(pname),
+                ty: ty.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: zero_span,
+            }
+        }).collect();
 
-    program.declarations.insert(0, TypedNode {
-        node: TypedDeclaration::Function(println_func),
-        ty: Type::Function {
-            params: vec![ParamInfo {
-                name: Some(arena.intern_string("s")),
-                ty: string_type.clone(),
+        let param_infos: Vec<ParamInfo> = params.iter().map(|(pname, ty)| {
+            ParamInfo {
+                name: Some(arena.intern_string(pname)),
+                ty: ty.clone(),
                 is_optional: false,
                 is_varargs: false,
                 is_keyword_only: false,
@@ -146,17 +138,128 @@ fn add_runtime_function_declarations(program: &mut TypedProgram, arena: &mut Ast
                 is_out: false,
                 is_ref: false,
                 is_inout: false,
-            }],
-            return_type: Box::new(unit_type),
-            is_varargs: false,
-            has_named_params: false,
-            has_default_params: false,
-            async_kind: AsyncKind::Sync,
+            }
+        }).collect();
+
+        let func = TypedFunction {
+            name: func_name,
+            type_params: vec![],
+            params: typed_params,
+            return_type: return_type.clone(),
+            body: None,
+            visibility: Visibility::Public,
+            is_async: false,
+            is_external: true,
             calling_convention: CallingConvention::Cdecl,
-            nullability: NullabilityKind::NonNull,
-        },
-        span: zero_span,
-    });
+            link_name: None,
+        };
+
+        program.declarations.insert(0, TypedNode {
+            node: TypedDeclaration::Function(func),
+            ty: Type::Function {
+                params: param_infos,
+                return_type: Box::new(return_type),
+                is_varargs: false,
+                has_named_params: false,
+                has_default_params: false,
+                async_kind: AsyncKind::Sync,
+                calling_convention: CallingConvention::Cdecl,
+                nullability: NullabilityKind::NonNull,
+            },
+            span: zero_span,
+        });
+    };
+
+    // ========== String Runtime Functions ==========
+    // $String$println - print string with newline
+    add_extern_func("$String$println", vec![("s", string_type.clone())], unit_type.clone());
+
+    // $String$concat - concatenate two strings
+    add_extern_func("$String$concat", vec![("s1", string_type.clone()), ("s2", string_type.clone())], string_type.clone());
+
+    // $String$length - get string length
+    add_extern_func("$String$length", vec![("s", string_type.clone())], i32_type.clone());
+
+    // $String$charAt - get character at index
+    add_extern_func("$String$charAt", vec![("s", string_type.clone()), ("index", i32_type.clone())], string_type.clone());
+
+    // $String$charCodeAt - get char code at index
+    add_extern_func("$String$charCodeAt", vec![("s", string_type.clone()), ("index", i32_type.clone())], i32_type.clone());
+
+    // $String$substring - extract substring
+    add_extern_func("$String$substring", vec![("s", string_type.clone()), ("start", i32_type.clone()), ("end", i32_type.clone())], string_type.clone());
+
+    // $String$substr - extract substr (different semantics)
+    add_extern_func("$String$substr", vec![("s", string_type.clone()), ("pos", i32_type.clone()), ("len", i32_type.clone())], string_type.clone());
+
+    // $String$indexOf - find substring
+    add_extern_func("$String$indexOf", vec![("s", string_type.clone()), ("sub", string_type.clone())], i32_type.clone());
+
+    // $String$lastIndexOf - find last occurrence of substring
+    add_extern_func("$String$lastIndexOf", vec![("s", string_type.clone()), ("sub", string_type.clone())], i32_type.clone());
+
+    // $String$toUpperCase - convert to uppercase
+    add_extern_func("$String$toUpperCase", vec![("s", string_type.clone())], string_type.clone());
+
+    // $String$toLowerCase - convert to lowercase
+    add_extern_func("$String$toLowerCase", vec![("s", string_type.clone())], string_type.clone());
+
+    // $String$equals - string equality comparison
+    add_extern_func("$String$equals", vec![("s1", string_type.clone()), ("s2", string_type.clone())], bool_type.clone());
+
+    // $String$fromCString - convert C string to runtime string
+    add_extern_func("$String$fromCString", vec![("cstr", string_type.clone())], string_type.clone());
+
+    // ========== Array Runtime Functions ==========
+    // Note: Arrays are polymorphic, but we use i32 as default element type for now
+    // $Array$length - get array length
+    add_extern_func("$Array$length", vec![("arr", i32_type.clone())], i32_type.clone());
+
+    // $Array$push - add element to end
+    add_extern_func("$Array$push", vec![("arr", i32_type.clone()), ("elem", i32_type.clone())], i32_type.clone());
+
+    // $Array$pop - remove and return last element
+    add_extern_func("$Array$pop", vec![("arr", i32_type.clone())], i32_type.clone());
+
+    // $Array$shift - remove and return first element
+    add_extern_func("$Array$shift", vec![("arr", i32_type.clone())], i32_type.clone());
+
+    // $Array$unshift - add element to beginning
+    add_extern_func("$Array$unshift", vec![("arr", i32_type.clone()), ("elem", i32_type.clone())], i32_type.clone());
+
+    // $Array$indexOf - find element index
+    add_extern_func("$Array$indexOf", vec![("arr", i32_type.clone()), ("elem", i32_type.clone())], i32_type.clone());
+
+    // $Array$contains - check if element exists
+    add_extern_func("$Array$contains", vec![("arr", i32_type.clone()), ("elem", i32_type.clone())], bool_type.clone());
+
+    // $Array$remove - remove first occurrence of element
+    add_extern_func("$Array$remove", vec![("arr", i32_type.clone()), ("elem", i32_type.clone())], bool_type.clone());
+
+    // $Array$insert - insert element at index
+    add_extern_func("$Array$insert", vec![("arr", i32_type.clone()), ("index", i32_type.clone()), ("elem", i32_type.clone())], unit_type.clone());
+
+    // $Array$copy - create a copy of the array
+    add_extern_func("$Array$copy", vec![("arr", i32_type.clone())], i32_type.clone());
+
+    // $Array$reverse - reverse array in place
+    add_extern_func("$Array$reverse", vec![("arr", i32_type.clone())], unit_type.clone());
+
+    // $Array$get - get element at index
+    add_extern_func("$Array$get", vec![("arr", i32_type.clone()), ("index", i32_type.clone())], i32_type.clone());
+
+    // $Array$set - set element at index
+    add_extern_func("$Array$set", vec![("arr", i32_type.clone()), ("index", i32_type.clone()), ("elem", i32_type.clone())], unit_type.clone());
+
+    // $Array$create - create a new array (variadic, but simplified)
+    add_extern_func("$Array$create", vec![], i32_type.clone());
+
+    // ========== Integer/Number Utility Functions ==========
+    // println_i32 - print integer
+    add_extern_func("println_i32", vec![("n", i32_type.clone())], unit_type.clone());
+
+    // print_i32 - print integer without newline
+    add_extern_func("print_i32", vec![("n", i32_type.clone())], unit_type.clone());
 }
 
 fn typed_ast_to_hir(

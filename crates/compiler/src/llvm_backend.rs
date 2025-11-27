@@ -2745,6 +2745,10 @@ impl<'ctx> LLVMBackend<'ctx> {
         use HirType::*;
 
         let result = match ty {
+            Void => {
+                // Void/Unit is represented as an empty struct (zero-sized type)
+                self.context.struct_type(&[], false).into()
+            }
             I8 => self.context.i8_type().into(),
             I16 => self.context.i16_type().into(),
             I32 => self.context.i32_type().into(),

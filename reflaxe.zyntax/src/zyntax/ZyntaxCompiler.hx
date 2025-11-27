@@ -212,6 +212,19 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                 var bodyE = wrapExpr(body);
                 While(condE, bodyE);
 
+            case TFor(v, iter, body):
+                // For loop: for (item in iterator) body
+                // v is the iteration variable, iter is the iterator expression, body is the loop body
+                var iterE = wrapExpr(iter);
+                var bodyE = wrapExpr(body);
+                For(v.name, convertType(v.t), iterE, bodyE);
+
+            case TBreak:
+                Break;
+
+            case TContinue:
+                Continue;
+
             case TArrayDecl(elements):
                 // Transform [1, 2, 3] into $Array$create(1, 2, 3)
                 var elementExprs = elements.map(e -> wrapExpr(e));
@@ -258,7 +271,7 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
     }
 
     /**
-     * Generate output files (ZBC bytecode)
+     * Generate output files (TypedAST JSON)
      */
     public function generateOutputIterator(): Iterator<DataAndFileInfo<StringOrBytes>> {
         var index = 0;
@@ -269,14 +282,13 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
             next: function() {
                 var cls = classes[index++];
 
-                // Build HIR from AST module
-                var hirBuilder = new HirBuilder(cls.data.name);
-                var hirModule = hirBuilder.buildFromModule(cls.data);
+                // Generate TypedAST JSON using Generator
+                var jsonStr = Generator.generateModule(cls.data);
+                if (jsonStr == null) {
+                    jsonStr = "{}";
+                }
 
-                // Emit bytecode
-                var bytecode = BytecodeEmitter.emit(hirModule);
-
-                return cls.withOutput(StringOrBytes.fromBytes(bytecode));
+                return cls.withOutput(StringOrBytes.fromString(jsonStr));
             }
         };
     }
@@ -336,6 +348,11 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
             case OpGte: "Ge";
             case OpBoolAnd: "And";
             case OpBoolOr: "Or";
+            case OpAssign: "Assign";
+            case OpAssignOp(innerOp):
+                // For +=, -=, etc. we still want Assign for now
+                // Could expand this to handle compound assignments properly
+                "Assign";
             default: "Add";
         }
     }

@@ -26,7 +26,6 @@ use inkwell::{
     execution_engine::ExecutionEngine,
     targets::{InitializationConfig, Target},
 };
-
 use crate::{CompilerError, CompilerResult};
 use crate::hir::{HirModule, HirFunction, HirId};
 use crate::llvm_backend::LLVMBackend;
@@ -47,6 +46,10 @@ pub struct LLVMJitBackend<'ctx> {
 
     /// Optimization level
     opt_level: OptimizationLevel,
+
+    /// Runtime symbols to register with the execution engine
+    /// Maps function name to function pointer address
+    runtime_symbols: IndexMap<String, usize>,
 }
 
 impl<'ctx> LLVMJitBackend<'ctx> {
@@ -69,7 +72,22 @@ impl<'ctx> LLVMJitBackend<'ctx> {
             execution_engine: None,
             function_pointers: IndexMap::new(),
             opt_level,
+            runtime_symbols: IndexMap::new(),
         })
+    }
+
+    /// Register a runtime symbol that will be available to JIT-compiled code
+    ///
+    /// Call this before `compile_module` to make external functions available.
+    pub fn register_symbol(&mut self, name: impl Into<String>, ptr: *const u8) {
+        self.runtime_symbols.insert(name.into(), ptr as usize);
+    }
+
+    /// Register multiple runtime symbols at once
+    pub fn register_symbols(&mut self, symbols: &[(&str, *const u8)]) {
+        for (name, ptr) in symbols {
+            self.runtime_symbols.insert((*name).to_string(), *ptr as usize);
+        }
     }
 
     /// Compile a full HIR module
@@ -84,21 +102,46 @@ impl<'ctx> LLVMJitBackend<'ctx> {
         let mut backend = LLVMBackend::new(self.context, "zyntax_jit");
         let _llvm_ir = backend.compile_module(hir_module)?;
 
-        // Step 2: Create execution engine from the FULLY POPULATED module
-        // This is critical - MCJIT takes ownership of the module and compiles it
-        let execution_engine = backend.into_module()
+        // Step 2: Collect external function declarations from the module BEFORE consuming it
+        // We need the function values for add_global_mapping
+        let mut external_functions: Vec<(String, inkwell::values::FunctionValue<'ctx>)> = Vec::new();
+        for (_, function) in &hir_module.functions {
+            if function.is_external {
+                if let Some(name) = function.name.resolve_global() {
+                    if let Some(llvm_func) = backend.module().get_function(&name) {
+                        external_functions.push((name, llvm_func));
+                    }
+                }
+            }
+        }
+
+        // Step 3: Consume the module and create execution engine
+        let module = backend.into_module();
+        let execution_engine = module
             .create_jit_execution_engine(self.opt_level)
             .map_err(|e| CompilerError::Backend(format!("Failed to create JIT execution engine: {}", e)))?;
 
-        // Step 3: Extract function pointers from the execution engine
+        // Step 4: Register runtime symbols with the execution engine using add_global_mapping
+        for (name, llvm_func) in &external_functions {
+            if let Some(addr) = self.runtime_symbols.get(name) {
+                execution_engine.add_global_mapping(llvm_func, *addr);
+                log::debug!("Registered runtime symbol '{}' at address 0x{:x}", name, addr);
+            }
+        }
+
+        // Step 5: Extract function pointers from the execution engine
         for (id, function) in &hir_module.functions {
+            // Skip external functions - they don't have compiled code in this module
+            if function.is_external {
+                continue;
+            }
+
             // Must match naming logic in llvm_backend.rs:
-            // - External functions use their actual name for linking
             // - Main function uses actual name for entry point
             // - Other functions use mangled name with HirId
             let actual_name = function.name.resolve_global()
                 .unwrap_or_else(|| format!("{:?}", function.name));
-            let fn_name = if function.is_external || actual_name == "main" {
+            let fn_name = if actual_name == "main" {
                 actual_name
             } else {
                 format!("func_{:?}", id)

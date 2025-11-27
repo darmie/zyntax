@@ -766,9 +766,10 @@ pub enum Mutability {
 }
 
 /// Visibility annotation
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum Visibility {
     Public,
+    #[default]
     Private,
     Protected,
     Internal,

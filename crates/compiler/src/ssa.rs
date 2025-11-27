@@ -1982,19 +1982,39 @@ impl SsaBuilder {
             // After IDF placement, don't create new phis
             // Instead, try to read from predecessors to find the value
             if self.idf_placement_done {
-                // Try reading from each predecessor
+                // CRITICAL: Create a temporary placeholder phi to break cycles in loops
+                // Without this, while loop CFG (header -> body -> header) causes infinite recursion
+                let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
+                let placeholder = self.create_value(ty.clone(), HirValueKind::Instruction);
+
+                // Write the placeholder to break cycles
+                self.write_variable(var, block, placeholder);
+
+                // Now try reading from each predecessor
+                let mut found_value = None;
                 for pred in &predecessors {
                     let val = self.read_variable(var, *pred);
-                    // Check if it's not undef
-                    if let Some(v) = self.function.values.get(&val) {
-                        if !matches!(v.kind, HirValueKind::Undef) {
-                            return val;
+                    // Check if it's not undef and not our placeholder
+                    if val != placeholder {
+                        if let Some(v) = self.function.values.get(&val) {
+                            if !matches!(v.kind, HirValueKind::Undef) {
+                                found_value = Some(val);
+                                break;
+                            }
                         }
                     }
                 }
-                // All predecessors returned undef - variable is truly undefined
-                let ty = self.var_types.get(&var).cloned().unwrap_or(HirType::I64);
-                return self.create_undef(ty);
+
+                if let Some(val) = found_value {
+                    // Found a real value - update definition to use it
+                    self.write_variable(var, block, val);
+                    return val;
+                }
+
+                // All predecessors returned undef or placeholder - variable is truly undefined
+                let undef = self.create_undef(ty);
+                self.write_variable(var, block, undef);
+                return undef;
             }
 
             let ty = self.var_types.get(&var).cloned()

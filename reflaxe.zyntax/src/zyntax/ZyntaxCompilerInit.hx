@@ -35,7 +35,7 @@ class ZyntaxCompilerInit {
                 RemoveLocalVariableAliases,
                 MarkUnusedVariables,
             ],
-            fileOutputExtension: ".zbc",
+            fileOutputExtension: ".json",
             outputDirDefineName: "zyntax-output",
             fileOutputType: FilePerClass,
             reservedVarNames: reservedNames(),

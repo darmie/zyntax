@@ -60,16 +60,24 @@ pub enum TypedDeclaration {
 }
 
 /// Function declaration
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TypedFunction {
+    #[serde(default)]
     pub name: InternedString,
+    #[serde(default)]
     pub type_params: Vec<TypedTypeParam>,  // Generic type parameters
+    #[serde(default)]
     pub params: Vec<TypedParameter>,
+    #[serde(default)]
     pub return_type: Type,
     pub body: Option<TypedBlock>,  // None for extern functions
+    #[serde(default)]
     pub visibility: Visibility,
+    #[serde(default)]
     pub is_async: bool,
+    #[serde(default)]
     pub is_external: bool,  // True for extern/foreign functions
+    #[serde(default)]
     pub calling_convention: CallingConvention,  // Calling convention (C, Rust, System, etc.)
     pub link_name: Option<InternedString>,  // Override symbol name for linking
 }

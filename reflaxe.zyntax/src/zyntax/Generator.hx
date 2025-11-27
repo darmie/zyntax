@@ -145,6 +145,65 @@ function generateStatement(exprWithPos: AST.ExprWithPos): Dynamic {
                 span: posToSpan(pos)
             };
 
+        case For(varName, varType, iterator, body):
+            // For-in loop as statement
+            {
+                node: {
+                    For: {
+                        pattern: {
+                            node: {
+                                Identifier: {
+                                    name: varName,
+                                    mutability: "Mutable"
+                                }
+                            },
+                            ty: generateType(varType),
+                            span: posToSpan(pos)
+                        },
+                        iterator: generateExpression(iterator),
+                        body: {
+                            statements: [generateStatement({expr: body.expr, ty: body.ty, pos: body.pos})],
+                            span: posToSpan(body.pos)
+                        }
+                    }
+                },
+                ty: stmtTy,
+                span: posToSpan(pos)
+            };
+
+        case While(cond, body):
+            // While loop as statement
+            {
+                node: {
+                    While: {
+                        condition: generateExpression(cond),
+                        body: {
+                            statements: [generateStatement({expr: body.expr, ty: body.ty, pos: body.pos})],
+                            span: posToSpan(body.pos)
+                        },
+                        span: posToSpan(pos)
+                    }
+                },
+                ty: stmtTy,
+                span: posToSpan(pos)
+            };
+
+        case Break:
+            {
+                node: {
+                    Break: null
+                },
+                ty: stmtTy,
+                span: posToSpan(pos)
+            };
+
+        case Continue:
+            {
+                node: "Continue",
+                ty: stmtTy,
+                span: posToSpan(pos)
+            };
+
         default:
             {
                 node: {
@@ -255,6 +314,48 @@ function generateExpression(exprWithPos: AST.ExprWithPos): Dynamic {
                         body: generateExpression(body)
                     }
                 },
+                ty: ty,
+                span: posToSpan(pos)
+            };
+
+        case For(varName, varType, iterator, body):
+            // For-in loop: generates TypedFor with pattern and iterator
+            {
+                node: {
+                    For: {
+                        pattern: {
+                            node: {
+                                Identifier: {
+                                    name: varName,
+                                    mutability: "Mutable"
+                                }
+                            },
+                            ty: generateType(varType),
+                            span: posToSpan(pos)
+                        },
+                        iterator: generateExpression(iterator),
+                        body: {
+                            statements: [generateStatement({expr: body.expr, ty: body.ty, pos: body.pos})],
+                            span: posToSpan(body.pos)
+                        }
+                    }
+                },
+                ty: ty,
+                span: posToSpan(pos)
+            };
+
+        case Break:
+            {
+                node: {
+                    Break: null
+                },
+                ty: ty,
+                span: posToSpan(pos)
+            };
+
+        case Continue:
+            {
+                node: "Continue",
                 ty: ty,
                 span: posToSpan(pos)
             };

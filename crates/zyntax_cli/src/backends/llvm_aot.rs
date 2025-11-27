@@ -161,6 +161,31 @@ pub fn compile_and_run_llvm(
         info!("Initializing LLVM JIT backend...");
     }
 
+    // Create plugin registry and register all available runtime plugins
+    let mut registry = zyntax_compiler::plugin::PluginRegistry::new();
+
+    // Register standard library plugin (generic I/O functions)
+    registry.register(zyntax_runtime::get_plugin())
+        .map_err(|e| format!("Failed to register stdlib plugin: {}", e))?;
+
+    // Register Haxe plugin (frontend-specific runtime)
+    registry.register(haxe_zyntax_runtime::get_plugin())
+        .map_err(|e| format!("Failed to register Haxe plugin: {}", e))?;
+
+    if verbose {
+        info!("Registered plugins: {:?}", registry.list_plugins());
+    }
+
+    // Collect all runtime symbols from registered plugins
+    let runtime_symbols = registry.collect_symbols();
+
+    if verbose {
+        info!("Collected {} runtime symbols", runtime_symbols.len());
+        for (name, _) in &runtime_symbols {
+            debug!("  - {}", name);
+        }
+    }
+
     // Create LLVM context
     let context = Context::create();
 
@@ -175,6 +200,11 @@ pub fn compile_and_run_llvm(
     // Create JIT backend
     let mut backend = LLVMJitBackend::with_opt_level(&context, llvm_opt)
         .map_err(|e| format!("Failed to create JIT backend: {}", e))?;
+
+    // Register runtime symbols with the LLVM JIT backend
+    for (name, ptr) in &runtime_symbols {
+        backend.register_symbol(*name, *ptr);
+    }
 
     if verbose {
         info!("Compiling module with LLVM JIT...");

@@ -81,6 +81,9 @@ enum Expr {
     Let(name: String, ty: ZType, init: Null<ExprWithPos>);
     If(cond: ExprWithPos, thenExpr: ExprWithPos, elseExpr: Null<ExprWithPos>);
     While(cond: ExprWithPos, body: ExprWithPos);
+    For(varName: String, varType: ZType, iterator: ExprWithPos, body: ExprWithPos);
+    Break;
+    Continue;
 }
 
 #end
