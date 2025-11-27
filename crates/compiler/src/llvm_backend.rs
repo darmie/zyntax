@@ -227,7 +227,8 @@ impl<'ctx> LLVMBackend<'ctx> {
         // Clear block, value, and phi maps for this function
         self.block_map.clear();
         self.phi_map.clear();
-        // Note: We keep function parameters in value_map from declare_function
+        self.value_map.clear();  // Clear value_map between functions
+        self.type_map.clear();   // Clear type_map between functions
 
         // Map function parameters to HIR value IDs and store their types
         for (i, param) in func.signature.params.iter().enumerate() {
@@ -236,12 +237,20 @@ impl<'ctx> LLVMBackend<'ctx> {
             self.type_map.insert(param.id, param.ty.clone());
         }
 
-        // Map constant values and special instruction values to LLVM values
+        // Map constant values, parameters, and special instruction values to LLVM values
         for (value_id, value) in &func.values {
             match &value.kind {
                 HirValueKind::Constant(constant) => {
                     let llvm_constant = self.compile_constant(constant)?;
                     self.value_map.insert(*value_id, llvm_constant);
+                }
+                HirValueKind::Parameter(param_index) => {
+                    // SSA creates new value IDs for parameters with HirValueKind::Parameter
+                    // Map these to the actual LLVM function parameters
+                    if let Some(param_value) = fn_value.get_nth_param(*param_index) {
+                        self.value_map.insert(*value_id, param_value);
+                        self.type_map.insert(*value_id, value.ty.clone());
+                    }
                 }
                 HirValueKind::Instruction => {
                     // For instruction values that appear in func.values (like undef structs),
@@ -671,6 +680,8 @@ impl<'ctx> LLVMBackend<'ctx> {
                     self.builder.build_alloca(llvm_ty, "alloca")?
                 };
                 self.value_map.insert(*result, alloca.into());
+                // Record the type as a pointer to the allocated type
+                self.type_map.insert(*result, HirType::Ptr(Box::new(ty.clone())));
             }
 
             HirInstruction::GetElementPtr { result, ty, ptr, indices } => {
@@ -697,7 +708,7 @@ impl<'ctx> LLVMBackend<'ctx> {
 
             // ========== Aggregate Operations ==========
             HirInstruction::ExtractValue { result, ty, aggregate, indices } => {
-                let mut current_value = self.get_value(*aggregate)?;
+                let agg_value = self.get_value(*aggregate)?;
 
                 // Extract value from struct or array using chained extraction
                 // LLVM's build_extract_value only takes a single index, so we need to
@@ -708,43 +719,95 @@ impl<'ctx> LLVMBackend<'ctx> {
                     ));
                 }
 
-                // Apply each index in sequence for nested extraction
-                for (i, &index) in indices.iter().enumerate() {
-                    let is_last = i == indices.len() - 1;
-                    let name = if is_last {
-                        "extract"
+                // Check if aggregate is a pointer (e.g., from Alloca)
+                // In this case, we use GEP + Load instead of ExtractValue
+                if agg_value.is_pointer_value() {
+                    // ty is the result type (the field type), not the aggregate type
+                    // We need to get the aggregate type from the HIR value info
+                    let result_ty = self.translate_type(ty)?;
+                    let ptr = agg_value.into_pointer_value();
+
+                    // For pointer-based struct access, we need the aggregate type.
+                    // We can get this from the instruction that produced the pointer.
+                    // For now, get it from the type_map
+                    let agg_hir_type = self.type_map.get(aggregate).cloned();
+
+                    let pointee_type = if let Some(HirType::Ptr(inner)) = agg_hir_type {
+                        self.translate_type(&inner)?
+                    } else if let Some(hir_ty) = agg_hir_type {
+                        // If it's not a pointer type in HIR but is a pointer value,
+                        // the type might already be the struct type
+                        self.translate_type(&hir_ty)?
                     } else {
-                        &format!("extract_nested_{}", i)
+                        // Fallback: try to infer from the result type
+                        // This won't work correctly, but provides a fallback
+                        result_ty
                     };
 
-                    // Try to extract from struct
-                    if let Ok(struct_val) = TryInto::<inkwell::values::StructValue>::try_into(current_value) {
-                        let extracted = self.builder.build_extract_value(
-                            struct_val,
-                            index,
-                            name
-                        )?;
-                        current_value = extracted.as_basic_value_enum();
-                    } else if let Ok(array_val) = TryInto::<inkwell::values::ArrayValue>::try_into(current_value) {
-                        // For arrays, we can also use extract_value
-                        let extracted = self.builder.build_extract_value(
-                            array_val,
-                            index,
-                            name
-                        )?;
-                        current_value = extracted.as_basic_value_enum();
-                    } else {
-                        return Err(CompilerError::CodeGen(
-                            format!("ExtractValue can only be used on struct or array types, got: {:?}", current_value.get_type())
-                        ));
+                    // Build GEP indices: first index is always 0 to dereference the pointer
+                    // then follow with the struct field indices
+                    let mut gep_indices: Vec<inkwell::values::IntValue> = vec![
+                        self.context.i32_type().const_int(0, false)
+                    ];
+                    for &idx in indices {
+                        gep_indices.push(self.context.i32_type().const_int(idx as u64, false));
                     }
-                }
 
-                self.value_map.insert(*result, current_value);
+                    // GEP to get address of the field
+                    let field_ptr = unsafe {
+                        self.builder.build_gep(
+                            pointee_type,
+                            ptr,
+                            &gep_indices,
+                            "field_ptr"
+                        )?
+                    };
+
+                    // Load the field value using the result type
+                    let loaded = self.builder.build_load(result_ty, field_ptr, "field_load")?;
+                    self.value_map.insert(*result, loaded);
+                } else {
+                    // Original behavior: work on value types
+                    let mut current_value = agg_value;
+
+                    // Apply each index in sequence for nested extraction
+                    for (i, &index) in indices.iter().enumerate() {
+                        let is_last = i == indices.len() - 1;
+                        let name = if is_last {
+                            "extract"
+                        } else {
+                            &format!("extract_nested_{}", i)
+                        };
+
+                        // Try to extract from struct
+                        if let Ok(struct_val) = TryInto::<inkwell::values::StructValue>::try_into(current_value) {
+                            let extracted = self.builder.build_extract_value(
+                                struct_val,
+                                index,
+                                name
+                            )?;
+                            current_value = extracted.as_basic_value_enum();
+                        } else if let Ok(array_val) = TryInto::<inkwell::values::ArrayValue>::try_into(current_value) {
+                            // For arrays, we can also use extract_value
+                            let extracted = self.builder.build_extract_value(
+                                array_val,
+                                index,
+                                name
+                            )?;
+                            current_value = extracted.as_basic_value_enum();
+                        } else {
+                            return Err(CompilerError::CodeGen(
+                                format!("ExtractValue can only be used on struct or array types, got: {:?}", current_value.get_type())
+                            ));
+                        }
+                    }
+
+                    self.value_map.insert(*result, current_value);
+                }
             }
 
             HirInstruction::InsertValue { result, ty, aggregate, value, indices } => {
-                let mut current_agg = self.get_value(*aggregate)?;
+                let current_agg = self.get_value(*aggregate)?;
                 let val = self.get_value(*value)?;
 
                 if indices.is_empty() {
@@ -753,12 +816,38 @@ impl<'ctx> LLVMBackend<'ctx> {
                     ));
                 }
 
-                // For nested insertion, we need to:
-                // 1. Extract the nested aggregate at indices[0..n-1]
-                // 2. Insert value at the final index
-                // 3. Insert the modified nested aggregate back
-                if indices.len() == 1 {
-                    // Simple case: single-level insertion
+                // Check if aggregate is a pointer (e.g., from Alloca)
+                // In this case, we use GEP + Store instead of InsertValue
+                if current_agg.is_pointer_value() {
+                    let llvm_ty = self.translate_type(ty)?;
+                    let ptr = current_agg.into_pointer_value();
+
+                    // Build GEP indices: first index is always 0 to dereference the pointer
+                    // then follow with the struct field indices
+                    let mut gep_indices: Vec<inkwell::values::IntValue> = vec![
+                        self.context.i32_type().const_int(0, false)
+                    ];
+                    for &idx in indices {
+                        gep_indices.push(self.context.i32_type().const_int(idx as u64, false));
+                    }
+
+                    // GEP to get address of the field
+                    let field_ptr = unsafe {
+                        self.builder.build_gep(
+                            llvm_ty,
+                            ptr,
+                            &gep_indices,
+                            "field_ptr"
+                        )?
+                    };
+
+                    // Store the value
+                    self.builder.build_store(field_ptr, val)?;
+
+                    // The result is the original pointer (for chaining)
+                    self.value_map.insert(*result, current_agg);
+                } else if indices.len() == 1 {
+                    // Simple case: single-level insertion on a value
                     let inserted = if let Ok(struct_val) = TryInto::<inkwell::values::StructValue>::try_into(current_agg) {
                         self.builder.build_insert_value(
                             struct_val,
