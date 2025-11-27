@@ -153,36 +153,55 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                 // Check if this is a method call on a standard library type
                 switch(callee.expr) {
                     case TField(obj, fa):
-                        // Get the method name
-                        var methodName = switch(fa) {
-                            case FInstance(_, _, cf): cf.get().name;
-                            case FAnon(cf): cf.get().name;
-                            case FClosure(_, cf): cf.get().name;
-                            default: null;
-                        };
+                        // Handle static method calls (like Math.sqrt)
+                        switch(fa) {
+                            case FStatic(classRef, cf):
+                                // Static method call: Math.sqrt(x) -> $Math$sqrt(x)
+                                var className = classRef.get().name;
+                                var methodName = cf.get().name;
+                                var stdlibFunc = "$" + className + "$" + methodName;
+                                // Use the callee's type (function type) not the call result type
+                                var stdlibCallee: AST.ExprWithPos = {
+                                    expr: AST.Expr.Variable(stdlibFunc),
+                                    ty: convertType(callee.t),
+                                    pos: callee.pos
+                                };
+                                var argExprs = args.map(a -> wrapExpr(a));
+                                AST.Expr.Call(stdlibCallee, argExprs);
 
-                        // Get the object type
-                        var objType = switch(obj.t) {
-                            case TInst(t, _): t.get().name;
-                            default: null;
-                        };
+                            case FInstance(_, _, cf) | FAnon(cf) | FClosure(_, cf):
+                                // Instance method call: arr.push(x) -> $Array$push(arr, x)
+                                var methodName = cf.get().name;
+                                var objType = switch(obj.t) {
+                                    case TInst(t, _): t.get().name;
+                                    default: null;
+                                };
 
-                        // Transform stdlib method calls: arr.push(x) -> $Array$push(arr, x)
-                        if (methodName != null && objType != null) {
-                            var stdlibFunc = "$" + objType + "$" + methodName; // e.g., "$Array$push"
-                            var stdlibCallee: AST.ExprWithPos = {
-                                expr: AST.Expr.Variable(stdlibFunc),
-                                ty: convertType(expr.t),
-                                pos: callee.pos
-                            };
-                            var objExpr = wrapExpr(obj);
-                            var argExprs = args.map(a -> wrapExpr(a));
-                            AST.Expr.Call(stdlibCallee, [objExpr].concat(argExprs));
-                        } else {
-                            // Not a stdlib method call, use regular call
-                            var calleeExpr = wrapExpr(callee);
-                            var argExprs = args.map(a -> wrapExpr(a));
-                            AST.Expr.Call(calleeExpr, argExprs);
+                                if (methodName != null && objType != null) {
+                                    var stdlibFunc = "$" + objType + "$" + methodName;
+                                    // Build function type: (self, original_args...) -> return_type
+                                    // We need to prepend the object type to the function params
+                                    var funcType = buildInstanceMethodType(obj.t, callee.t);
+                                    var stdlibCallee: AST.ExprWithPos = {
+                                        expr: AST.Expr.Variable(stdlibFunc),
+                                        ty: funcType,
+                                        pos: callee.pos
+                                    };
+                                    var objExpr = wrapExpr(obj);
+                                    var argExprs = args.map(a -> wrapExpr(a));
+                                    AST.Expr.Call(stdlibCallee, [objExpr].concat(argExprs));
+                                } else {
+                                    // Fallback to regular call
+                                    var calleeExpr = wrapExpr(callee);
+                                    var argExprs = args.map(a -> wrapExpr(a));
+                                    AST.Expr.Call(calleeExpr, argExprs);
+                                }
+
+                            default:
+                                // Other field types - regular call
+                                var calleeExpr = wrapExpr(callee);
+                                var argExprs = args.map(a -> wrapExpr(a));
+                                AST.Expr.Call(calleeExpr, argExprs);
                         }
 
                     default:
@@ -250,6 +269,27 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                 // Parentheses are just for grouping, compile the inner expression
                 compileExpressionImpl(e, topLevel);
 
+            case TNew(clsRef, params, args):
+                // Object instantiation: new StringMap<Int>() -> $StringMap$new()
+                var cls = clsRef.get();
+                var className = cls.name;
+
+                // Request the class to be compiled (adds to dynamicTypeStack)
+                addTypeForCompilation(TInst(clsRef, params));
+
+                // Generate constructor call: $ClassName$new(args...)
+                var constructorFunc = "$" + className + "$new";
+                // Build function type: (arg_types...) -> instance_type
+                var argTypes = args.map(a -> a.t);
+                var constructorType = buildConstructorType(expr.t, argTypes);
+                var constructorCallee: AST.ExprWithPos = {
+                    expr: AST.Expr.Variable(constructorFunc),
+                    ty: constructorType,
+                    pos: expr.pos
+                };
+                var argExprs = args.map(a -> wrapExpr(a));
+                AST.Expr.Call(constructorCallee, argExprs);
+
             default:
                 // Debug: Print unsupported expression type
                 #if macro
@@ -300,11 +340,21 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
         return switch(t) {
             case TInst(_.get() => c, params):
                 switch(c.name) {
+                    // Primitive types
                     case "Int": Primitive("I32");
                     case "Float": Primitive("F64");
                     case "Bool": Primitive("Bool");
                     case "String": Primitive("String");
-                    default: Primitive("I32");
+                    // Generic class types - convert with type parameters
+                    default:
+                        if (params.length > 0) {
+                            // Generic type like StringMap<Int>, Array<String>
+                            var typeParams = params.map(p -> convertType(p));
+                            Generic(c.name, typeParams);
+                        } else {
+                            // Non-generic class - treat as pointer to class instance
+                            Pointer(Primitive(c.name));
+                        }
                 }
 
             case TAbstract(_.get() => a, params):
@@ -313,7 +363,21 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                     case "Float": Primitive("F64");
                     case "Bool": Primitive("Bool");
                     case "Void": Primitive("Unit");
-                    default: Primitive("I32");
+                    case "Null":
+                        // Null<T> - the inner type is nullable
+                        if (params.length > 0) {
+                            // For now, just use the inner type (nullable handling TBD)
+                            convertType(params[0]);
+                        } else {
+                            Primitive("I32");
+                        }
+                    default:
+                        if (params.length > 0) {
+                            var typeParams = params.map(p -> convertType(p));
+                            Generic(a.name, typeParams);
+                        } else {
+                            Primitive("I32");
+                        }
                 }
 
             case TType(_.get() => dt, params):
@@ -355,6 +419,35 @@ class ZyntaxCompiler extends GenericCompiler<AST.Module, AST.Enum, AST.Expr> {
                 "Assign";
             default: "Add";
         }
+    }
+
+    /**
+     * Build a function type for an instance method call.
+     * Transforms (args...) -> ret into (self, args...) -> ret
+     * where self is the object type.
+     */
+    function buildInstanceMethodType(objType: Type, methodType: Type): AST.ZType {
+        switch(methodType) {
+            case TFun(args, ret):
+                // Prepend the object type as first parameter (self)
+                var selfType = convertType(objType);
+                var paramTypes = [selfType].concat(args.map(arg -> convertType(arg.t)));
+                var returnType = convertType(ret);
+                return Function(paramTypes, returnType);
+            default:
+                // Fallback: just return the method type
+                return convertType(methodType);
+        }
+    }
+
+    /**
+     * Build a function type for a constructor call.
+     * Returns (args...) -> InstanceType
+     */
+    function buildConstructorType(instanceType: Type, argTypes: Array<Type>): AST.ZType {
+        var paramTypes = argTypes.map(t -> convertType(t));
+        var returnType = convertType(instanceType);
+        return Function(paramTypes, returnType);
     }
 }
 

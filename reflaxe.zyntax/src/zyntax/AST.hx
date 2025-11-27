@@ -48,6 +48,8 @@ typedef Param = {
 enum ZType {
     Primitive(name: String);
     Function(params: Array<ZType>, returnType: ZType);
+    Generic(name: String, typeParams: Array<ZType>);  // e.g., StringMap<Int>, Array<String>
+    Pointer(inner: ZType);  // Pointer to a type (for class instances)
 }
 
 /**

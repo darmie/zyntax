@@ -133,6 +133,15 @@ function generateType(t: AST.ZType): Dynamic {
                 nullability: "NonNull"
             }
         };
+        case Generic(name, typeParams): {
+            Generic: {
+                name: name,
+                type_params: typeParams.map(p -> generateType(p))
+            }
+        };
+        case Pointer(inner): {
+            Pointer: generateType(inner)
+        };
     }
 }
 

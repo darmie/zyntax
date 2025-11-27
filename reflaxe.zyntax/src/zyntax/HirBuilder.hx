@@ -381,6 +381,12 @@ class HirBuilder {
                 // For function types, we'd need a proper representation
                 // For now, just use a pointer
                 HirType.Ptr(HirType.I8);
+            case zyntax.AST.ZType.Generic(name, typeParams):
+                // Generic types like StringMap<Int> - treat as opaque pointer
+                HirType.Ptr(HirType.I8);
+            case zyntax.AST.ZType.Pointer(inner):
+                // Pointer to a type
+                HirType.Ptr(convertType(inner));
             case zyntax.AST.ZType.Primitive(_):
                 trace("Unknown primitive type: " + ty);
                 HirType.Void;
