@@ -1671,6 +1671,38 @@ impl ZyntaxPromise {
         }
     }
 
+    /// Create a new promise with separate constructor and poll functions
+    ///
+    /// This follows the Zyntax async ABI where:
+    /// - `init_fn`: `{fn}_new(params...) -> *mut StateMachine` - constructor
+    /// - `poll_fn`: `async_wrapper(self: *StateMachine, cx: *Context) -> Poll` - poll function
+    ///
+    /// See `crates/compiler/src/async_support.rs` for the full async ABI.
+    pub fn with_poll_fn(init_fn: *const u8, poll_fn: *const u8, args: Vec<DynamicValue>) -> Self {
+        let task_id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            state: Arc::new(Mutex::new(PromiseInner {
+                init_fn,
+                poll_fn: Some(poll_fn),
+                args,
+                state: PromiseState::Pending,
+                state_machine: None,
+                ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                task_id,
+                poll_count: 0,
+                waker: None,
+            })),
+        }
+    }
+
+    /// Set the poll function for this promise
+    ///
+    /// Call this before polling if the promise was created with just an init function.
+    pub fn set_poll_fn(&self, poll_fn: *const u8) {
+        let mut inner = self.state.lock().unwrap();
+        inner.poll_fn = Some(poll_fn);
+    }
+
     /// Poll the promise for completion
     ///
     /// Returns the current state without blocking.
@@ -1765,10 +1797,14 @@ impl ZyntaxPromise {
 
                 inner.state_machine = Some(state_machine);
 
-                // For now, assume the poll function follows right after the state machine
-                // In a real implementation, this would be part of the async function's vtable
-                // or returned alongside the state machine pointer
-                inner.poll_fn = Some(inner.init_fn); // Use same function for polling
+                // The async ABI in Zyntax generates two functions:
+                // 1. Constructor: `{fn}_new(params...) -> StateMachine` (init_fn)
+                // 2. Poll: `async_wrapper(self: *StateMachine, cx: *Context) -> Poll`
+                //
+                // The poll function pointer should be provided separately when creating
+                // the promise. For now, we use the same function pointer pattern but
+                // the caller should pass the correct poll function via set_poll_fn().
+                // See: crates/compiler/src/async_support.rs for the async ABI details.
             }
         }
 
