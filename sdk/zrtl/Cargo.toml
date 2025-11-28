@@ -1,0 +1,17 @@
+[package]
+name = "zrtl"
+version = "0.1.0"
+edition = "2021"
+description = "Zyntax Runtime Library - Types and utilities for ZRTL plugins"
+license = "Apache-2.0"
+repository = "https://github.com/darmie/zyntax"
+keywords = ["compiler", "jit", "runtime", "ffi", "interop"]
+categories = ["development-tools::ffi", "compilers"]
+
+[dependencies]
+inventory = "0.3"
+
+[features]
+default = []
+# Enable test harness macros
+test-harness = []
