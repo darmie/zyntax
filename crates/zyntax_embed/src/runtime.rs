@@ -17,6 +17,7 @@ use zyntax_compiler::{
     zrtl::DynamicValue,
     tiered_backend::{TieredBackend, TieredConfig, TieredStatistics, OptimizationTier},
     lowering::AstLowering, // For lower_program trait method
+    runtime::{Executor, Waker as RuntimeWaker},
 };
 
 /// Result type for runtime operations
@@ -1598,16 +1599,38 @@ pub struct ZyntaxPromise {
     state: Arc<Mutex<PromiseInner>>,
 }
 
+/// Poll result from async state machine
+///
+/// This matches the Zyntax async ABI where poll functions return a discriminated union.
+#[repr(C, u8)]
+#[derive(Clone)]
+pub enum AsyncPollResult {
+    /// Still pending, needs more polls
+    Pending = 0,
+    /// Completed with a value (the DynamicValue)
+    Ready(DynamicValue) = 1,
+    /// Failed with an error message
+    Failed(*const u8, usize) = 2, // (ptr, len) for error string
+}
+
 struct PromiseInner {
-    /// Function pointer
-    func_ptr: *const u8,
+    /// Function pointer for creating the state machine
+    init_fn: *const u8,
+    /// Poll function pointer (once state machine is created)
+    poll_fn: Option<*const u8>,
     /// Arguments to pass
     args: Vec<DynamicValue>,
     /// Current state
     state: PromiseState,
     /// State machine pointer (for Zyntax async functions)
     state_machine: Option<*mut u8>,
-    /// Waker registration
+    /// Ready queue for waker integration
+    ready_queue: Arc<Mutex<std::collections::VecDeque<usize>>>,
+    /// Task ID for waker
+    task_id: usize,
+    /// Poll count for timeout detection
+    poll_count: usize,
+    /// Waker for Rust Future integration
     waker: Option<std::task::Waker>,
 }
 
@@ -1626,15 +1649,23 @@ pub enum PromiseState {
     Failed(String),
 }
 
+/// Global task ID counter for promise wakers
+static NEXT_TASK_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl ZyntaxPromise {
     /// Create a new promise for an async function call
     fn new(func_ptr: *const u8, args: Vec<DynamicValue>) -> Self {
+        let task_id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Self {
             state: Arc::new(Mutex::new(PromiseInner {
-                func_ptr,
+                init_fn: func_ptr,
+                poll_fn: None,
                 args,
                 state: PromiseState::Pending,
                 state_machine: None,
+                ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                task_id,
+                poll_count: 0,
                 waker: None,
             })),
         }
@@ -1643,6 +1674,14 @@ impl ZyntaxPromise {
     /// Poll the promise for completion
     ///
     /// Returns the current state without blocking.
+    ///
+    /// # Async ABI
+    ///
+    /// Zyntax async functions follow this ABI:
+    /// 1. `init_fn(args...) -> *mut StateMachine` - Creates the state machine
+    /// 2. `poll_fn(state_machine: *mut u8, waker_data: *const u8) -> AsyncPollResult`
+    ///
+    /// The poll function advances the state machine until it yields or completes.
     pub fn poll(&self) -> PromiseState {
         let mut inner = self.state.lock().unwrap();
 
@@ -1654,27 +1693,104 @@ impl ZyntaxPromise {
             PromiseState::Pending => {}
         }
 
+        inner.poll_count += 1;
+
         // Try to advance the state machine
         if let Some(state_machine) = inner.state_machine {
-            unsafe {
-                // Call the poll function on the state machine
-                // The state machine follows Zyntax's async ABI:
-                // poll(state_machine: *mut u8, waker: *const Waker) -> PollResult
-                // where PollResult = { Pending = 0, Ready(value) = 1, Failed(error) = 2 }
+            if let Some(poll_fn) = inner.poll_fn {
+                unsafe {
+                    // Create a waker for this task
+                    let waker = RuntimeWaker::new(inner.task_id, inner.ready_queue.clone());
+                    let std_waker = waker.into_std_waker();
+                    let waker_ptr = &std_waker as *const std::task::Waker as *const u8;
 
-                // For now, we simulate completion after first poll
-                // A real implementation would call into the Zyntax runtime
+                    // Call the poll function on the state machine
+                    // poll(state_machine: *mut u8, waker: *const u8) -> AsyncPollResult
+                    let f: extern "C" fn(*mut u8, *const u8) -> AsyncPollResult =
+                        std::mem::transmute(poll_fn);
+
+                    let result = f(state_machine, waker_ptr);
+
+                    match result {
+                        AsyncPollResult::Pending => {
+                            // Still pending, state remains unchanged
+                        }
+                        AsyncPollResult::Ready(dv) => {
+                            // Completed - convert DynamicValue to ZyntaxValue
+                            match ZyntaxValue::from_dynamic(dv) {
+                                Ok(value) => inner.state = PromiseState::Ready(value),
+                                Err(e) => inner.state = PromiseState::Failed(e.to_string()),
+                            }
+                        }
+                        AsyncPollResult::Failed(ptr, len) => {
+                            // Extract error message from pointer
+                            let err_msg = if !ptr.is_null() && len > 0 {
+                                let slice = std::slice::from_raw_parts(ptr, len);
+                                String::from_utf8_lossy(slice).to_string()
+                            } else {
+                                "Unknown async error".to_string()
+                            };
+                            inner.state = PromiseState::Failed(err_msg);
+                        }
+                    }
+                }
+            } else {
+                // No poll function available, mark as complete with void
+                // This handles sync functions wrapped as async
                 inner.state = PromiseState::Ready(ZyntaxValue::Void);
             }
         } else {
             // Initialize the state machine on first poll
             unsafe {
-                let f: extern "C" fn() -> *mut u8 = std::mem::transmute(inner.func_ptr);
-                inner.state_machine = Some(f());
+                // The init function creates the state machine and optionally returns
+                // a poll function pointer. For simple async functions, both are the same.
+                //
+                // ABI: init_fn() -> (*mut StateMachine, *const PollFn)
+                // Or simplified: init_fn() -> *mut StateMachine (poll_fn same as init_fn)
+
+                if inner.init_fn.is_null() {
+                    inner.state = PromiseState::Failed("Null async function pointer".to_string());
+                    return inner.state.clone();
+                }
+
+                // Simple ABI: init function returns the state machine pointer
+                // The poll function is inferred from the async function's structure
+                let f: extern "C" fn() -> *mut u8 = std::mem::transmute(inner.init_fn);
+                let state_machine = f();
+
+                if state_machine.is_null() {
+                    inner.state = PromiseState::Failed("Failed to create async state machine".to_string());
+                    return inner.state.clone();
+                }
+
+                inner.state_machine = Some(state_machine);
+
+                // For now, assume the poll function follows right after the state machine
+                // In a real implementation, this would be part of the async function's vtable
+                // or returned alongside the state machine pointer
+                inner.poll_fn = Some(inner.init_fn); // Use same function for polling
             }
         }
 
         inner.state.clone()
+    }
+
+    /// Poll with a maximum number of iterations
+    ///
+    /// This is useful for avoiding infinite loops when the async function
+    /// might be stuck or taking too long.
+    pub fn poll_with_limit(&self, max_polls: usize) -> PromiseState {
+        let inner = self.state.lock().unwrap();
+        if inner.poll_count >= max_polls {
+            drop(inner);
+            let mut inner = self.state.lock().unwrap();
+            inner.state = PromiseState::Failed(format!(
+                "Async operation timed out after {} polls", max_polls
+            ));
+            return inner.state.clone();
+        }
+        drop(inner);
+        self.poll()
     }
 
     /// Block until the promise completes and return the result
@@ -1729,20 +1845,55 @@ impl ZyntaxPromise {
         self.state.lock().unwrap().state.clone()
     }
 
+    /// Block until the promise completes with a timeout
+    ///
+    /// Returns `Err` if the timeout is exceeded.
+    pub fn await_with_timeout(&self, timeout: std::time::Duration) -> RuntimeResult<ZyntaxValue> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                return Err(RuntimeError::Promise(format!(
+                    "Async operation timed out after {:?}", timeout
+                )));
+            }
+            match self.poll() {
+                PromiseState::Pending => {
+                    std::thread::yield_now();
+                }
+                PromiseState::Ready(value) => {
+                    return Ok(value);
+                }
+                PromiseState::Failed(err) => {
+                    return Err(RuntimeError::Promise(err));
+                }
+            }
+        }
+    }
+
+    /// Get the number of times this promise has been polled
+    pub fn poll_count(&self) -> usize {
+        self.state.lock().unwrap().poll_count
+    }
+
     /// Chain another operation to run when this promise completes
     pub fn then<F>(&self, f: F) -> ZyntaxPromise
     where
         F: FnOnce(ZyntaxValue) -> ZyntaxValue + Send + 'static,
     {
         let source = self.state.clone();
+        let task_id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // Create a new promise that depends on this one
         let new_promise = ZyntaxPromise {
             state: Arc::new(Mutex::new(PromiseInner {
-                func_ptr: std::ptr::null(),
+                init_fn: std::ptr::null(),
+                poll_fn: None,
                 args: vec![],
                 state: PromiseState::Pending,
                 state_machine: None,
+                ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                task_id,
+                poll_count: 0,
                 waker: None,
             })),
         };
@@ -1779,13 +1930,18 @@ impl ZyntaxPromise {
         F: FnOnce(String) -> ZyntaxValue + Send + 'static,
     {
         let source = self.state.clone();
+        let task_id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         let new_promise = ZyntaxPromise {
             state: Arc::new(Mutex::new(PromiseInner {
-                func_ptr: std::ptr::null(),
+                init_fn: std::ptr::null(),
+                poll_fn: None,
                 args: vec![],
                 state: PromiseState::Pending,
                 state_machine: None,
+                ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                task_id,
+                poll_count: 0,
                 waker: None,
             })),
         };
@@ -1923,10 +2079,14 @@ mod tests {
     fn test_promise_state() {
         let promise = ZyntaxPromise {
             state: Arc::new(Mutex::new(PromiseInner {
-                func_ptr: std::ptr::null(),
+                init_fn: std::ptr::null(),
+                poll_fn: None,
                 args: vec![],
                 state: PromiseState::Ready(ZyntaxValue::Int(42)),
                 state_machine: None,
+                ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                task_id: 0,
+                poll_count: 0,
                 waker: None,
             })),
         };
@@ -1944,10 +2104,14 @@ mod tests {
     fn test_promise_then() {
         let promise = ZyntaxPromise {
             state: Arc::new(Mutex::new(PromiseInner {
-                func_ptr: std::ptr::null(),
+                init_fn: std::ptr::null(),
+                poll_fn: None,
                 args: vec![],
                 state: PromiseState::Ready(ZyntaxValue::Int(10)),
                 state_machine: None,
+                ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                task_id: 0,
+                poll_count: 0,
                 waker: None,
             })),
         };
