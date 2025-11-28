@@ -36,6 +36,13 @@ use crate::hir::{HirModule, HirFunction, HirId};
 use crate::profiling::{ProfileData, ProfileConfig};
 use crate::cranelift_backend::CraneliftBackend;
 
+/// Runtime symbol entry for FFI
+#[derive(Clone)]
+struct RuntimeSymbol {
+    name: String,
+    ptr: usize,  // Store as usize for thread safety
+}
+
 #[cfg(feature = "llvm-backend")]
 use crate::llvm_jit_backend::LLVMJitBackend;
 #[cfg(feature = "llvm-backend")]
@@ -71,6 +78,9 @@ pub struct TieredBackend {
 
     /// The HIR module (needed for recompilation)
     module: Arc<RwLock<Option<HirModule>>>,
+
+    /// Runtime symbols for FFI (from ZRTL plugins)
+    runtime_symbols: Arc<RwLock<Vec<RuntimeSymbol>>>,
 
     /// Configuration
     config: TieredConfig,
@@ -225,6 +235,7 @@ impl TieredBackend {
             optimization_queue: Arc::new(Mutex::new(VecDeque::new())),
             optimizing: Arc::new(Mutex::new(HashSet::new())),
             module: Arc::new(RwLock::new(None)),
+            runtime_symbols: Arc::new(RwLock::new(Vec::new())),
             config,
             worker_handle: None,
             shutdown: Arc::new(Mutex::new(false)),
@@ -560,6 +571,28 @@ impl TieredBackend {
         if let Some(handle) = self.worker_handle.take() {
             let _ = handle.join();
         }
+    }
+
+    /// Register a runtime symbol for FFI/plugin linking
+    ///
+    /// This allows external functions from ZRTL plugins to be called from JIT code.
+    /// Note: Symbols registered after module compilation will be available for
+    /// recompilation in background workers.
+    pub fn register_runtime_symbol(&mut self, name: &str, ptr: *const u8) {
+        self.runtime_symbols.write().unwrap().push(RuntimeSymbol {
+            name: name.to_string(),
+            ptr: ptr as usize,
+        });
+    }
+
+    /// Get all registered runtime symbols as a vector of (name, ptr) tuples
+    ///
+    /// Used when creating new Cranelift backends for background optimization.
+    fn get_runtime_symbols(&self) -> Vec<(String, *const u8)> {
+        self.runtime_symbols.read().unwrap()
+            .iter()
+            .map(|s| (s.name.clone(), s.ptr as *const u8))
+            .collect()
     }
 }
 

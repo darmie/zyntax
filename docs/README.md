@@ -10,6 +10,7 @@ This directory contains architectural and educational documentation for the Zynt
 - **[ASYNC_RUNTIME_DESIGN.md](ASYNC_RUNTIME_DESIGN.md)** - Async/await runtime design
 - **[PLUGIN_ARCHITECTURE.md](PLUGIN_ARCHITECTURE.md)** - Plugin system architecture
 - **[tiered-compilation.md](tiered-compilation.md)** - Tiered compilation strategy
+- **[EMBEDDING_SDK.md](EMBEDDING_SDK.md)** - Embedding Zyntax in Rust applications (zyntax_embed)
 
 ### Implementation Guides
 - **[HIR_BUILDER_EXAMPLE.md](HIR_BUILDER_EXAMPLE.md)** - HIR (High-level Intermediate Representation) builder examples

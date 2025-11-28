@@ -1065,8 +1065,17 @@ pub struct HirImport {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ImportKind {
+    /// External function import
     Function(HirFunctionSignature),
+    /// External global/constant import
     Global(HirType),
+    /// External type import (opaque or defined)
+    Type {
+        /// The HIR representation of the type
+        ty: HirType,
+        /// Type ID for symbol table registration
+        type_id: zyntax_typed_ast::TypeId,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

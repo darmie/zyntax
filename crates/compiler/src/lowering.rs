@@ -4,10 +4,18 @@
 //! ready for both Cranelift and LLVM backends.
 
 use std::sync::{Arc, Mutex};
+use std::hash::{Hash, Hasher};
 use zyntax_typed_ast::{
     TypedProgram, TypedDeclaration, TypedFunction, TypedNode,
     InternedString, Type, Visibility, Mutability, AstArena, TypeId
 };
+
+/// Helper to compute a hash for generating synthetic TypeIds
+fn hash_string(s: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
 use crate::hir::{HirModule, HirFunction, HirFunctionSignature, HirParam, HirType, ParamAttributes};
 use crate::cfg::{ControlFlowGraph, CfgBuilder};
 use crate::ssa::{SsaBuilder, SsaForm};
@@ -210,6 +218,11 @@ pub struct LoweringContext {
     pub target_data: TargetData,
     /// Import metadata for debugging
     pub import_metadata: Vec<ImportMetadata>,
+    /// Import context for resolving imports during lowering
+    pub import_context: ImportContext,
+    /// Cache of already-resolved modules (module_path -> resolved imports)
+    /// This avoids re-resolving the same module multiple times
+    pub resolved_module_cache: std::collections::HashMap<Vec<String>, Vec<ResolvedImport>>,
 }
 
 /// Symbol table for name resolution
@@ -232,6 +245,8 @@ pub struct ImportMetadata {
     pub items: Vec<ImportedItem>,
     /// Source location
     pub span: zyntax_typed_ast::Span,
+    /// Resolved imports (populated if import resolver is configured)
+    pub resolved: Vec<ResolvedImport>,
 }
 
 /// An imported item
@@ -245,8 +260,15 @@ pub struct ImportedItem {
     pub is_glob: bool,
 }
 
+// Re-export import resolver types from typed_ast
+pub use zyntax_typed_ast::import_resolver::{
+    ImportResolver, ImportContext, ImportManager, ImportError,
+    ResolvedImport, ExportedSymbol, SymbolKind, ModuleArchitecture,
+    ChainedResolver, BuiltinResolver,
+};
+
 /// Lowering configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoweringConfig {
     /// Enable debug information
     pub debug_info: bool,
@@ -258,6 +280,21 @@ pub struct LoweringConfig {
     pub hot_reload: bool,
     /// Enable strict mode (fail on warnings)
     pub strict_mode: bool,
+    /// Optional import resolver for resolving import statements
+    pub import_resolver: Option<Arc<dyn ImportResolver>>,
+}
+
+impl std::fmt::Debug for LoweringConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoweringConfig")
+            .field("debug_info", &self.debug_info)
+            .field("opt_level", &self.opt_level)
+            .field("target_triple", &self.target_triple)
+            .field("hot_reload", &self.hot_reload)
+            .field("strict_mode", &self.strict_mode)
+            .field("import_resolver", &self.import_resolver.as_ref().map(|r| r.resolver_name()))
+            .finish()
+    }
 }
 
 impl Default for LoweringConfig {
@@ -268,6 +305,7 @@ impl Default for LoweringConfig {
             target_triple: "x86_64-unknown-linux-gnu".to_string(),
             hot_reload: false,
             strict_mode: false,
+            import_resolver: None,
         }
     }
 }
@@ -328,6 +366,8 @@ impl LoweringContext {
             associated_type_resolver: crate::associated_type_resolver::AssociatedTypeResolver::new(),
             target_data: TargetData::host(),
             import_metadata: Vec::new(),
+            import_context: ImportContext::default(),
+            resolved_module_cache: std::collections::HashMap::new(),
         }
     }
     
@@ -1307,14 +1347,15 @@ impl LoweringContext {
         }
     }
     
-    /// Lower an import (simplified for now)
+    /// Lower an import declaration
+    ///
+    /// If an import resolver is configured, this will attempt to resolve the import
+    /// and register the resolved symbols in the HIR module. Already-resolved modules
+    /// are cached to avoid redundant resolution.
     fn lower_import(&mut self, import: &zyntax_typed_ast::typed_ast::TypedImport) -> CompilerResult<()> {
-        // Track import metadata for debugging and better error messages
-        // Note: Actual symbol resolution happens at type-checking level, but we track
-        // the import declarations for diagnostic purposes
-
         use zyntax_typed_ast::typed_ast::TypedImportItem;
 
+        // Convert import items to our internal representation
         let items: Vec<ImportedItem> = import.items.iter().map(|item| {
             match item {
                 TypedImportItem::Named { name, alias } => ImportedItem {
@@ -1338,11 +1379,359 @@ impl LoweringContext {
             }
         }).collect();
 
+        // Convert module path to string vec for cache lookup
+        let module_path_strings: Vec<String> = import.module_path
+            .iter()
+            .filter_map(|s| s.resolve_global())
+            .collect();
+
+        // Check cache first - avoid re-resolving already resolved modules
+        let resolved = if let Some(cached) = self.resolved_module_cache.get(&module_path_strings) {
+            log::debug!(
+                "Using cached resolution for {:?}: {} symbols",
+                module_path_strings,
+                cached.len()
+            );
+            cached.clone()
+        } else if let Some(ref resolver) = self.config.import_resolver {
+            // Resolve the import
+            match resolver.resolve_import(import, &self.import_context) {
+                Ok(resolved_imports) => {
+                    log::debug!(
+                        "Resolved import {:?}: {} symbols",
+                        module_path_strings,
+                        resolved_imports.len()
+                    );
+                    // Cache the result
+                    self.resolved_module_cache.insert(module_path_strings.clone(), resolved_imports.clone());
+                    resolved_imports
+                }
+                Err(e) => {
+                    // Log the error but don't fail - imports might be resolved externally
+                    self.diagnostic(
+                        DiagnosticLevel::Warning,
+                        format!("Import resolution warning: {}", e),
+                        Some(import.span),
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Lower resolved imports to HIR - register symbols for codegen
+        for resolved_import in &resolved {
+            self.register_resolved_import(resolved_import, &items)?;
+        }
+
+        // Track the module path in import context to detect cycles
+        self.import_context.imported_modules.push(module_path_strings);
+
+        // Store import metadata
         self.import_metadata.push(ImportMetadata {
             module_path: import.module_path.clone(),
             items,
             span: import.span,
+            resolved,
         });
+
+        Ok(())
+    }
+
+    /// Register a resolved import in the HIR module for codegen
+    ///
+    /// This makes the resolved symbols available for code generation.
+    fn register_resolved_import(
+        &mut self,
+        resolved: &ResolvedImport,
+        items: &[ImportedItem],
+    ) -> CompilerResult<()> {
+        use crate::hir::{HirImport, ImportKind, ImportAttributes, HirFunctionSignature, HirParam};
+
+        match resolved {
+            ResolvedImport::Function { qualified_name, params, return_type, is_extern } => {
+                // Register as an external function declaration in HIR
+                let func_name = qualified_name.last()
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+
+                let interned_name = {
+                    let mut arena = self.arena.lock().unwrap();
+                    arena.intern_string(func_name)
+                };
+
+                // Check if we need to apply an alias
+                let local_name = items.iter()
+                    .find(|item| {
+                        item.name.resolve_global()
+                            .map(|n| n == func_name)
+                            .unwrap_or(false)
+                    })
+                    .and_then(|item| item.alias)
+                    .unwrap_or(interned_name);
+
+                // Convert typed_ast types to HIR types
+                let hir_params: Vec<HirParam> = params.iter()
+                    .enumerate()
+                    .map(|(i, ty)| {
+                        let hir_type = self.convert_type(ty);
+                        let param_name = {
+                            let mut arena = self.arena.lock().unwrap();
+                            arena.intern_string(&format!("arg{}", i))
+                        };
+                        HirParam {
+                            id: crate::hir::HirId::new(),
+                            name: param_name,
+                            ty: hir_type,
+                            attributes: Default::default(),
+                        }
+                    })
+                    .collect();
+                let hir_return = self.convert_type(return_type);
+
+                // Create the function signature
+                let signature = HirFunctionSignature {
+                    params: hir_params,
+                    returns: vec![hir_return],
+                    type_params: Vec::new(),
+                    const_params: Vec::new(),
+                    lifetime_params: Vec::new(),
+                    is_variadic: false,
+                    is_async: false,
+                };
+
+                // Create an import entry for the external function
+                let hir_import = HirImport {
+                    name: local_name,
+                    kind: ImportKind::Function(signature),
+                    attributes: ImportAttributes::default(),
+                };
+
+                // Add to module's imports
+                self.module.imports.push(hir_import);
+
+                log::debug!(
+                    "Registered imported function '{}' (alias: {:?})",
+                    func_name,
+                    if local_name != interned_name { Some(local_name) } else { None }
+                );
+            }
+
+            ResolvedImport::Type { qualified_name, ty, is_extern } => {
+                // Register the type in our symbol table and as an import
+                let type_name = qualified_name.last()
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+
+                let interned_name = {
+                    let mut arena = self.arena.lock().unwrap();
+                    arena.intern_string(type_name)
+                };
+
+                // Check if we need to apply an alias
+                let local_name = items.iter()
+                    .find(|item| {
+                        item.name.resolve_global()
+                            .map(|n| n == type_name)
+                            .unwrap_or(false)
+                    })
+                    .and_then(|item| item.alias)
+                    .unwrap_or(interned_name);
+
+                // Convert to HIR type
+                let hir_type = self.convert_type(ty);
+
+                // Get or create a TypeId for this imported type
+                // For named types, try to get the existing ID from the registry
+                let type_id = match ty {
+                    zyntax_typed_ast::Type::Named { id, .. } => *id,
+                    _ => {
+                        // For other types, create a synthetic TypeId from hash
+                        zyntax_typed_ast::TypeId::new(
+                            hash_string(&qualified_name.join("::")) as u32
+                        )
+                    }
+                };
+
+                // Register in the module's type table
+                self.module.types.insert(type_id, hir_type.clone());
+
+                // Register in symbol table for name resolution
+                self.symbols.types.insert(local_name, type_id);
+
+                // Create an import entry for the type
+                let hir_import = HirImport {
+                    name: local_name,
+                    kind: ImportKind::Type {
+                        ty: hir_type,
+                        type_id,
+                    },
+                    attributes: ImportAttributes::default(),
+                };
+
+                self.module.imports.push(hir_import);
+            }
+
+            ResolvedImport::Module { path, exports } => {
+                // For module imports, register all exported symbols
+                for export in exports {
+                    if !export.is_public {
+                        continue;
+                    }
+
+                    let symbol_name = {
+                        let mut arena = self.arena.lock().unwrap();
+                        arena.intern_string(&export.name)
+                    };
+
+                    // Register based on symbol kind
+                    match export.kind {
+                        SymbolKind::Function => {
+                            // Create a placeholder function signature
+                            // The actual signature will be resolved when the function is used
+                            let signature = HirFunctionSignature {
+                                params: Vec::new(),
+                                returns: vec![crate::hir::HirType::Void],
+                                type_params: Vec::new(),
+                                const_params: Vec::new(),
+                                lifetime_params: Vec::new(),
+                                is_variadic: false,
+                                is_async: false,
+                            };
+
+                            let hir_import = HirImport {
+                                name: symbol_name,
+                                kind: ImportKind::Function(signature),
+                                attributes: ImportAttributes::default(),
+                            };
+
+                            self.module.imports.push(hir_import);
+                        }
+                        SymbolKind::Type | SymbolKind::Class | SymbolKind::Enum |
+                        SymbolKind::Interface | SymbolKind::Trait => {
+                            // Create an opaque type for the imported type
+                            let hir_type = crate::hir::HirType::Opaque(symbol_name);
+                            let type_id = zyntax_typed_ast::TypeId::new(
+                                hash_string(&format!("{}::{}", path.join("::"), export.name)) as u32
+                            );
+
+                            self.module.types.insert(type_id, hir_type.clone());
+                            self.symbols.types.insert(symbol_name, type_id);
+
+                            let hir_import = HirImport {
+                                name: symbol_name,
+                                kind: ImportKind::Type {
+                                    ty: hir_type,
+                                    type_id,
+                                },
+                                attributes: ImportAttributes::default(),
+                            };
+
+                            self.module.imports.push(hir_import);
+                        }
+                        SymbolKind::Constant | SymbolKind::Module => {
+                            // Constants and submodules - create global import
+                            let hir_import = HirImport {
+                                name: symbol_name,
+                                kind: ImportKind::Global(crate::hir::HirType::Void),
+                                attributes: ImportAttributes::default(),
+                            };
+
+                            self.module.imports.push(hir_import);
+                        }
+                    }
+                }
+            }
+
+            ResolvedImport::Constant { qualified_name, ty } => {
+                // Register as a global import
+                let const_name = qualified_name.last()
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+
+                let interned_name = {
+                    let mut arena = self.arena.lock().unwrap();
+                    arena.intern_string(const_name)
+                };
+
+                let hir_type = self.convert_type(ty);
+
+                let hir_import = HirImport {
+                    name: interned_name,
+                    kind: ImportKind::Global(hir_type),
+                    attributes: ImportAttributes::default(),
+                };
+
+                self.module.imports.push(hir_import);
+            }
+
+            ResolvedImport::Glob { module_path, symbols } => {
+                // For glob imports, register all public symbols from the module
+                for symbol in symbols {
+                    if !symbol.is_public {
+                        continue;
+                    }
+
+                    let symbol_name = {
+                        let mut arena = self.arena.lock().unwrap();
+                        arena.intern_string(&symbol.name)
+                    };
+
+                    match symbol.kind {
+                        SymbolKind::Function => {
+                            let signature = HirFunctionSignature {
+                                params: Vec::new(),
+                                returns: vec![crate::hir::HirType::Void],
+                                type_params: Vec::new(),
+                                const_params: Vec::new(),
+                                lifetime_params: Vec::new(),
+                                is_variadic: false,
+                                is_async: false,
+                            };
+
+                            let hir_import = HirImport {
+                                name: symbol_name,
+                                kind: ImportKind::Function(signature),
+                                attributes: ImportAttributes::default(),
+                            };
+
+                            self.module.imports.push(hir_import);
+                        }
+                        SymbolKind::Type | SymbolKind::Class | SymbolKind::Enum |
+                        SymbolKind::Interface | SymbolKind::Trait => {
+                            let hir_type = crate::hir::HirType::Opaque(symbol_name);
+                            let type_id = zyntax_typed_ast::TypeId::new(
+                                hash_string(&format!("{}::{}", module_path.join("::"), symbol.name)) as u32
+                            );
+
+                            self.module.types.insert(type_id, hir_type.clone());
+                            self.symbols.types.insert(symbol_name, type_id);
+
+                            let hir_import = HirImport {
+                                name: symbol_name,
+                                kind: ImportKind::Type {
+                                    ty: hir_type,
+                                    type_id,
+                                },
+                                attributes: ImportAttributes::default(),
+                            };
+
+                            self.module.imports.push(hir_import);
+                        }
+                        SymbolKind::Constant | SymbolKind::Module => {
+                            let hir_import = HirImport {
+                                name: symbol_name,
+                                kind: ImportKind::Global(crate::hir::HirType::Void),
+                                attributes: ImportAttributes::default(),
+                            };
+
+                            self.module.imports.push(hir_import);
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

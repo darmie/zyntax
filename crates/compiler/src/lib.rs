@@ -59,7 +59,13 @@ pub use hir_builder::HirBuilder;  // HIR Builder API
 pub use cfg::{ControlFlowGraph, BasicBlock, CfgEdge};
 pub use typed_cfg::{TypedCfgBuilder, TypedControlFlowGraph, TypedBasicBlock, TypedTerminator};
 pub use ssa::{SsaBuilder, SsaForm, PhiNode};
-pub use lowering::{LoweringContext, LoweringPipeline, AstLowering};
+pub use lowering::{
+    LoweringContext, LoweringPipeline, AstLowering, LoweringConfig,
+    // Re-export import resolver types for convenience
+    ImportResolver, ImportContext, ImportManager, ImportError,
+    ResolvedImport, ExportedSymbol, SymbolKind, ModuleArchitecture,
+    ChainedResolver, BuiltinResolver,
+};
 pub use const_eval::{ConstEvaluator, ConstEvalContext};
 pub use monomorphize::{MonomorphizationContext, monomorphize_module};
 pub use pattern_matching::{PatternMatchCompiler, DecisionNode, check_exhaustiveness};
@@ -108,7 +114,7 @@ impl From<inkwell::builder::BuilderError> for CompilerError {
 pub type CompilerResult<T> = Result<T, CompilerError>;
 
 /// Compilation pipeline configuration
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CompilationConfig {
     /// Optimization level (0-3)
     pub opt_level: u8,
@@ -124,6 +130,23 @@ pub struct CompilationConfig {
     pub memory_strategy: Option<memory_management::MemoryStrategy>,
     /// Async runtime configuration
     pub async_runtime: Option<async_support::AsyncRuntimeType>,
+    /// Import resolver for resolving import statements during compilation
+    pub import_resolver: Option<Arc<dyn ImportResolver>>,
+}
+
+impl std::fmt::Debug for CompilationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompilationConfig")
+            .field("opt_level", &self.opt_level)
+            .field("debug_info", &self.debug_info)
+            .field("target_triple", &self.target_triple)
+            .field("hot_reload", &self.hot_reload)
+            .field("enable_monomorphization", &self.enable_monomorphization)
+            .field("memory_strategy", &self.memory_strategy)
+            .field("async_runtime", &self.async_runtime)
+            .field("import_resolver", &self.import_resolver.as_ref().map(|r| r.resolver_name()))
+            .finish()
+    }
 }
 
 impl Default for CompilationConfig {
@@ -136,6 +159,7 @@ impl Default for CompilationConfig {
             enable_monomorphization: true,
             memory_strategy: Some(memory_management::MemoryStrategy::ARC),
             async_runtime: Some(async_support::AsyncRuntimeType::Tokio),
+            import_resolver: None,
         }
     }
 }
@@ -160,6 +184,7 @@ pub fn compile_to_hir(
         target_triple: config.target_triple.clone(),
         hot_reload: config.hot_reload,
         strict_mode: false, // Default to non-strict
+        import_resolver: config.import_resolver.clone(),
     };
 
     // Create arena for string interning (needed for async transformation)

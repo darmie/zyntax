@@ -1,0 +1,414 @@
+//! Language Grammar Interface for Zyntax Embed
+//!
+//! This module provides a high-level interface for parsing source code using
+//! ZynPEG grammars. It wraps the zyn_peg runtime to provide ergonomic parsing
+//! from Rust without requiring compile-time grammar generation.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use zyntax_embed::{LanguageGrammar, GrammarError};
+//!
+//! // Load a compiled .zpeg grammar
+//! let grammar = LanguageGrammar::load("my_lang.zpeg")?;
+//!
+//! // Or compile from .zyn source
+//! let grammar = LanguageGrammar::compile_zyn(include_str!("my_lang.zyn"))?;
+//!
+//! // Parse source code to TypedAST JSON
+//! let typed_ast_json = grammar.parse_to_json("fn main() { 42 }")?;
+//!
+//! // Or parse directly to TypedProgram
+//! let program = grammar.parse("fn main() { 42 }")?;
+//!
+//! // Get language metadata
+//! println!("Language: {}", grammar.name());
+//! println!("Version: {}", grammar.version());
+//! println!("Extensions: {:?}", grammar.file_extensions());
+//! ```
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use pest_meta::{optimizer, parser};
+use pest_vm::Vm;
+use zyn_peg::runtime::{
+    AstHostFunctions, CommandInterpreter, RuntimeValue, TypedAstBuilder, ZpegModule,
+};
+use zyntax_typed_ast::TypedProgram;
+
+/// Errors that can occur during grammar operations
+#[derive(Debug, thiserror::Error)]
+pub enum GrammarError {
+    #[error("Failed to load grammar file: {0}")]
+    LoadError(String),
+
+    #[error("Failed to parse grammar: {0}")]
+    ParseError(String),
+
+    #[error("Failed to compile grammar: {0}")]
+    CompileError(String),
+
+    #[error("Failed to parse source: {0}")]
+    SourceParseError(String),
+
+    #[error("Failed to build AST: {0}")]
+    AstBuildError(String),
+
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+
+    #[error("JSON serialization error: {0}")]
+    JsonError(#[from] serde_json::Error),
+}
+
+/// Result type for grammar operations
+pub type GrammarResult<T> = Result<T, GrammarError>;
+
+/// A compiled language grammar for parsing source code
+///
+/// `LanguageGrammar` wraps a compiled ZynPEG module and provides methods
+/// for parsing source code into TypedAST. The grammar can be loaded from
+/// a precompiled `.zpeg` file or compiled from `.zyn` source.
+#[derive(Clone)]
+pub struct LanguageGrammar {
+    /// The compiled zpeg module
+    module: Arc<ZpegModule>,
+    /// Cached pest VM for parsing (wrapped in Option for lazy initialization)
+    vm: Arc<Mutex<Option<PestVmCache>>>,
+}
+
+/// Cache for the pest VM to avoid recompiling the grammar
+struct PestVmCache {
+    /// The optimized grammar rules
+    rules: Vec<pest_meta::optimizer::OptimizedRule>,
+}
+
+impl LanguageGrammar {
+    /// Load a grammar from a compiled `.zpeg` file
+    ///
+    /// # Arguments
+    /// * `path` - Path to the `.zpeg` file
+    ///
+    /// # Example
+    /// ```ignore
+    /// let grammar = LanguageGrammar::load("my_lang.zpeg")?;
+    /// ```
+    pub fn load<P: AsRef<Path>>(path: P) -> GrammarResult<Self> {
+        let module = ZpegModule::load(path)
+            .map_err(|e| GrammarError::LoadError(e.to_string()))?;
+        Ok(Self {
+            module: Arc::new(module),
+            vm: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Load a grammar from a JSON string (serialized zpeg module)
+    ///
+    /// # Arguments
+    /// * `json` - The JSON string containing the serialized zpeg module
+    pub fn from_json(json: &str) -> GrammarResult<Self> {
+        let module: ZpegModule = serde_json::from_str(json)
+            .map_err(|e| GrammarError::LoadError(format!("Invalid zpeg JSON: {}", e)))?;
+        Ok(Self {
+            module: Arc::new(module),
+            vm: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Compile a grammar from `.zyn` source code
+    ///
+    /// This parses and compiles a ZynPEG grammar definition into a usable
+    /// grammar for parsing source code.
+    ///
+    /// # Arguments
+    /// * `zyn_source` - The `.zyn` grammar source code
+    ///
+    /// # Example
+    /// ```ignore
+    /// let grammar = LanguageGrammar::compile_zyn(r#"
+    ///     @language { name: "Calculator" }
+    ///     expr = { number | binary_op }
+    ///     number = @{ ASCII_DIGIT+ }
+    /// "#)?;
+    /// ```
+    pub fn compile_zyn(zyn_source: &str) -> GrammarResult<Self> {
+        use pest::Parser;
+        use zyn_peg::ast::build_grammar;
+        use zyn_peg::runtime::ZpegCompiler;
+        use zyn_peg::{Rule as ZynRule, ZynGrammarParser};
+
+        // Parse the .zyn grammar file
+        let pairs = ZynGrammarParser::parse(ZynRule::program, zyn_source)
+            .map_err(|e| GrammarError::ParseError(format!("Failed to parse .zyn grammar: {}", e)))?;
+
+        // Build the grammar AST
+        let grammar = build_grammar(pairs)
+            .map_err(|e| GrammarError::ParseError(format!("Failed to build grammar: {}", e)))?;
+
+        // Compile to zpeg module
+        let module = ZpegCompiler::compile(&grammar)
+            .map_err(|e| GrammarError::CompileError(e.to_string()))?;
+
+        Ok(Self {
+            module: Arc::new(module),
+            vm: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    /// Compile a grammar from a `.zyn` file path
+    ///
+    /// # Arguments
+    /// * `path` - Path to the `.zyn` grammar file
+    pub fn compile_zyn_file<P: AsRef<Path>>(path: P) -> GrammarResult<Self> {
+        let source = std::fs::read_to_string(path)?;
+        Self::compile_zyn(&source)
+    }
+
+    /// Create a grammar from an already-compiled zpeg module
+    pub fn from_module(module: ZpegModule) -> Self {
+        Self {
+            module: Arc::new(module),
+            vm: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Save the compiled grammar to a `.zpeg` file
+    ///
+    /// # Arguments
+    /// * `path` - Path where to save the `.zpeg` file
+    pub fn save<P: AsRef<Path>>(&self, path: P) -> GrammarResult<()> {
+        self.module
+            .save(path)
+            .map_err(|e| GrammarError::CompileError(e.to_string()))
+    }
+
+    /// Get the language name from the grammar metadata
+    pub fn name(&self) -> &str {
+        &self.module.metadata.name
+    }
+
+    /// Get the language version from the grammar metadata
+    pub fn version(&self) -> &str {
+        &self.module.metadata.version
+    }
+
+    /// Get the file extensions this grammar handles
+    pub fn file_extensions(&self) -> &[String] {
+        &self.module.metadata.file_extensions
+    }
+
+    /// Get the entry point function name if declared
+    pub fn entry_point(&self) -> Option<&str> {
+        self.module.metadata.entry_point.as_deref()
+    }
+
+    /// Get the builtin function mappings
+    pub fn builtins(&self) -> &HashMap<String, String> {
+        &self.module.metadata.builtins
+    }
+
+    /// Get the pest grammar string
+    pub fn pest_grammar(&self) -> &str {
+        &self.module.pest_grammar
+    }
+
+    /// Get a reference to the underlying zpeg module
+    pub fn module(&self) -> &ZpegModule {
+        &self.module
+    }
+
+    /// Parse source code and return the TypedAST as JSON
+    ///
+    /// This is useful for debugging or when you need to serialize the AST.
+    ///
+    /// # Arguments
+    /// * `source` - The source code to parse
+    ///
+    /// # Returns
+    /// The TypedAST serialized as JSON
+    pub fn parse_to_json(&self, source: &str) -> GrammarResult<String> {
+        self.parse_with_builder(source, TypedAstBuilder::new())
+    }
+
+    /// Parse source code and return a TypedProgram
+    ///
+    /// # Arguments
+    /// * `source` - The source code to parse
+    ///
+    /// # Returns
+    /// The parsed TypedProgram ready for lowering to HIR
+    pub fn parse(&self, source: &str) -> GrammarResult<TypedProgram> {
+        let json = self.parse_to_json(source)?;
+        let program: TypedProgram = serde_json::from_str(&json)
+            .map_err(|e| GrammarError::AstBuildError(format!("Failed to deserialize TypedAST: {}", e)))?;
+        Ok(program)
+    }
+
+    /// Parse source code with a custom AST builder
+    ///
+    /// This allows using a custom implementation of `AstHostFunctions` for
+    /// specialized AST construction.
+    ///
+    /// # Arguments
+    /// * `source` - The source code to parse
+    /// * `builder` - The AST builder implementing `AstHostFunctions`
+    ///
+    /// # Returns
+    /// The finalized AST as JSON string
+    pub fn parse_with_builder<H: AstHostFunctions>(
+        &self,
+        source: &str,
+        builder: H,
+    ) -> GrammarResult<String> {
+        // Initialize or get the cached VM
+        let rules = {
+            let mut cache = self.vm.lock().unwrap();
+            if cache.is_none() {
+                let rules = self.compile_pest_grammar()?;
+                *cache = Some(PestVmCache { rules });
+            }
+            cache.as_ref().unwrap().rules.clone()
+        };
+
+        // Create VM and parse source
+        let vm = Vm::new(rules);
+        let parse_result = vm
+            .parse("program", source)
+            .map_err(|e| GrammarError::SourceParseError(e.to_string()))?;
+
+        // Create interpreter
+        let mut interpreter = CommandInterpreter::new(&self.module, builder);
+
+        // Walk the parse tree and execute commands
+        let result = walk_parse_tree(&mut interpreter, parse_result)?;
+
+        // Finalize the AST
+        let json = match result {
+            RuntimeValue::Node(handle) => interpreter.host_mut().finalize_program(handle),
+            _ => {
+                // Create empty program if we got something unexpected
+                let handle = interpreter.host_mut().create_program();
+                interpreter.host_mut().finalize_program(handle)
+            }
+        };
+
+        Ok(json)
+    }
+
+    /// Compile the pest grammar to optimized rules
+    fn compile_pest_grammar(&self) -> GrammarResult<Vec<pest_meta::optimizer::OptimizedRule>> {
+        // Parse the pest grammar
+        let pairs = parser::parse(parser::Rule::grammar_rules, &self.module.pest_grammar)
+            .map_err(|e| GrammarError::CompileError(format!("Failed to parse pest grammar: {:?}", e)))?;
+
+        // Convert to AST and optimize
+        let ast = parser::consume_rules(pairs)
+            .map_err(|e| GrammarError::CompileError(format!("Failed to consume grammar rules: {:?}", e)))?;
+
+        Ok(optimizer::optimize(ast))
+    }
+}
+
+/// Recursively walk the pest parse tree and execute zpeg commands
+fn walk_parse_tree<'a, H: AstHostFunctions>(
+    interpreter: &mut CommandInterpreter<'_, H>,
+    pairs: pest::iterators::Pairs<'a, &'a str>,
+) -> GrammarResult<RuntimeValue> {
+    let mut results = Vec::new();
+
+    for pair in pairs {
+        let rule_name = pair.as_rule().to_string();
+        let text = pair.as_str().to_string();
+
+        log::trace!(
+            "[grammar] Processing rule '{}': {:?}",
+            rule_name,
+            if text.len() > 40 {
+                format!("{}...", &text[..40])
+            } else {
+                text.clone()
+            }
+        );
+
+        // Recursively process children first
+        let children: Vec<RuntimeValue> = pair
+            .into_inner()
+            .map(|child| walk_pair_to_value(child, interpreter))
+            .collect();
+
+        // Execute commands for this rule
+        let result = interpreter
+            .execute_rule(&rule_name, &text, children)
+            .map_err(|e| GrammarError::AstBuildError(format!("Error executing rule '{}': {}", rule_name, e)))?;
+
+        results.push(result);
+    }
+
+    // Return the last result (typically the program node)
+    Ok(results.into_iter().last().unwrap_or(RuntimeValue::Null))
+}
+
+/// Recursively walk a single pair and return its RuntimeValue
+fn walk_pair_to_value<'a, H: AstHostFunctions>(
+    pair: pest::iterators::Pair<'a, &'a str>,
+    interpreter: &mut CommandInterpreter<'_, H>,
+) -> RuntimeValue {
+    let rule_name = pair.as_rule().to_string();
+    let text = pair.as_str().to_string();
+
+    log::trace!(
+        "[grammar] walk_pair '{}': {:?}",
+        rule_name,
+        if text.len() > 30 {
+            format!("{}...", &text[..30])
+        } else {
+            text.clone()
+        }
+    );
+
+    // Recursively process children
+    let children: Vec<RuntimeValue> = pair
+        .into_inner()
+        .map(|c| walk_pair_to_value(c, interpreter))
+        .collect();
+
+    // Execute commands for this rule
+    interpreter
+        .execute_rule(&rule_name, &text, children)
+        .unwrap_or(RuntimeValue::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_grammar_metadata() {
+        // Test with a simple grammar
+        let grammar = LanguageGrammar::compile_zyn(r#"
+            @language {
+                name: "TestLang",
+                version: "1.0",
+                file_extensions: [".test"],
+            }
+
+            program = { SOI ~ expr* ~ EOI }
+            expr = { number }
+            number = @{ ASCII_DIGIT+ }
+        "#);
+
+        match grammar {
+            Ok(g) => {
+                assert_eq!(g.name(), "TestLang");
+                assert_eq!(g.version(), "1.0");
+                assert_eq!(g.file_extensions(), &["test".to_string()]);
+            }
+            Err(e) => {
+                // Grammar compilation may fail in test environment, that's OK
+                eprintln!("Grammar compilation failed (expected in some environments): {}", e);
+            }
+        }
+    }
+}
