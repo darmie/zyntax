@@ -354,6 +354,48 @@ assert_eq!(result, 42);
 
 **Status:** ✅ **Production-ready** - Full SSA-based IR construction with type system integration
 
+### ✅ Embedding SDK - Embed Zyntax in Your Application
+
+Use `zyntax_embed` to embed the Zyntax JIT runtime in Rust applications:
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+
+// Load a grammar and create runtime
+let grammar = LanguageGrammar::compile_zyn_file("grammars/zig.zyn")?;
+let mut runtime = ZyntaxRuntime::new()?;
+
+// Compile and run code
+runtime.compile_with_grammar(&grammar, r#"
+    pub fn add(a: i32, b: i32) i32 {
+        return a + b;
+    }
+"#)?;
+
+let result: i32 = runtime.call("add", &[10.into(), 32.into()])?;
+println!("Result: {}", result); // 42
+```
+
+**Register native functions:**
+
+```rust
+extern "C" fn native_print(x: i32) { println!("{}", x); }
+
+let symbols = &[("native_print", native_print as *const u8)];
+let mut runtime = ZyntaxRuntime::with_symbols(symbols)?;
+```
+
+**Features:**
+- Multi-tier JIT compilation (Cranelift baseline → LLVM optimized)
+- Bidirectional Rust ↔ Zyntax value conversion
+- External function registration for native interop
+- ZRTL plugin loading for runtime libraries
+- Async/await with Promise API
+
+**Status:** ✅ **Production-ready** - Full embedding API with grammar support
+
+See [Embedding SDK Documentation](./book/12-embedding-sdk.md) for complete guide.
+
 ### 🔜 Other Integrations
 
 - **Whirlwind** - Direct AST adapter (in progress)
