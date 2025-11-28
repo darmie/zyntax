@@ -50,6 +50,304 @@ impl From<ZyntaxError> for RuntimeError {
     }
 }
 
+// ============================================================================
+// Native Calling Convention Types
+// ============================================================================
+
+/// Native type for function signatures
+///
+/// Represents the primitive types that can be passed to/from JIT-compiled functions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeType {
+    /// 32-bit signed integer
+    I32,
+    /// 64-bit signed integer
+    I64,
+    /// 32-bit floating point
+    F32,
+    /// 64-bit floating point
+    F64,
+    /// Boolean (passed as i8)
+    Bool,
+    /// Void (no return value)
+    Void,
+    /// Pointer (passed as usize)
+    Ptr,
+}
+
+/// Function signature for native calling convention
+///
+/// Describes the parameter types and return type for a JIT-compiled function.
+#[derive(Debug, Clone)]
+pub struct NativeSignature {
+    /// Parameter types
+    pub params: Vec<NativeType>,
+    /// Return type
+    pub ret: NativeType,
+}
+
+impl NativeSignature {
+    /// Create a new signature
+    pub fn new(params: &[NativeType], ret: NativeType) -> Self {
+        Self {
+            params: params.to_vec(),
+            ret,
+        }
+    }
+
+    /// Create a signature from a string like "(i32, i32) -> i32"
+    pub fn parse(s: &str) -> Option<Self> {
+        // Simple parser for signature strings
+        let s = s.trim();
+
+        // Find the arrow
+        let arrow_pos = s.find("->")?;
+        let params_str = s[..arrow_pos].trim();
+        let ret_str = s[arrow_pos + 2..].trim();
+
+        // Parse return type
+        let ret = Self::parse_type(ret_str)?;
+
+        // Parse parameters
+        let params_str = params_str.strip_prefix('(')?.strip_suffix(')')?;
+        let params: Option<Vec<_>> = if params_str.is_empty() {
+            Some(vec![])
+        } else {
+            params_str.split(',')
+                .map(|p| Self::parse_type(p.trim()))
+                .collect()
+        };
+
+        Some(Self { params: params?, ret })
+    }
+
+    fn parse_type(s: &str) -> Option<NativeType> {
+        match s {
+            "i32" => Some(NativeType::I32),
+            "i64" => Some(NativeType::I64),
+            "f32" => Some(NativeType::F32),
+            "f64" => Some(NativeType::F64),
+            "bool" => Some(NativeType::Bool),
+            "void" | "()" => Some(NativeType::Void),
+            "ptr" | "*" => Some(NativeType::Ptr),
+            _ => None,
+        }
+    }
+}
+
+/// Call a native function with the given signature
+///
+/// # Safety
+/// The caller must ensure the function pointer has the correct signature.
+unsafe fn call_native_with_signature(
+    ptr: *const u8,
+    args: &[ZyntaxValue],
+    signature: &NativeSignature,
+) -> RuntimeResult<ZyntaxValue> {
+    // Convert arguments to native values on the stack
+    // We use a union-like approach with i64 as the largest type
+    let native_args: Vec<i64> = args.iter()
+        .zip(&signature.params)
+        .map(|(arg, ty)| value_to_native(arg, *ty))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Dispatch based on argument count and return type
+    // This generates the actual function call with proper ABI
+    let result_i64 = match native_args.len() {
+        0 => call_0(ptr, signature.ret),
+        1 => call_1(ptr, native_args[0], signature.ret),
+        2 => call_2(ptr, native_args[0], native_args[1], signature.ret),
+        3 => call_3(ptr, native_args[0], native_args[1], native_args[2], signature.ret),
+        4 => call_4(ptr, native_args[0], native_args[1], native_args[2], native_args[3], signature.ret),
+        n => return Err(RuntimeError::Execution(format!(
+            "Unsupported argument count: {}. Maximum is 4.", n
+        ))),
+    };
+
+    // Convert result back to ZyntaxValue
+    native_to_value(result_i64, signature.ret)
+}
+
+/// Convert a ZyntaxValue to a native i64 representation
+fn value_to_native(value: &ZyntaxValue, ty: NativeType) -> RuntimeResult<i64> {
+    match (value, ty) {
+        (ZyntaxValue::Int(n), NativeType::I32) => Ok(*n as i64),
+        (ZyntaxValue::Int(n), NativeType::I64) => Ok(*n),
+        (ZyntaxValue::Float(f), NativeType::F32) => Ok((*f as f32).to_bits() as i64),
+        (ZyntaxValue::Float(f), NativeType::F64) => Ok(f.to_bits() as i64),
+        (ZyntaxValue::Bool(b), NativeType::Bool) => Ok(if *b { 1 } else { 0 }),
+        _ => Err(RuntimeError::Execution(format!(
+            "Cannot convert {:?} to {:?}", value, ty
+        ))),
+    }
+}
+
+/// Convert a native i64 result back to ZyntaxValue
+fn native_to_value(raw: i64, ty: NativeType) -> RuntimeResult<ZyntaxValue> {
+    Ok(match ty {
+        NativeType::I32 => ZyntaxValue::Int(raw as i32 as i64),
+        NativeType::I64 => ZyntaxValue::Int(raw),
+        NativeType::F32 => ZyntaxValue::Float(f32::from_bits(raw as u32) as f64),
+        NativeType::F64 => ZyntaxValue::Float(f64::from_bits(raw as u64)),
+        NativeType::Bool => ZyntaxValue::Bool(raw != 0),
+        NativeType::Void => ZyntaxValue::Null,
+        NativeType::Ptr => ZyntaxValue::Int(raw),
+    })
+}
+
+// Native call dispatch functions
+// These use i64 as a universal container and reinterpret based on return type
+
+unsafe fn call_0(ptr: *const u8, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn() -> i32 = std::mem::transmute(ptr);
+            f() as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn() -> i64 = std::mem::transmute(ptr);
+            f()
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn() -> f32 = std::mem::transmute(ptr);
+            f().to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn() -> f64 = std::mem::transmute(ptr);
+            f().to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn() -> i8 = std::mem::transmute(ptr);
+            f() as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn() = std::mem::transmute(ptr);
+            f();
+            0
+        }
+    }
+}
+
+unsafe fn call_1(ptr: *const u8, a0: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64) -> i32 = std::mem::transmute(ptr);
+            f(a0) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64) -> i64 = std::mem::transmute(ptr);
+            f(a0)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64) -> f32 = std::mem::transmute(ptr);
+            f(a0).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64) -> f64 = std::mem::transmute(ptr);
+            f(a0).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64) -> i8 = std::mem::transmute(ptr);
+            f(a0) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64) = std::mem::transmute(ptr);
+            f(a0);
+            0
+        }
+    }
+}
+
+unsafe fn call_2(ptr: *const u8, a0: i64, a1: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64, i64) -> i32 = std::mem::transmute(ptr);
+            f(a0, a1) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64, i64) -> i64 = std::mem::transmute(ptr);
+            f(a0, a1)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64, i64) -> f32 = std::mem::transmute(ptr);
+            f(a0, a1).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64, i64) -> f64 = std::mem::transmute(ptr);
+            f(a0, a1).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64, i64) -> i8 = std::mem::transmute(ptr);
+            f(a0, a1) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64, i64) = std::mem::transmute(ptr);
+            f(a0, a1);
+            0
+        }
+    }
+}
+
+unsafe fn call_3(ptr: *const u8, a0: i64, a1: i64, a2: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            f(a0, a1, a2) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            f(a0, a1, a2)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            f(a0, a1, a2).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            f(a0, a1, a2).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            f(a0, a1, a2) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64, i64, i64) = std::mem::transmute(ptr);
+            f(a0, a1, a2);
+            0
+        }
+    }
+}
+
+unsafe fn call_4(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64, i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64, i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64, i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64, i64, i64, i64) = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3);
+            0
+        }
+    }
+}
+
 
 
 
@@ -168,10 +466,21 @@ impl ZyntaxRuntime {
     /// Compile a HIR module into the runtime
     ///
     /// After compilation, functions can be called via `call()` or `call_async()`.
+    ///
+    /// If the module has extern declarations that match previously compiled functions,
+    /// the backend will be rebuilt to include those symbols before compilation.
     pub fn compile_module(&mut self, module: &zyntax_compiler::HirModule) -> RuntimeResult<()> {
-        // Store function name -> ID mapping
+        // Check if we need to rebuild the backend for cross-module linking
+        if self.backend.needs_rebuild_for_module(module) {
+            log::debug!("[Runtime] Rebuilding JIT for cross-module symbol resolution");
+            self.backend.rebuild_with_accumulated_symbols()?;
+        }
+
+        // Store function name -> ID mapping (resolve InternedString to actual string)
         for (id, func) in &module.functions {
-            self.function_ids.insert(func.name.to_string(), *id);
+            if let Some(name) = func.name.resolve_global() {
+                self.function_ids.insert(name, *id);
+            }
         }
 
         // Compile the module
@@ -275,6 +584,9 @@ impl ZyntaxRuntime {
     }
 
     /// Call a function and get the raw ZyntaxValue result
+    ///
+    /// Note: This uses dynamic calling convention. For native (i32, i64) functions,
+    /// use `call_native` with a signature instead.
     pub fn call_raw(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxValue> {
         let ptr = self.get_function_ptr(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
@@ -292,6 +604,49 @@ impl ZyntaxRuntime {
         unsafe {
             let result = call_dynamic_function(ptr, &dynamic_args)?;
             ZyntaxValue::from_dynamic(result).map_err(RuntimeError::from)
+        }
+    }
+
+    /// Call a JIT-compiled function with native calling convention
+    ///
+    /// This method dynamically constructs the function call based on the provided
+    /// signature, converting ZyntaxValue arguments to native types.
+    ///
+    /// # Arguments
+    /// * `name` - The function name
+    /// * `args` - The arguments as ZyntaxValues
+    /// * `signature` - The function signature describing parameter and return types
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use zyntax_embed::{ZyntaxRuntime, NativeSignature, NativeType};
+    ///
+    /// // fn add(a: i32, b: i32) -> i32
+    /// let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+    /// let result = runtime.call_native("add", &[10.into(), 32.into()], &sig)?;
+    /// assert_eq!(result, ZyntaxValue::Int(42));
+    /// ```
+    pub fn call_native(
+        &self,
+        name: &str,
+        args: &[ZyntaxValue],
+        signature: &NativeSignature,
+    ) -> RuntimeResult<ZyntaxValue> {
+        let ptr = self.get_function_ptr(name)
+            .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+
+        // Validate argument count
+        if args.len() != signature.params.len() {
+            return Err(RuntimeError::Execution(format!(
+                "Function '{}' expects {} arguments, got {}",
+                name, signature.params.len(), args.len()
+            )));
+        }
+
+        // SAFETY: We trust the caller has provided the correct signature
+        unsafe {
+            call_native_with_signature(ptr, args, signature)
         }
     }
 
@@ -590,6 +945,9 @@ impl ZyntaxRuntime {
     /// This parses the source code using the registered grammar for the language,
     /// lowers it to HIR, and compiles it into the runtime.
     ///
+    /// Note: Functions are NOT automatically exported for cross-module linking.
+    /// Use `load_module_with_exports` to specify which functions to export.
+    ///
     /// # Arguments
     /// * `language` - The language identifier (must be previously registered)
     /// * `source` - The source code to compile
@@ -614,6 +972,42 @@ impl ZyntaxRuntime {
     /// let result: i32 = runtime.call("add", &[10.into(), 32.into()])?;
     /// ```
     pub fn load_module(&mut self, language: &str, source: &str) -> RuntimeResult<Vec<String>> {
+        self.load_module_with_exports(language, source, &[])
+    }
+
+    /// Load a module and export specified functions for cross-module linking
+    ///
+    /// Functions listed in `exports` will be made available as extern symbols
+    /// for subsequent modules to call. A warning is printed if there's a name conflict.
+    ///
+    /// # Arguments
+    /// * `language` - The language identifier (must be previously registered)
+    /// * `source` - The source code to compile
+    /// * `exports` - Names of functions to export for cross-module linking
+    ///
+    /// # Returns
+    /// The names of functions defined in the module
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Module A exports 'add'
+    /// runtime.load_module_with_exports("zig", r#"
+    ///     pub fn add(a: i32, b: i32) i32 { return a + b; }
+    /// "#, &["add"])?;
+    ///
+    /// // Module B can call 'add' via extern
+    /// runtime.load_module("zig", r#"
+    ///     extern fn add(a: i32, b: i32) i32;
+    ///     pub fn double_add(a: i32, b: i32) i32 { return add(a, b) + add(a, b); }
+    /// "#)?;
+    /// ```
+    pub fn load_module_with_exports(
+        &mut self,
+        language: &str,
+        source: &str,
+        exports: &[&str],
+    ) -> RuntimeResult<Vec<String>> {
         let grammar = self
             .grammars
             .get(language)
@@ -633,16 +1027,64 @@ impl ZyntaxRuntime {
         let hir_module = self.lower_typed_program(typed_program)?;
 
         // Collect function names before compilation
+        // Use resolve_global() to get the actual string from InternedString
         let function_names: Vec<String> = hir_module
             .functions
             .values()
-            .map(|f| f.name.to_string())
+            .filter(|f| !f.is_external)
+            .filter_map(|f| f.name.resolve_global())
             .collect();
 
         // Compile the module
         self.compile_module(&hir_module)?;
 
+        // Export specified functions
+        for export_name in exports {
+            self.export_function(export_name)?;
+        }
+
         Ok(function_names)
+    }
+
+    /// Export a compiled function for cross-module linking
+    ///
+    /// Makes the function available as an extern symbol for subsequent modules.
+    /// Returns an error if the function doesn't exist or if there's a symbol conflict.
+    ///
+    /// # Arguments
+    /// * `name` - The function name to export
+    pub fn export_function(&mut self, name: &str) -> RuntimeResult<()> {
+        // Get the function pointer from our function_ids map
+        let ptr = self.get_function_ptr(name)
+            .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+
+        // Check for conflict and warn
+        if let Some(existing) = self.backend.check_export_conflict(name) {
+            log::warn!(
+                "Symbol conflict: '{}' is already exported at {:?}. Overwriting.",
+                name, existing
+            );
+            // Use overwrite method to replace
+            self.backend.export_function_ptr_overwrite(name, ptr);
+        } else {
+            // No conflict, use regular export
+            self.backend.export_function_ptr(name, ptr)
+                .map_err(|e| RuntimeError::Execution(e.to_string()))?;
+        }
+
+        Ok(())
+    }
+
+    /// Check if exporting a function would cause a symbol conflict
+    ///
+    /// Returns Some with the existing pointer if a conflict exists.
+    pub fn check_export_conflict(&self, name: &str) -> Option<*const u8> {
+        self.backend.check_export_conflict(name)
+    }
+
+    /// Get all currently exported symbols
+    pub fn exported_symbols(&self) -> Vec<(&str, *const u8)> {
+        self.backend.exported_symbols()
     }
 
     /// Load a module from a file, auto-detecting the language from extension
@@ -791,9 +1233,11 @@ impl TieredRuntime {
 
     /// Compile a HIR module into the tiered runtime
     pub fn compile_module(&mut self, module: HirModule) -> RuntimeResult<()> {
-        // Store function name -> ID mapping
+        // Store function name -> ID mapping (resolve InternedString to actual string)
         for (id, func) in &module.functions {
-            self.function_ids.insert(func.name.to_string(), *id);
+            if let Some(name) = func.name.resolve_global() {
+                self.function_ids.insert(name, *id);
+            }
         }
 
         // Compile the module (consumes it)

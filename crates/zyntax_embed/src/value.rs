@@ -163,6 +163,22 @@ impl ZyntaxValue {
         }
     }
 
+    /// Try to get as an i32 (convenience method)
+    pub fn as_i32(&self) -> Option<i32> {
+        self.as_int().and_then(|v| {
+            if v >= i32::MIN as i64 && v <= i32::MAX as i64 {
+                Some(v as i32)
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Try to get as an i64 (convenience alias for as_int)
+    pub fn as_i64(&self) -> Option<i64> {
+        self.as_int()
+    }
+
     /// Try to get as an unsigned integer
     pub fn as_uint(&self) -> Option<u64> {
         match self {

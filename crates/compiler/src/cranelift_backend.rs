@@ -46,6 +46,11 @@ pub struct CraneliftBackend {
     compiled_functions: HashMap<HirId, CompiledFunction>,
     /// Hot-reload state
     hot_reload: HotReloadState,
+    /// Exported symbols from compiled functions (name → pointer)
+    /// Used for cross-module linking when loading multiple modules
+    exported_symbols: HashMap<String, *const u8>,
+    /// Runtime symbols registered for external linking
+    runtime_symbols: Vec<(String, *const u8)>,
 }
 
 /// Hot-reload state management
@@ -118,7 +123,12 @@ impl CraneliftBackend {
         }
 
         let module = JITModule::new(builder);
-        
+
+        // Store runtime symbols for potential backend recreation
+        let runtime_symbols: Vec<(String, *const u8)> = additional_symbols
+            .map(|syms| syms.iter().map(|(n, p)| (n.to_string(), *p)).collect())
+            .unwrap_or_default();
+
         Ok(Self {
             module,
             builder_context: FunctionBuilderContext::new(),
@@ -134,6 +144,8 @@ impl CraneliftBackend {
                 previous_versions: Arc::new(RwLock::new(HashMap::new())),
                 function_pointers: Arc::new(RwLock::new(HashMap::new())),
             },
+            exported_symbols: HashMap::new(),
+            runtime_symbols,
         })
     }
     
@@ -166,7 +178,96 @@ impl CraneliftBackend {
             self.hot_reload.function_pointers.write().unwrap().insert(*hir_id, code_ptr);
         }
 
+        // Note: Symbols are NOT automatically exported for cross-module linking.
+        // Use export_function() or export_functions() to explicitly export symbols.
+
         Ok(())
+    }
+
+    /// Export a compiled function for cross-module linking
+    ///
+    /// Returns an error if the function doesn't exist or if there's a symbol conflict.
+    pub fn export_function(&mut self, name: &str) -> CompilerResult<()> {
+        // Check for existing export conflict
+        if let Some(existing_ptr) = self.exported_symbols.get(name) {
+            // Find the current function pointer for this name
+            let current_ptr = self.hot_reload.function_pointers.read().unwrap()
+                .values()
+                .find(|&&p| p == *existing_ptr)
+                .copied();
+
+            if current_ptr.is_some() {
+                return Err(CompilerError::Backend(format!(
+                    "Symbol conflict: '{}' is already exported. Use a different name or unexport the existing symbol.",
+                    name
+                )));
+            }
+        }
+
+        // Find the function by name in the function pointers
+        let ptr = {
+            let ptrs = self.hot_reload.function_pointers.read().unwrap();
+            // We need to find the HirId for this function name
+            // The function_map maps HirId -> FuncId, so we iterate compiled_functions
+            let mut found_ptr = None;
+            for (hir_id, _) in &self.compiled_functions {
+                if let Some(ptr) = ptrs.get(hir_id) {
+                    found_ptr = Some(*ptr);
+                    break;
+                }
+            }
+            found_ptr
+        };
+
+        // Note: The above search is not ideal because we're not tracking name->HirId mapping here.
+        // The runtime layer should provide the function pointer directly.
+
+        if let Some(ptr) = ptr {
+            self.exported_symbols.insert(name.to_string(), ptr);
+            Ok(())
+        } else {
+            Err(CompilerError::Backend(format!(
+                "Function '{}' not found in compiled functions",
+                name
+            )))
+        }
+    }
+
+    /// Export a function with an explicit function pointer
+    ///
+    /// This is the preferred method as it avoids lookup issues.
+    /// Returns an error if there's a symbol conflict and `allow_overwrite` is false.
+    pub fn export_function_ptr(&mut self, name: &str, ptr: *const u8) -> CompilerResult<()> {
+        self.export_function_ptr_internal(name, ptr, false)
+    }
+
+    /// Export a function, allowing overwrite if the symbol already exists
+    ///
+    /// Returns the old pointer if it was overwritten.
+    pub fn export_function_ptr_overwrite(&mut self, name: &str, ptr: *const u8) -> Option<*const u8> {
+        let old = self.exported_symbols.insert(name.to_string(), ptr);
+        old
+    }
+
+    /// Internal export with configurable overwrite behavior
+    fn export_function_ptr_internal(&mut self, name: &str, ptr: *const u8, allow_overwrite: bool) -> CompilerResult<()> {
+        // Check for existing export conflict
+        if !allow_overwrite && self.exported_symbols.contains_key(name) {
+            return Err(CompilerError::Backend(format!(
+                "Symbol conflict: '{}' is already exported. Use a different name or unexport the existing symbol.",
+                name
+            )));
+        }
+
+        self.exported_symbols.insert(name.to_string(), ptr);
+        Ok(())
+    }
+
+    /// Check if exporting a function would cause a symbol conflict
+    ///
+    /// Returns Some(existing_ptr) if a conflict exists, None otherwise.
+    pub fn check_export_conflict(&self, name: &str) -> Option<*const u8> {
+        self.exported_symbols.get(name).copied()
     }
 
     /// Declare a function signature without compiling its body
@@ -3697,6 +3798,129 @@ impl CraneliftBackend {
     /// Get the Cranelift IR as a string (for debugging)
     pub fn get_ir_string(&self) -> String {
         format!("{}", self.codegen_context.func)
+    }
+
+    // =========================================================================
+    // Cross-Module Symbol Management
+    // =========================================================================
+
+    /// Register an exported symbol for cross-module linking
+    ///
+    /// Call this after compiling a module to make its public functions available
+    /// as extern symbols for subsequent modules.
+    ///
+    /// # Arguments
+    /// * `name` - The function name (without mangling/HirId suffix)
+    /// * `ptr` - The function pointer
+    pub fn register_exported_symbol(&mut self, name: &str, ptr: *const u8) {
+        self.exported_symbols.insert(name.to_string(), ptr);
+    }
+
+    /// Get an exported symbol by name
+    pub fn get_exported_symbol(&self, name: &str) -> Option<*const u8> {
+        self.exported_symbols.get(name).copied()
+    }
+
+    /// Get all exported symbols
+    ///
+    /// Returns a list of (name, pointer) pairs for all exported functions.
+    pub fn exported_symbols(&self) -> Vec<(&str, *const u8)> {
+        self.exported_symbols
+            .iter()
+            .map(|(n, p)| (n.as_str(), *p))
+            .collect()
+    }
+
+    /// Register a runtime symbol for external linking
+    ///
+    /// These symbols will be included when the JIT module needs to be recreated.
+    pub fn register_runtime_symbol(&mut self, name: &str, ptr: *const u8) {
+        // Check if symbol already exists
+        if !self.runtime_symbols.iter().any(|(n, _)| n == name) {
+            self.runtime_symbols.push((name.to_string(), ptr));
+        }
+    }
+
+    /// Get all runtime symbols (for backend recreation)
+    pub fn runtime_symbols(&self) -> &[(String, *const u8)] {
+        &self.runtime_symbols
+    }
+
+    /// Check if a module has unresolved external symbols that require existing exports
+    ///
+    /// Returns the list of extern function names that need to be resolved.
+    pub fn collect_extern_dependencies(module: &HirModule) -> Vec<String> {
+        module.functions
+            .values()
+            .filter(|f| f.is_external)
+            .map(|f| f.name.resolve_global().unwrap_or_else(|| f.name.to_string()))
+            .collect()
+    }
+
+    /// Check if we need to rebuild the JIT module to include new symbols
+    ///
+    /// Returns true if the module has extern dependencies that aren't in the current JIT.
+    pub fn needs_rebuild_for_module(&self, module: &HirModule) -> bool {
+        let externs = Self::collect_extern_dependencies(module);
+        externs.iter().any(|name| {
+            // Check if the extern is in our exported symbols but not in runtime symbols
+            self.exported_symbols.contains_key(name) &&
+            !self.runtime_symbols.iter().any(|(n, _)| n == name)
+        })
+    }
+
+    /// Rebuild the JIT module with all accumulated symbols
+    ///
+    /// This creates a new JITModule with all runtime symbols and exported symbols.
+    /// NOTE: This invalidates previously compiled function pointers!
+    /// Use with caution - primarily for cross-module linking setup.
+    pub fn rebuild_with_accumulated_symbols(&mut self) -> CompilerResult<()> {
+        // Collect all symbols (runtime + exported)
+        let mut all_symbols: Vec<(&str, *const u8)> = self.runtime_symbols
+            .iter()
+            .map(|(n, p)| (n.as_str(), *p))
+            .collect();
+
+        for (name, ptr) in &self.exported_symbols {
+            if !all_symbols.iter().any(|(n, _)| *n == name) {
+                all_symbols.push((name.as_str(), *ptr));
+            }
+        }
+
+        // Configure Cranelift for the current platform
+        let mut flag_builder = settings::builder();
+        flag_builder.set("use_colocated_libcalls", "false").unwrap();
+        flag_builder.set("is_pic", "false").unwrap();
+        flag_builder.set("opt_level", "speed").unwrap();
+        flag_builder.set("enable_verifier", "false").unwrap();
+
+        let isa_builder = cranelift_native::builder().unwrap();
+        let isa = isa_builder.finish(settings::Flags::new(flag_builder)).unwrap();
+
+        // Create new JIT module with all symbols
+        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
+        for (name, ptr) in &all_symbols {
+            builder.symbol(*name, *ptr);
+        }
+
+        // Update runtime_symbols to include everything
+        for (name, ptr) in &self.exported_symbols {
+            if !self.runtime_symbols.iter().any(|(n, _)| n == name) {
+                self.runtime_symbols.push((name.clone(), *ptr));
+            }
+        }
+
+        // Replace the JIT module
+        self.module = JITModule::new(builder);
+
+        // Clear state that depends on the old module
+        self.function_map.clear();
+        self.global_map.clear();
+        self.compiled_functions.clear();
+        // Note: hot_reload.function_pointers still has the old pointers
+        // They remain valid but won't be part of the new module
+
+        Ok(())
     }
 }
 

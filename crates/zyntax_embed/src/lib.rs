@@ -73,6 +73,8 @@ pub use runtime::{
     ImportResolverTrait, ImportContext, ImportManager, ImportError,
     ResolvedImport, ExportedSymbol, SymbolKind, ModuleArchitecture,
     ChainedResolver, BuiltinResolver,
+    // Native calling interface
+    NativeType, NativeSignature,
 };
 pub use grammar::{LanguageGrammar, GrammarError, GrammarResult};
 

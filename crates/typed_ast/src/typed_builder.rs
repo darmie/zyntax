@@ -892,6 +892,34 @@ impl TypedASTBuilder {
         )
     }
 
+    /// Build extern function declaration (no body)
+    pub fn extern_function(
+        &mut self,
+        name: &str,
+        params: Vec<TypedParameter>,
+        return_type: Type,
+        visibility: Visibility,
+        span: Span,
+    ) -> TypedNode<TypedDeclaration> {
+        let func_name = self.intern(name);
+        typed_node(
+            TypedDeclaration::Function(TypedFunction {
+                name: func_name,
+                type_params: vec![],
+                params,
+                return_type: return_type.clone(),
+                body: None,
+                visibility,
+                is_async: false,
+                is_external: true,
+                calling_convention: CallingConvention::Cdecl,
+                link_name: None,
+            }),
+            return_type,
+            span,
+        )
+    }
+
     /// Build variable declaration
     pub fn variable_declaration(
         &mut self,

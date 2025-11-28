@@ -202,14 +202,14 @@ println!("Language for .py: {:?}", runtime.language_for_extension("py"));    // 
 
 ### Cross-Language Function Calls
 
-All modules loaded into the same runtime share a common execution environment. Functions can call each other across language boundaries:
+All modules loaded into the same runtime share a common execution environment. Functions can call each other across language boundaries using **explicit exports**:
 
 ```rust
-// Load core utilities in Zig
-runtime.load_module("zig", r#"
+// Load core utilities in Zig and EXPORT them for cross-module linking
+runtime.load_module_with_exports("zig", r#"
     pub fn square(x: i32) i32 { return x * x; }
     pub fn cube(x: i32) i32 { return x * x * x; }
-"#)?;
+"#, &["square", "cube"])?;
 
 // Load a DSL that uses the Zig functions via extern declarations
 runtime.load_module("calc", r#"
@@ -223,6 +223,31 @@ runtime.load_module("calc", r#"
 let result: i32 = runtime.call("sum_of_powers", &[3.into(), 2.into()])?;
 assert_eq!(result, 17); // square(3) + cube(2) = 9 + 8 = 17
 ```
+
+#### Export Management
+
+Functions must be explicitly exported to be available for cross-module linking:
+
+```rust
+// Method 1: Export during load
+runtime.load_module_with_exports("zig", source, &["fn1", "fn2"])?;
+
+// Method 2: Export after load
+runtime.load_module("zig", source)?;
+runtime.export_function("my_func")?;
+
+// Check for symbol conflicts
+if let Some(existing_ptr) = runtime.check_export_conflict("my_func") {
+    println!("Warning: my_func already exported at {:?}", existing_ptr);
+}
+
+// List all exported symbols
+for (name, ptr) in runtime.exported_symbols() {
+    println!("Exported: {} at {:?}", name, ptr);
+}
+```
+
+**Note:** Attempting to export a function with the same name as an existing export will log a warning and overwrite the existing symbol.
 
 ### TieredRuntime Multi-Language Support
 
@@ -387,6 +412,60 @@ match result {
     _ => println!("Other: {:?}", result),
 }
 ```
+
+### Native Calling with Signatures
+
+For JIT-compiled functions, use `call_native` with an explicit signature for optimal performance. This bypasses the `DynamicValue` ABI and calls functions with native types directly.
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, NativeType, NativeSignature};
+
+// Define the function signature: (i32, i32) -> i32
+let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+
+// Call with native types
+let result = runtime.call_native("add", &[10.into(), 32.into()], &sig)?;
+assert_eq!(result.as_i32().unwrap(), 42);
+
+// Or parse signature from a string
+let sig = NativeSignature::parse("(i32, i32) -> i32").unwrap();
+let result = runtime.call_native("multiply", &[6.into(), 7.into()], &sig)?;
+```
+
+#### Supported Native Types
+
+| NativeType | Rust Equivalent | Description |
+|------------|-----------------|-------------|
+| `I32` | `i32` | 32-bit signed integer |
+| `I64` | `i64` | 64-bit signed integer |
+| `F32` | `f32` | 32-bit float |
+| `F64` | `f64` | 64-bit float |
+| `Bool` | `bool` | Boolean (passed as i8) |
+| `Void` | `()` | No return value |
+| `Ptr` | `*mut u8` | Pointer type |
+
+#### Signature String Format
+
+The `NativeSignature::parse` method accepts strings in the format:
+
+- `"() -> void"` - No parameters, no return
+- `"(i32) -> i32"` - Single parameter
+- `"(i32, i32) -> i64"` - Multiple parameters
+- `"(f64, f64) -> f64"` - Floating point types
+
+#### When to Use Native Calling
+
+Use `call_native` when:
+
+- You know the exact function signature at compile time
+- You need maximum performance for hot paths
+- You're calling JIT-compiled functions with primitive types
+
+Use `call` or `call_raw` when:
+
+- You need automatic type conversion
+- The function signature is dynamic
+- You're working with complex types (structs, arrays)
 
 ### Async Functions and Promises
 

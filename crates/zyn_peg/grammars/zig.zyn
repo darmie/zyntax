@@ -31,7 +31,7 @@ declarations = { declaration* }
       "args": { "declarations": "$result" }
   }
 
-declaration = { struct_decl | enum_decl | fn_decl | const_decl | var_decl }
+declaration = { struct_decl | enum_decl | extern_fn_decl | fn_decl | const_decl | var_decl }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -88,6 +88,34 @@ enum_variant = { identifier }
 
 // Split into two rules to handle the optional params correctly
 // pest doesn't produce placeholder children for missing optionals
+
+// Extern function declaration (no body)
+extern_fn_decl = { extern_fn_decl_with_params | extern_fn_decl_no_params }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+extern_fn_decl_with_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "extern_function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3"
+          }}
+      ]
+  }
+
+extern_fn_decl_no_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "extern_function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "$2"
+          }}
+      ]
+  }
 
 fn_decl = { fn_decl_with_params | fn_decl_no_params }
   -> TypedDeclaration {

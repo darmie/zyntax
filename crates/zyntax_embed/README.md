@@ -168,15 +168,15 @@ println!("Language for .zig: {:?}", runtime.language_for_extension(".zig"));
 
 ### Cross-Language Interop
 
-Functions from different languages share the same runtime and can call each other:
+Functions from different languages can call each other via explicit exports:
 
 ```rust
-// Load math utilities in Zig
-runtime.load_module("zig", r#"
+// Load math utilities in Zig and EXPORT "square" for cross-module linking
+runtime.load_module_with_exports("zig", r#"
     pub fn square(x: i32) i32 { return x * x; }
-"#)?;
+"#, &["square"])?;
 
-// Load DSL that uses the Zig function
+// Load DSL that uses the exported Zig function via extern
 runtime.load_module("calc", r#"
     extern fn square(x: i32) i32;
     def sum_of_squares(a, b) = square(a) + square(b)
@@ -185,6 +185,24 @@ runtime.load_module("calc", r#"
 // Call the DSL function that internally uses Zig
 let result: i32 = runtime.call("sum_of_squares", &[3.into(), 4.into()])?;
 assert_eq!(result, 25); // 9 + 16
+```
+
+#### Export Management
+
+```rust
+// Export functions after loading
+runtime.load_module("zig", source)?;
+runtime.export_function("my_func")?;
+
+// Check for conflicts before exporting
+if runtime.check_export_conflict("my_func").is_some() {
+    println!("Warning: my_func already exported");
+}
+
+// List all exported symbols
+for (name, ptr) in runtime.exported_symbols() {
+    println!("Exported: {} at {:?}", name, ptr);
+}
 ```
 
 ## Runtime Options
@@ -255,8 +273,20 @@ println!("{}", stats.format());
 ## Calling Functions
 
 ```rust
-// Type-safe call
+// Type-safe call (uses DynamicValue ABI)
 let sum: i32 = runtime.call("add", &[5.into(), 3.into()])?;
+
+// Native calling with explicit signature (for JIT-compiled functions)
+use zyntax_embed::{NativeType, NativeSignature};
+
+// Define signature: (i32, i32) -> i32
+let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+let result = runtime.call_native("add", &[5.into(), 3.into()], &sig)?;
+assert_eq!(result.as_i32().unwrap(), 8);
+
+// Or parse signature from string
+let sig = NativeSignature::parse("(i32, i32) -> i32").unwrap();
+let result = runtime.call_native("add", &[10.into(), 32.into()], &sig)?;
 
 // Get raw ZyntaxValue
 let result = runtime.call_raw("compute", &[data.into()])?;
@@ -272,6 +302,20 @@ match result {
     _ => {}
 }
 ```
+
+### Native Types
+
+The following native types are supported for `call_native`:
+
+| NativeType | Rust Type | Size |
+|------------|-----------|------|
+| `I32` | `i32` | 4 bytes |
+| `I64` | `i64` | 8 bytes |
+| `F32` | `f32` | 4 bytes |
+| `F64` | `f64` | 8 bytes |
+| `Bool` | `bool` | 1 byte |
+| `Void` | `()` | 0 bytes |
+| `Ptr` | `*mut u8` | pointer size |
 
 ## Async Functions and Promises
 

@@ -236,6 +236,14 @@ pub trait AstHostFunctions {
         body: NodeHandle,
     ) -> NodeHandle;
 
+    /// Create an extern function declaration (no body)
+    fn create_extern_function(
+        &mut self,
+        name: &str,
+        params: Vec<NodeHandle>,
+        return_type: NodeHandle,
+    ) -> NodeHandle;
+
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
 
@@ -1238,6 +1246,38 @@ impl AstHostFunctions for TypedAstBuilder {
             body_block,
             Visibility::Public,
             false,
+            span,
+        );
+
+        self.store_decl(func)
+    }
+
+    fn create_extern_function(
+        &mut self,
+        name: &str,
+        params: Vec<NodeHandle>,
+        _return_type: NodeHandle,
+    ) -> NodeHandle {
+        let span = self.default_span();
+
+        // Convert param handles to TypedParameter using stored parameter info
+        let typed_params: Vec<_> = params.iter()
+            .map(|h| {
+                if let Some((name, ty)) = self.params.get(h) {
+                    self.inner.parameter(name, ty.clone(), Mutability::Immutable, span)
+                } else {
+                    // Fallback for unknown params
+                    self.inner.parameter("arg", Type::Primitive(PrimitiveType::I32), Mutability::Immutable, span)
+                }
+            })
+            .collect();
+
+        // Create extern function (no body, is_external = true)
+        let func = self.inner.extern_function(
+            name,
+            typed_params,
+            Type::Primitive(PrimitiveType::I32),
+            Visibility::Public,
             span,
         );
 
@@ -3099,6 +3139,34 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "extern_function" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "anonymous".to_string(),
+                };
+
+                let params: Vec<NodeHandle> = match args.get("params") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+
+                let return_type = match args.get("return_type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+
+                // Create an extern function declaration (no body, is_external = true)
+                let handle = self.host.create_extern_function(&name, params, return_type);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "struct" => {
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
@@ -4352,6 +4420,34 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                 let return_type = self.host.create_primitive_type("i32");
                 let handle = self.host.create_function(&name, params, return_type, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "extern_function" => {
+                // Create an extern function declaration (no body)
+                let name = match args.get(0) {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "anonymous".to_string(),
+                };
+
+                let params: Vec<NodeHandle> = match args.get(1) {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+
+                let return_type = match args.get(2) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_primitive_type("i32"),
+                };
+
+                let handle = self.host.create_extern_function(&name, params, return_type);
                 Ok(RuntimeValue::Node(handle))
             }
 

@@ -15,7 +15,7 @@ A comprehensive guide to building language frontends with ZynPEG.
 9. [Reference](./09-reference.md) - Command reference and API
 10. [Packaging & Distribution](./10-packaging-distribution.md) - ZPack format, AOT linking, and distribution
 11. [HIR Builder](./11-hir-builder.md) - Building HIR directly for custom backends
-12. [Embedding SDK](./12-embedding-sdk.md) - Embedding Zyntax in Rust applications
+12. [Embedding SDK](./12-embedding-sdk.md) - Embedding Zyntax in Rust applications with native calling
 
 ## Quick Start
 
