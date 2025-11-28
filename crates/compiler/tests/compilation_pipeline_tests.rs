@@ -520,6 +520,7 @@ fn test_compilation_pipeline_all_features() {
         async_runtime: None, // Not testing async in this test
         hot_reload: false,
         target_triple: "x86_64-unknown-linux-gnu".to_string(),
+        import_resolver: None,
     };
 
     let result = compile_to_hir(&program, type_registry, config);
@@ -586,6 +587,7 @@ fn test_compilation_pipeline_with_memory_optimizations() {
         async_runtime: None, // Not testing async in this test
         hot_reload: false,
         target_triple: "x86_64-unknown-linux-gnu".to_string(),
+        import_resolver: None,
     };
 
     let result = compile_to_hir(&program, type_registry, config);

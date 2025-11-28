@@ -7,7 +7,7 @@
 use std::collections::{HashSet, VecDeque};
 use indexmap::IndexMap;
 use crate::hir::*;
-use crate::{CompilerResult, CompilerError};
+use crate::CompilerResult;
 use zyntax_typed_ast::InternedString;
 
 /// Async function state machine representation
@@ -213,21 +213,197 @@ impl AsyncCompiler {
     }
     
     /// Analyze captures for async closure
+    ///
+    /// This performs escape analysis to determine which variables need to be
+    /// captured in the state machine struct. A variable needs to be captured if:
+    /// 1. It's a parameter or local defined before an await point
+    /// 2. It's used after that await point
+    ///
+    /// Variables that are only used within a single segment don't need capturing.
     fn analyze_captures(&self, func: &HirFunction) -> CompilerResult<Vec<AsyncCapture>> {
         let mut captures = Vec::new();
-        
-        // For now, capture all parameters by value
-        // Real implementation would do escape analysis
-        for param in &func.signature.params {
-            captures.push(AsyncCapture {
-                id: param.id,
-                name: param.name,
-                ty: param.ty.clone(),
-                mode: AsyncCaptureMode::ByValue,
-            });
+        let mut captured_ids = HashSet::new();
+
+        // Find all await point instruction indices
+        let await_indices: HashSet<usize> = func.blocks.values()
+            .flat_map(|block| block.instructions.iter().enumerate())
+            .filter_map(|(idx, inst)| {
+                if let HirInstruction::Call {
+                    callee: HirCallable::Intrinsic(Intrinsic::Await),
+                    ..
+                } = inst {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // If no await points, we still need to capture all parameters for the state machine
+        if await_indices.is_empty() {
+            for param in &func.signature.params {
+                captures.push(AsyncCapture {
+                    id: param.id,
+                    name: param.name,
+                    ty: param.ty.clone(),
+                    mode: AsyncCaptureMode::ByValue,
+                });
+            }
+            return Ok(captures);
         }
-        
+
+        // Collect all values defined before each await point
+        let mut defined_before_await: HashSet<HirId> = HashSet::new();
+
+        // Parameters are always defined at the start
+        for param in &func.signature.params {
+            defined_before_await.insert(param.id);
+        }
+
+        // Collect all values used after await points
+        let mut used_after_await: HashSet<HirId> = HashSet::new();
+
+        for block in func.blocks.values() {
+            let mut past_await = false;
+
+            for (idx, inst) in block.instructions.iter().enumerate() {
+                // Check if this is an await point
+                if await_indices.contains(&idx) {
+                    past_await = true;
+                    continue;
+                }
+
+                // If we're past an await, collect used values
+                if past_await {
+                    let used = self.collect_instruction_uses(inst);
+                    used_after_await.extend(used);
+                }
+
+                // Track definitions before await
+                if !past_await {
+                    if let Some(result) = self.get_instruction_result(inst) {
+                        defined_before_await.insert(result);
+                    }
+                }
+            }
+        }
+
+        // A value needs to be captured if it's defined before await AND used after
+        let needs_capture: HashSet<HirId> = defined_before_await
+            .intersection(&used_after_await)
+            .copied()
+            .collect();
+
+        // Add parameters that need capturing
+        for param in &func.signature.params {
+            if needs_capture.contains(&param.id) && !captured_ids.contains(&param.id) {
+                captured_ids.insert(param.id);
+                captures.push(AsyncCapture {
+                    id: param.id,
+                    name: param.name,
+                    ty: param.ty.clone(),
+                    mode: AsyncCaptureMode::ByValue,
+                });
+            }
+        }
+
+        // Add locals that need capturing
+        for (local_id, local) in &func.locals {
+            if needs_capture.contains(local_id) && !captured_ids.contains(local_id) {
+                captured_ids.insert(*local_id);
+                captures.push(AsyncCapture {
+                    id: *local_id,
+                    name: local.name,
+                    ty: local.ty.clone(),
+                    mode: if local.is_mutable {
+                        AsyncCaptureMode::ByMutRef(HirLifetime::anonymous())
+                    } else {
+                        AsyncCaptureMode::ByValue
+                    },
+                });
+            }
+        }
+
+        // If no captures identified but we have parameters, capture all parameters
+        // (conservative fallback for safety)
+        if captures.is_empty() && !func.signature.params.is_empty() {
+            for param in &func.signature.params {
+                captures.push(AsyncCapture {
+                    id: param.id,
+                    name: param.name,
+                    ty: param.ty.clone(),
+                    mode: AsyncCaptureMode::ByValue,
+                });
+            }
+        }
+
         Ok(captures)
+    }
+
+    /// Collect all HirIds used by an instruction
+    fn collect_instruction_uses(&self, inst: &HirInstruction) -> Vec<HirId> {
+        match inst {
+            HirInstruction::Binary { left, right, .. } => vec![*left, *right],
+            HirInstruction::Unary { operand, .. } => vec![*operand],
+            HirInstruction::Load { ptr, .. } => vec![*ptr],
+            HirInstruction::Store { ptr, value, .. } => vec![*ptr, *value],
+            HirInstruction::Call { args, .. } => args.clone(),
+            HirInstruction::IndirectCall { func_ptr, args, .. } => {
+                let mut uses = vec![*func_ptr];
+                uses.extend(args.iter().copied());
+                uses
+            }
+            HirInstruction::GetElementPtr { ptr, indices, .. } => {
+                let mut uses = vec![*ptr];
+                uses.extend(indices.iter().copied());
+                uses
+            }
+            HirInstruction::ExtractValue { aggregate, .. } => vec![*aggregate],
+            HirInstruction::InsertValue { aggregate, value, .. } => vec![*aggregate, *value],
+            HirInstruction::Cast { operand, .. } => vec![*operand],
+            HirInstruction::Select { condition, true_val, false_val, .. } => {
+                vec![*condition, *true_val, *false_val]
+            }
+            HirInstruction::Atomic { ptr, value, .. } => {
+                let mut uses = vec![*ptr];
+                if let Some(v) = value {
+                    uses.push(*v);
+                }
+                uses
+            }
+            HirInstruction::CreateUnion { value, .. } => vec![*value],
+            HirInstruction::GetUnionDiscriminant { union_val, .. } => vec![*union_val],
+            HirInstruction::ExtractUnionValue { union_val, .. } => vec![*union_val],
+            HirInstruction::CreateTraitObject { data_ptr, vtable_id, .. } => {
+                vec![*data_ptr, *vtable_id]
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Get the result HirId of an instruction if it produces one
+    fn get_instruction_result(&self, inst: &HirInstruction) -> Option<HirId> {
+        match inst {
+            HirInstruction::Binary { result, .. } |
+            HirInstruction::Unary { result, .. } |
+            HirInstruction::Alloca { result, .. } |
+            HirInstruction::Load { result, .. } |
+            HirInstruction::GetElementPtr { result, .. } |
+            HirInstruction::ExtractValue { result, .. } |
+            HirInstruction::InsertValue { result, .. } |
+            HirInstruction::Cast { result, .. } |
+            HirInstruction::Select { result, .. } |
+            HirInstruction::Atomic { result, .. } |
+            HirInstruction::CreateUnion { result, .. } |
+            HirInstruction::GetUnionDiscriminant { result, .. } |
+            HirInstruction::ExtractUnionValue { result, .. } |
+            HirInstruction::CreateTraitObject { result, .. } => Some(*result),
+            HirInstruction::Call { result, .. } |
+            HirInstruction::IndirectCall { result, .. } => *result,
+            HirInstruction::Store { .. } |
+            HirInstruction::Fence { .. } => None,
+            _ => None,
+        }
     }
     
     /// Build state machine states
@@ -279,21 +455,135 @@ impl AsyncCompiler {
     }
     
     /// Split function into segments at await points
+    ///
+    /// This traverses all blocks in the function's CFG, collecting instructions
+    /// and splitting into segments whenever an await point is encountered.
+    /// Each segment represents a continuous sequence of operations that can
+    /// execute without yielding.
     fn split_at_await_points(
         &self,
         func: &HirFunction,
         await_points: &[AwaitPoint],
     ) -> CompilerResult<Vec<CodeSegment>> {
         let mut segments = Vec::new();
-        
-        // For simplicity, assume single basic block for now
-        // Real implementation would handle complex control flow
+
+        // Build a map of await points by (block_id, instruction_index)
+        let await_point_map: HashSet<(HirId, usize)> = await_points
+            .iter()
+            .map(|ap| (ap.block_id, ap.instruction_index))
+            .collect();
+
+        // For simple functions with a single block (common case), use optimized path
+        if func.blocks.len() == 1 {
+            return self.split_single_block(func, await_points);
+        }
+
+        // Traverse blocks in order (starting from entry block)
+        let mut visited = HashSet::new();
+        let mut work_queue = VecDeque::new();
+        work_queue.push_back(func.entry_block);
+
+        let mut current_segment = CodeSegment {
+            instructions: Vec::new(),
+            terminator: HirTerminator::Unreachable, // Will be set properly
+        };
+
+        while let Some(block_id) = work_queue.pop_front() {
+            if visited.contains(&block_id) {
+                continue;
+            }
+            visited.insert(block_id);
+
+            let block = match func.blocks.get(&block_id) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            // Process instructions in this block
+            for (inst_idx, inst) in block.instructions.iter().enumerate() {
+                // Check if this is an await point
+                if await_point_map.contains(&(block_id, inst_idx)) {
+                    // End current segment before the await
+                    if !current_segment.instructions.is_empty() {
+                        // Set terminator to continue to next segment (will be patched)
+                        current_segment.terminator = HirTerminator::Branch { target: HirId::new() };
+                        segments.push(current_segment);
+                    }
+
+                    // Start new segment after the await
+                    current_segment = CodeSegment {
+                        instructions: Vec::new(),
+                        terminator: HirTerminator::Unreachable,
+                    };
+                } else {
+                    current_segment.instructions.push(inst.clone());
+                }
+            }
+
+            // Set terminator from the block
+            current_segment.terminator = block.terminator.clone();
+
+            // Add successor blocks to work queue
+            match &block.terminator {
+                HirTerminator::Branch { target } => {
+                    work_queue.push_back(*target);
+                }
+                HirTerminator::CondBranch { true_target, false_target, .. } => {
+                    work_queue.push_back(*true_target);
+                    work_queue.push_back(*false_target);
+                }
+                HirTerminator::Switch { default, cases, .. } => {
+                    work_queue.push_back(*default);
+                    for (_, target) in cases {
+                        work_queue.push_back(*target);
+                    }
+                }
+                HirTerminator::Return { .. } |
+                HirTerminator::Unreachable |
+                HirTerminator::Invoke { .. } |
+                HirTerminator::PatternMatch { .. } => {
+                    // End of control flow path - push segment if non-empty
+                    if !current_segment.instructions.is_empty() || segments.is_empty() {
+                        segments.push(current_segment.clone());
+                    }
+                    current_segment = CodeSegment {
+                        instructions: Vec::new(),
+                        terminator: HirTerminator::Unreachable,
+                    };
+                }
+            }
+        }
+
+        // Push final segment if it has content
+        if !current_segment.instructions.is_empty() && !matches!(current_segment.terminator, HirTerminator::Unreachable) {
+            segments.push(current_segment);
+        }
+
+        // Ensure we have at least one segment
+        if segments.is_empty() {
+            segments.push(CodeSegment {
+                instructions: Vec::new(),
+                terminator: HirTerminator::Return { values: vec![] },
+            });
+        }
+
+        Ok(segments)
+    }
+
+    /// Optimized path for single-block functions (most common case)
+    fn split_single_block(
+        &self,
+        func: &HirFunction,
+        await_points: &[AwaitPoint],
+    ) -> CompilerResult<Vec<CodeSegment>> {
+        let mut segments = Vec::new();
+
         if let Some(entry_block) = func.blocks.get(&func.entry_block) {
             let mut current_segment = CodeSegment {
                 instructions: Vec::new(),
                 terminator: entry_block.terminator.clone(),
             };
-            
+
             for (i, inst) in entry_block.instructions.iter().enumerate() {
                 // Check if this is an await point
                 if await_points.iter().any(|ap| ap.instruction_index == i) {
@@ -309,20 +599,106 @@ impl AsyncCompiler {
                     current_segment.instructions.push(inst.clone());
                 }
             }
-            
+
             // Add final segment
             if !current_segment.instructions.is_empty() || segments.is_empty() {
                 segments.push(current_segment);
             }
         }
-        
+
         Ok(segments)
     }
     
     /// Extract local variables from a code segment
-    fn extract_locals_from_segment(&self, _segment: &CodeSegment) -> CompilerResult<Vec<AsyncLocal>> {
-        // For now, return empty - real implementation would analyze instructions
-        Ok(Vec::new())
+    ///
+    /// This analyzes the instructions in a segment to find:
+    /// 1. Alloca instructions (stack allocations)
+    /// 2. Values defined by instructions that need to be stored in the state machine
+    ///
+    /// Local variables are marked with `persists: true` if they need to be stored
+    /// in the state machine struct to survive across await points.
+    fn extract_locals_from_segment(&self, segment: &CodeSegment) -> CompilerResult<Vec<AsyncLocal>> {
+        let mut locals = Vec::new();
+        let mut defined_values: HashSet<HirId> = HashSet::new();
+
+        for inst in &segment.instructions {
+            // Handle Alloca instructions specially - these are explicit local variables
+            if let HirInstruction::Alloca { result, ty, .. } = inst {
+                locals.push(AsyncLocal {
+                    id: *result,
+                    name: InternedString::default(), // Will be resolved from debug info if available
+                    ty: ty.clone(),
+                    persists: true, // Stack allocations typically need to persist
+                });
+                defined_values.insert(*result);
+                continue;
+            }
+
+            // Get the result of this instruction if it produces one
+            if let Some(result_id) = self.get_instruction_result(inst) {
+                // Don't duplicate alloca results
+                if defined_values.contains(&result_id) {
+                    continue;
+                }
+
+                // Determine if this local needs to persist based on whether it's used
+                // in subsequent instructions within this segment
+                let ty = self.get_instruction_result_type(inst);
+                let uses = self.collect_instruction_uses(inst);
+
+                // A local persists if its result is used by other instructions
+                // (We'll refine this later based on await point analysis)
+                let persists = !uses.is_empty();
+
+                locals.push(AsyncLocal {
+                    id: result_id,
+                    name: InternedString::default(), // Anonymous local
+                    ty,
+                    persists,
+                });
+                defined_values.insert(result_id);
+            }
+        }
+
+        Ok(locals)
+    }
+
+    /// Get the result type of an instruction
+    fn get_instruction_result_type(&self, inst: &HirInstruction) -> HirType {
+        match inst {
+            HirInstruction::Binary { op, .. } => {
+                // Binary operations typically preserve the operand type or return bool for comparisons
+                match op {
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le |
+                    BinaryOp::Gt | BinaryOp::Ge => HirType::Bool,
+                    _ => HirType::I64, // Default to i64 for arithmetic
+                }
+            }
+            HirInstruction::Unary { op, .. } => {
+                match op {
+                    UnaryOp::Not => HirType::Bool,
+                    _ => HirType::I64,
+                }
+            }
+            HirInstruction::Alloca { ty, .. } => HirType::Ptr(Box::new(ty.clone())),
+            HirInstruction::Load { ty, .. } => ty.clone(),
+            HirInstruction::GetElementPtr { ty, .. } => ty.clone(),
+            HirInstruction::ExtractValue { ty, .. } => ty.clone(),
+            HirInstruction::InsertValue { ty, .. } => ty.clone(),
+            HirInstruction::Cast { ty, .. } => ty.clone(),
+            HirInstruction::Select { ty, .. } => ty.clone(),
+            HirInstruction::Call { .. } => HirType::Void, // Actual return type is in callee signature
+            HirInstruction::IndirectCall { return_ty, .. } => return_ty.clone(),
+            HirInstruction::Atomic { ty, .. } => ty.clone(),
+            HirInstruction::CreateUnion { union_ty, .. } => union_ty.clone(),
+            HirInstruction::GetUnionDiscriminant { .. } => HirType::U32, // Discriminant is typically u32
+            HirInstruction::ExtractUnionValue { ty, .. } => ty.clone(),
+            HirInstruction::CreateTraitObject { .. } => {
+                // Fat pointer: {data_ptr, vtable_ptr}
+                HirType::Opaque(InternedString::default()) // Placeholder
+            }
+            _ => HirType::Void,
+        }
     }
     
     /// Generate next state ID
@@ -376,6 +752,9 @@ impl AsyncCompiler {
     }
     
     /// Build state machine dispatch logic
+    ///
+    /// This creates the switch dispatch that routes to the correct state handler
+    /// based on the current state field in the state machine struct.
     fn build_state_dispatch(
         &self,
         wrapper: &mut HirFunction,
@@ -383,14 +762,14 @@ impl AsyncCompiler {
     ) -> CompilerResult<()> {
         // Create switch on current state
         let state_field = wrapper.create_value(HirType::U32, HirValueKind::Instruction);
-        
-        // Load current state from state machine  
-        // Note: In real implementation, this would use proper arena-allocated strings
+
+        // Get self parameter (state machine pointer) - first parameter
         let self_param = wrapper.create_value(
-            HirType::Ptr(Box::new(HirType::I8)), // Use simple type for now
+            HirType::Ptr(Box::new(HirType::Opaque(InternedString::new_global("StateMachine")))),
             HirValueKind::Parameter(0)
         );
-        
+
+        // Load current state from state machine's first field (state: u32)
         let load_state = HirInstruction::Load {
             result: state_field,
             ty: HirType::U32,
@@ -398,24 +777,91 @@ impl AsyncCompiler {
             align: 4,
             volatile: false,
         };
-        
-        // Create switch cases for each state
+
+        // Create blocks for each state and build switch cases
         let mut cases = Vec::new();
-        for (state_id, _state) in &state_machine.states {
-            cases.push((
-                HirConstant::U32(state_id.0),
-                HirId::new(), // Target block for this state
-            ));
+        let mut state_blocks = Vec::new();
+
+        for (state_id, state) in &state_machine.states {
+            // Create a block for this state's handler
+            let block_id = HirId::new();
+            let mut state_block = HirBlock::new(block_id);
+            state_block.label = Some(InternedString::new_global(&format!("state_{}", state_id.0)));
+
+            // Add instructions from this state
+            for inst in &state.instructions {
+                state_block.add_instruction(inst.clone());
+            }
+
+            // Set terminator based on async terminator
+            let terminator = match &state.terminator {
+                AsyncTerminator::Return { value } => {
+                    // Return Poll::Ready(value)
+                    HirTerminator::Return {
+                        values: value.map(|v| vec![v]).unwrap_or_default()
+                    }
+                }
+                AsyncTerminator::Await { future: _, resume_state } => {
+                    // Update state and return Poll::Pending
+                    // Store new state value before returning
+                    let new_state_val = wrapper.create_value(HirType::U32, HirValueKind::Instruction);
+                    let store_new_state = HirInstruction::Store {
+                        value: new_state_val,
+                        ptr: self_param,
+                        align: 4,
+                        volatile: false,
+                    };
+                    state_block.add_instruction(HirInstruction::Binary {
+                        result: new_state_val,
+                        op: BinaryOp::Add,
+                        ty: HirType::U32,
+                        left: state_field,
+                        right: wrapper.create_value(HirType::U32, HirValueKind::Instruction), // Would be const resume_state
+                    });
+                    state_block.add_instruction(store_new_state);
+
+                    // Return Pending (represented as return with no value for now)
+                    HirTerminator::Return { values: vec![] }
+                }
+                AsyncTerminator::Continue { next_state: _ } => {
+                    // Continue to next state block
+                    HirTerminator::Return { values: vec![] }
+                }
+                AsyncTerminator::Yield { value, resume_state: _ } => {
+                    // Yield value and return Poll::Ready(Some(value))
+                    HirTerminator::Return { values: vec![*value] }
+                }
+                AsyncTerminator::Panic { .. } => {
+                    HirTerminator::Unreachable
+                }
+            };
+            state_block.set_terminator(terminator);
+
+            cases.push((HirConstant::U32(state_id.0), block_id));
+            state_blocks.push((block_id, state_block));
         }
-        
+
+        // Create unreachable default block (for invalid state values)
+        let default_block_id = HirId::new();
+        let mut default_block = HirBlock::new(default_block_id);
+        default_block.label = Some(InternedString::new_global("state_invalid"));
+        default_block.set_terminator(HirTerminator::Unreachable);
+
+        // Set up entry block with switch
         let entry_block = wrapper.blocks.get_mut(&wrapper.entry_block).unwrap();
         entry_block.add_instruction(load_state);
         entry_block.set_terminator(HirTerminator::Switch {
             value: state_field,
-            default: HirId::new(), // Default case
+            default: default_block_id,
             cases,
         });
-        
+
+        // Add all state blocks to the function
+        wrapper.blocks.insert(default_block_id, default_block);
+        for (block_id, block) in state_blocks {
+            wrapper.blocks.insert(block_id, block);
+        }
+
         Ok(())
     }
 
