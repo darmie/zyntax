@@ -7,6 +7,7 @@ This chapter covers how to embed the Zyntax JIT runtime in your Rust application
 The Zyntax Embedding SDK provides:
 
 - **Language Grammar Interface**: Parse source code using any `.zyn` grammar
+- **Multi-Language Runtime**: Register multiple grammars and compile from different languages
 - **JIT Compilation**: Compile TypedAST to native code at runtime
 - **Multi-Tier Optimization**: Automatic optimization of hot code paths
 - **Bidirectional Interop**: Seamless conversion between Rust and Zyntax types
@@ -130,6 +131,113 @@ struct MyCustomBuilder { /* ... */ }
 impl AstHostFunctions for MyCustomBuilder {
     // Implement required methods...
 }
+```
+
+## Multi-Language Runtime
+
+The runtime supports registering multiple language grammars and loading modules by language name. This enables polyglot applications where different parts of your codebase can use different languages.
+
+### Registering Grammars
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+
+let mut runtime = ZyntaxRuntime::new()?;
+
+// Register grammars by language name
+runtime.register_grammar("zig", LanguageGrammar::compile_zyn_file("grammars/zig.zyn")?);
+runtime.register_grammar("python", LanguageGrammar::compile_zyn_file("grammars/python.zyn")?);
+runtime.register_grammar("calc", LanguageGrammar::compile_zyn_file("grammars/calc.zyn")?);
+
+// Or use convenience methods
+runtime.register_grammar_file("haxe", "grammars/haxe.zyn")?;
+runtime.register_grammar_zpeg("lua", "grammars/lua.zpeg")?;
+
+// Query registered languages
+println!("Languages: {:?}", runtime.languages());       // ["zig", "python", "calc", "haxe", "lua"]
+println!("Has Python: {}", runtime.has_language("python")); // true
+```
+
+### Loading Modules by Language
+
+```rust
+// Load modules specifying the language
+let functions = runtime.load_module("zig", r#"
+    pub fn add(a: i32, b: i32) i32 {
+        return a + b;
+    }
+
+    pub fn factorial(n: i32) i32 {
+        if (n <= 1) return 1;
+        return n * factorial(n - 1);
+    }
+"#)?;
+
+println!("Loaded functions: {:?}", functions); // ["add", "factorial"]
+
+// Load from another language
+runtime.load_module("calc", "def multiply(a, b) = a * b")?;
+
+// Call any function regardless of source language
+let sum: i32 = runtime.call("add", &[10.into(), 32.into()])?;
+let fact: i32 = runtime.call("factorial", &[5.into()])?;
+```
+
+### Auto-Detection from File Extension
+
+When grammars declare file extensions in their `@language` metadata, the runtime automatically maps extensions to languages:
+
+```rust
+// The zig.zyn grammar declares: file_extensions: [".zig"]
+runtime.register_grammar("zig", LanguageGrammar::compile_zyn_file("zig.zyn")?);
+
+// Load files - language auto-detected from extension
+runtime.load_module_file("./src/math.zig")?;   // Uses "zig" grammar
+runtime.load_module_file("./lib/utils.py")?;   // Uses "python" grammar
+
+// Query extension mappings
+println!("Language for .zig: {:?}", runtime.language_for_extension(".zig")); // Some("zig")
+println!("Language for .py: {:?}", runtime.language_for_extension("py"));    // Some("python")
+```
+
+### Cross-Language Function Calls
+
+All modules loaded into the same runtime share a common execution environment. Functions can call each other across language boundaries:
+
+```rust
+// Load core utilities in Zig
+runtime.load_module("zig", r#"
+    pub fn square(x: i32) i32 { return x * x; }
+    pub fn cube(x: i32) i32 { return x * x * x; }
+"#)?;
+
+// Load a DSL that uses the Zig functions via extern declarations
+runtime.load_module("calc", r#"
+    extern fn square(x: i32) i32;
+    extern fn cube(x: i32) i32;
+
+    def sum_of_powers(a, b) = square(a) + cube(b)
+"#)?;
+
+// The calc function calls into the Zig implementation
+let result: i32 = runtime.call("sum_of_powers", &[3.into(), 2.into()])?;
+assert_eq!(result, 17); // square(3) + cube(2) = 9 + 8 = 17
+```
+
+### TieredRuntime Multi-Language Support
+
+The `TieredRuntime` also supports multi-language modules with the same API:
+
+```rust
+use zyntax_embed::TieredRuntime;
+
+let mut runtime = TieredRuntime::production()?;
+
+runtime.register_grammar("zig", LanguageGrammar::compile_zyn_file("zig.zyn")?);
+runtime.load_module("zig", "pub fn compute(x: i32) i32 { return x * 2; }")?;
+
+// Hot functions are automatically optimized regardless of source language
+let result: i32 = runtime.call("compute", &[21.into()])?;
 ```
 
 ## Runtime Options

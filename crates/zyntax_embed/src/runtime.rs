@@ -4,8 +4,10 @@
 //! from Rust, with automatic value conversion and async/await support.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use crate::error::{ConversionError, ZyntaxError};
+use crate::grammar::{GrammarError, LanguageGrammar};
 use crate::value::ZyntaxValue;
 use crate::convert::FromZyntax;
 use zyntax_compiler::{
@@ -104,6 +106,10 @@ pub struct ZyntaxRuntime {
     external_functions: HashMap<String, ExternalFunction>,
     /// Import resolver callbacks (tried in order)
     import_resolvers: Vec<ImportResolverCallback>,
+    /// Registered language grammars (language name -> grammar)
+    grammars: HashMap<String, Arc<LanguageGrammar>>,
+    /// File extension to language mapping (e.g., ".zig" -> "zig")
+    extension_map: HashMap<String, String>,
 }
 
 /// An external function that can be called from Zyntax code
@@ -137,6 +143,8 @@ impl ZyntaxRuntime {
             config,
             external_functions: HashMap::new(),
             import_resolvers: Vec::new(),
+            grammars: HashMap::new(),
+            extension_map: HashMap::new(),
         })
     }
 
@@ -152,6 +160,8 @@ impl ZyntaxRuntime {
             config: CompilationConfig::default(),
             external_functions: HashMap::new(),
             import_resolvers: Vec::new(),
+            grammars: HashMap::new(),
+            extension_map: HashMap::new(),
         })
     }
 
@@ -468,6 +478,225 @@ impl ZyntaxRuntime {
     pub fn import_resolver_count(&self) -> usize {
         self.import_resolvers.len()
     }
+
+    // ========================================================================
+    // Multi-Language Grammar Registry
+    // ========================================================================
+
+    /// Register a language grammar with the runtime
+    ///
+    /// The language identifier is used to select the grammar when loading modules.
+    /// File extensions from the grammar's metadata are automatically registered
+    /// for extension-based language detection.
+    ///
+    /// # Arguments
+    /// * `language` - The language identifier (e.g., "zig", "python", "haxe")
+    /// * `grammar` - The compiled language grammar
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+    ///
+    /// let mut runtime = ZyntaxRuntime::new()?;
+    /// runtime.register_grammar("zig", LanguageGrammar::compile_zyn_file("zig.zyn")?);
+    /// runtime.register_grammar("python", LanguageGrammar::compile_zyn_file("python.zyn")?);
+    ///
+    /// // Now load modules by language
+    /// runtime.load_module("zig", "pub fn add(a: i32, b: i32) i32 { return a + b; }")?;
+    /// ```
+    pub fn register_grammar(&mut self, language: &str, grammar: LanguageGrammar) {
+        let grammar = Arc::new(grammar);
+
+        // Register file extensions from grammar metadata
+        for ext in grammar.file_extensions() {
+            let ext_key = if ext.starts_with('.') {
+                ext.clone()
+            } else {
+                format!(".{}", ext)
+            };
+            self.extension_map.insert(ext_key, language.to_string());
+        }
+
+        self.grammars.insert(language.to_string(), grammar);
+    }
+
+    /// Register a grammar from a .zyn file
+    ///
+    /// Convenience method that compiles the grammar and registers it.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// runtime.register_grammar_file("zig", "grammars/zig.zyn")?;
+    /// ```
+    pub fn register_grammar_file<P: AsRef<Path>>(
+        &mut self,
+        language: &str,
+        zyn_path: P,
+    ) -> Result<(), GrammarError> {
+        let grammar = LanguageGrammar::compile_zyn_file(zyn_path)?;
+        self.register_grammar(language, grammar);
+        Ok(())
+    }
+
+    /// Register a grammar from a pre-compiled .zpeg file
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// runtime.register_grammar_zpeg("zig", "grammars/zig.zpeg")?;
+    /// ```
+    pub fn register_grammar_zpeg<P: AsRef<Path>>(
+        &mut self,
+        language: &str,
+        zpeg_path: P,
+    ) -> Result<(), GrammarError> {
+        let grammar = LanguageGrammar::load(zpeg_path)?;
+        self.register_grammar(language, grammar);
+        Ok(())
+    }
+
+    /// Get a registered grammar by language name
+    pub fn get_grammar(&self, language: &str) -> Option<&Arc<LanguageGrammar>> {
+        self.grammars.get(language)
+    }
+
+    /// Get the language name for a file extension
+    ///
+    /// # Arguments
+    /// * `extension` - The file extension (with or without leading dot)
+    pub fn language_for_extension(&self, extension: &str) -> Option<&str> {
+        let ext_key = if extension.starts_with('.') {
+            extension.to_string()
+        } else {
+            format!(".{}", extension)
+        };
+        self.extension_map.get(&ext_key).map(|s| s.as_str())
+    }
+
+    /// List all registered language names
+    pub fn languages(&self) -> Vec<&str> {
+        self.grammars.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Check if a language grammar is registered
+    pub fn has_language(&self, language: &str) -> bool {
+        self.grammars.contains_key(language)
+    }
+
+    /// Load a module from source code using a registered language grammar
+    ///
+    /// This parses the source code using the registered grammar for the language,
+    /// lowers it to HIR, and compiles it into the runtime.
+    ///
+    /// # Arguments
+    /// * `language` - The language identifier (must be previously registered)
+    /// * `source` - The source code to compile
+    ///
+    /// # Returns
+    /// The names of functions defined in the module
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+    ///
+    /// let mut runtime = ZyntaxRuntime::new()?;
+    /// runtime.register_grammar("zig", LanguageGrammar::compile_zyn_file("zig.zyn")?);
+    ///
+    /// let functions = runtime.load_module("zig", r#"
+    ///     pub fn add(a: i32, b: i32) i32 { return a + b; }
+    ///     pub fn mul(a: i32, b: i32) i32 { return a * b; }
+    /// "#)?;
+    ///
+    /// assert!(functions.contains(&"add".to_string()));
+    /// let result: i32 = runtime.call("add", &[10.into(), 32.into()])?;
+    /// ```
+    pub fn load_module(&mut self, language: &str, source: &str) -> RuntimeResult<Vec<String>> {
+        let grammar = self
+            .grammars
+            .get(language)
+            .cloned()
+            .ok_or_else(|| RuntimeError::Execution(format!(
+                "Unknown language '{}'. Registered languages: {:?}",
+                language,
+                self.languages()
+            )))?;
+
+        // Parse source to TypedAST
+        let typed_program = grammar
+            .parse(source)
+            .map_err(|e| RuntimeError::Execution(e.to_string()))?;
+
+        // Lower to HIR
+        let hir_module = self.lower_typed_program(typed_program)?;
+
+        // Collect function names before compilation
+        let function_names: Vec<String> = hir_module
+            .functions
+            .values()
+            .map(|f| f.name.to_string())
+            .collect();
+
+        // Compile the module
+        self.compile_module(&hir_module)?;
+
+        Ok(function_names)
+    }
+
+    /// Load a module from a file, auto-detecting the language from extension
+    ///
+    /// The file extension is used to look up the registered grammar.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Automatically uses "zig" grammar based on .zig extension
+    /// runtime.load_module_file("./src/math.zig")?;
+    /// ```
+    pub fn load_module_file<P: AsRef<Path>>(&mut self, path: P) -> RuntimeResult<Vec<String>> {
+        let path = path.as_ref();
+
+        // Get the file extension
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| RuntimeError::Execution(format!(
+                "File '{}' has no extension",
+                path.display()
+            )))?;
+
+        // Look up the language for this extension
+        let language = self
+            .language_for_extension(extension)
+            .ok_or_else(|| RuntimeError::Execution(format!(
+                "No grammar registered for extension '.{}'. Registered extensions: {:?}",
+                extension,
+                self.extension_map.keys().collect::<Vec<_>>()
+            )))?
+            .to_string();
+
+        // Read the source file
+        let source = std::fs::read_to_string(path)
+            .map_err(|e| RuntimeError::Execution(format!(
+                "Failed to read '{}': {}",
+                path.display(),
+                e
+            )))?;
+
+        self.load_module(&language, &source)
+    }
+
+    /// List all loaded function names
+    pub fn functions(&self) -> Vec<&str> {
+        self.function_ids.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Check if a function is defined
+    pub fn has_function(&self, name: &str) -> bool {
+        self.function_ids.contains_key(name)
+    }
 }
 
 // ============================================================================
@@ -512,6 +741,10 @@ pub struct TieredRuntime {
     function_ids: HashMap<String, HirId>,
     /// Tiered configuration
     config: TieredConfig,
+    /// Registered language grammars (language name -> grammar)
+    grammars: HashMap<String, Arc<LanguageGrammar>>,
+    /// File extension to language mapping (e.g., ".zig" -> "zig")
+    extension_map: HashMap<String, String>,
 }
 
 impl TieredRuntime {
@@ -523,6 +756,8 @@ impl TieredRuntime {
             backend,
             function_ids: HashMap::new(),
             config,
+            grammars: HashMap::new(),
+            extension_map: HashMap::new(),
         })
     }
 
@@ -705,6 +940,179 @@ impl TieredRuntime {
         }
 
         Ok(count)
+    }
+
+    // ========================================================================
+    // Multi-Language Grammar Registry
+    // ========================================================================
+
+    /// Register a language grammar with the runtime
+    ///
+    /// See `ZyntaxRuntime::register_grammar` for full documentation.
+    pub fn register_grammar(&mut self, language: &str, grammar: LanguageGrammar) {
+        let grammar = Arc::new(grammar);
+
+        // Register file extensions from grammar metadata
+        for ext in grammar.file_extensions() {
+            let ext_key = if ext.starts_with('.') {
+                ext.clone()
+            } else {
+                format!(".{}", ext)
+            };
+            self.extension_map.insert(ext_key, language.to_string());
+        }
+
+        self.grammars.insert(language.to_string(), grammar);
+    }
+
+    /// Register a grammar from a .zyn file
+    pub fn register_grammar_file<P: AsRef<Path>>(
+        &mut self,
+        language: &str,
+        zyn_path: P,
+    ) -> Result<(), GrammarError> {
+        let grammar = LanguageGrammar::compile_zyn_file(zyn_path)?;
+        self.register_grammar(language, grammar);
+        Ok(())
+    }
+
+    /// Register a grammar from a pre-compiled .zpeg file
+    pub fn register_grammar_zpeg<P: AsRef<Path>>(
+        &mut self,
+        language: &str,
+        zpeg_path: P,
+    ) -> Result<(), GrammarError> {
+        let grammar = LanguageGrammar::load(zpeg_path)?;
+        self.register_grammar(language, grammar);
+        Ok(())
+    }
+
+    /// Get a registered grammar by language name
+    pub fn get_grammar(&self, language: &str) -> Option<&Arc<LanguageGrammar>> {
+        self.grammars.get(language)
+    }
+
+    /// Get the language name for a file extension
+    pub fn language_for_extension(&self, extension: &str) -> Option<&str> {
+        let ext_key = if extension.starts_with('.') {
+            extension.to_string()
+        } else {
+            format!(".{}", extension)
+        };
+        self.extension_map.get(&ext_key).map(|s| s.as_str())
+    }
+
+    /// List all registered language names
+    pub fn languages(&self) -> Vec<&str> {
+        self.grammars.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Check if a language grammar is registered
+    pub fn has_language(&self, language: &str) -> bool {
+        self.grammars.contains_key(language)
+    }
+
+    /// Load a module from source code using a registered language grammar
+    ///
+    /// See `ZyntaxRuntime::load_module` for full documentation.
+    pub fn load_module(&mut self, language: &str, source: &str) -> RuntimeResult<Vec<String>> {
+        let grammar = self
+            .grammars
+            .get(language)
+            .cloned()
+            .ok_or_else(|| RuntimeError::Execution(format!(
+                "Unknown language '{}'. Registered languages: {:?}",
+                language,
+                self.languages()
+            )))?;
+
+        // Parse source to TypedAST
+        let typed_program = grammar
+            .parse(source)
+            .map_err(|e| RuntimeError::Execution(e.to_string()))?;
+
+        // Lower to HIR
+        let hir_module = self.lower_typed_program(typed_program)?;
+
+        // Collect function names before compilation
+        let function_names: Vec<String> = hir_module
+            .functions
+            .values()
+            .map(|f| f.name.to_string())
+            .collect();
+
+        // Compile the module
+        self.compile_module(hir_module)?;
+
+        Ok(function_names)
+    }
+
+    /// Load a module from a file, auto-detecting the language from extension
+    pub fn load_module_file<P: AsRef<Path>>(&mut self, path: P) -> RuntimeResult<Vec<String>> {
+        let path = path.as_ref();
+
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .ok_or_else(|| RuntimeError::Execution(format!(
+                "File '{}' has no extension",
+                path.display()
+            )))?;
+
+        let language = self
+            .language_for_extension(extension)
+            .ok_or_else(|| RuntimeError::Execution(format!(
+                "No grammar registered for extension '.{}'",
+                extension
+            )))?
+            .to_string();
+
+        let source = std::fs::read_to_string(path)
+            .map_err(|e| RuntimeError::Execution(format!(
+                "Failed to read '{}': {}",
+                path.display(),
+                e
+            )))?;
+
+        self.load_module(&language, &source)
+    }
+
+    /// Lower a TypedProgram to HirModule
+    fn lower_typed_program(&self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
+        use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
+        use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry};
+
+        let arena = AstArena::new();
+        let module_name = InternedString::new_global("main");
+        let type_registry = std::sync::Arc::new(TypeRegistry::new());
+
+        let mut lowering_ctx = LoweringContext::new(
+            module_name,
+            type_registry.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new(arena)),
+            LoweringConfig::default(),
+        );
+
+        std::env::set_var("SKIP_TYPE_CHECK", "1");
+
+        let mut hir_module = lowering_ctx
+            .lower_program(&program)
+            .map_err(|e| RuntimeError::Execution(format!("Lowering error: {:?}", e)))?;
+
+        zyntax_compiler::monomorphize_module(&mut hir_module)
+            .map_err(|e| RuntimeError::Execution(format!("Monomorphization error: {:?}", e)))?;
+
+        Ok(hir_module)
+    }
+
+    /// List all loaded function names
+    pub fn functions(&self) -> Vec<&str> {
+        self.function_ids.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Check if a function is defined
+    pub fn has_function(&self, name: &str) -> bool {
+        self.function_ids.contains_key(name)
     }
 }
 

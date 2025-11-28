@@ -11,6 +11,7 @@ Apache-2.0
 `zyntax_embed` provides a high-level Rust API for embedding the Zyntax compiler as a JIT runtime. It supports:
 
 - **Language Grammar Interface**: Parse source code using any `.zyn` grammar
+- **Multi-Language Runtime**: Register multiple grammars and compile from different languages
 - **Compiler Integration**: Compile and execute Zyntax code at runtime
 - **Multi-Tier JIT**: Automatic optimization of hot code paths
 - **Async/Await**: Promise-based async operations with `.then()` and `.catch()`
@@ -116,6 +117,74 @@ let program = grammar.parse(source_code)?;
 // Parse to JSON for debugging
 let json = grammar.parse_to_json(source_code)?;
 println!("{}", json);
+```
+
+## Multi-Language Runtime
+
+Register multiple language grammars and load modules by language name:
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = ZyntaxRuntime::new()?;
+
+    // Register language grammars
+    runtime.register_grammar("zig", LanguageGrammar::compile_zyn_file("grammars/zig.zyn")?);
+    runtime.register_grammar("python", LanguageGrammar::compile_zyn_file("grammars/python.zyn")?);
+    runtime.register_grammar("calc", LanguageGrammar::compile_zyn_file("grammars/calc.zyn")?);
+
+    // Load modules by language name
+    runtime.load_module("zig", r#"
+        pub fn add(a: i32, b: i32) i32 {
+            return a + b;
+        }
+    "#)?;
+
+    runtime.load_module("calc", "def multiply(a, b) = a * b")?;
+
+    // Call functions from any loaded module
+    let sum: i32 = runtime.call("add", &[10.into(), 32.into()])?;
+    println!("Sum: {}", sum); // 42
+
+    Ok(())
+}
+```
+
+### Auto-detection from File Extension
+
+```rust
+// Register grammars (extensions are auto-detected from grammar metadata)
+runtime.register_grammar("zig", LanguageGrammar::compile_zyn_file("zig.zyn")?);
+
+// Load files - language detected from extension
+runtime.load_module_file("./src/math.zig")?;   // Uses "zig" grammar
+runtime.load_module_file("./src/utils.py")?;   // Uses "python" grammar
+
+// Query registered languages
+println!("Languages: {:?}", runtime.languages());
+println!("Language for .zig: {:?}", runtime.language_for_extension(".zig"));
+```
+
+### Cross-Language Interop
+
+Functions from different languages share the same runtime and can call each other:
+
+```rust
+// Load math utilities in Zig
+runtime.load_module("zig", r#"
+    pub fn square(x: i32) i32 { return x * x; }
+"#)?;
+
+// Load DSL that uses the Zig function
+runtime.load_module("calc", r#"
+    extern fn square(x: i32) i32;
+    def sum_of_squares(a, b) = square(a) + square(b)
+"#)?;
+
+// Call the DSL function that internally uses Zig
+let result: i32 = runtime.call("sum_of_squares", &[3.into(), 4.into()])?;
+assert_eq!(result, 25); // 9 + 16
 ```
 
 ## Runtime Options
