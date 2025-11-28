@@ -321,6 +321,58 @@ runtime.add_import_resolver(Box::new(|module_path| {
 runtime.add_filesystem_resolver("./src", "zig");
 ```
 
+## External Function Registration
+
+Register Rust functions directly with the runtime:
+
+```rust
+// Define extern "C" functions
+extern "C" fn native_add(a: i32, b: i32) -> i32 { a + b }
+extern "C" fn native_print(x: i32) { println!("{}", x); }
+
+// Register at construction
+let symbols: &[(&str, *const u8)] = &[
+    ("native_add", native_add as *const u8),
+    ("native_print", native_print as *const u8),
+];
+let mut runtime = ZyntaxRuntime::with_symbols(symbols)?;
+
+// Use from Zyntax code
+runtime.compile_with_grammar(&grammar, r#"
+    extern fn native_add(a: i32, b: i32) i32;
+    extern fn native_print(x: i32) void;
+
+    pub fn main() i32 {
+        const result = native_add(10, 32);
+        native_print(result);
+        return result;
+    }
+"#)?;
+```
+
+### Supported Types
+
+| Rust Type | Zyntax Type |
+|-----------|-------------|
+| `i32`, `i64` | `i32`, `i64` |
+| `f32`, `f64` | `f32`, `f64` |
+| `bool` | `bool` |
+| `*const u8` | `[]const u8` (string pointer) |
+| `*mut T` | `*T` (mutable pointer) |
+
+### Working with Strings
+
+```rust
+extern "C" fn print_string(ptr: *const u8) {
+    unsafe {
+        let len = *(ptr as *const i32) as usize;
+        let data = ptr.add(4);
+        let bytes = std::slice::from_raw_parts(data, len);
+        println!("{}", std::str::from_utf8(bytes).unwrap_or(""));
+    }
+}
+```
+
 ## ZRTL Plugin Loading
 
 Load native runtime libraries:
