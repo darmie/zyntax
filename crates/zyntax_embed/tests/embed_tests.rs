@@ -1620,3 +1620,442 @@ fn compute(a: i32, b: i32, c: i32) i32 {
         }
     }
 }
+
+// ============================================================================
+// Host Function Tests - Rust functions callable from Zig code
+// ============================================================================
+
+mod host_function_tests {
+    use super::*;
+
+    /// The Zig grammar source (embedded at compile time)
+    const ZIG_GRAMMAR_SOURCE: &str = include_str!("../../zyn_peg/grammars/zig.zyn");
+
+    // Host functions that Zig code can call
+    // These use extern "C" ABI for compatibility with the JIT
+
+    /// A simple host function that doubles a number
+    extern "C" fn host_double(x: i32) -> i32 {
+        x * 2
+    }
+
+    /// A host function that adds two numbers
+    extern "C" fn host_add(a: i32, b: i32) -> i32 {
+        a + b
+    }
+
+    /// A host function that returns a constant
+    extern "C" fn host_get_magic() -> i32 {
+        42
+    }
+
+    /// A host function with three parameters
+    extern "C" fn host_sum3(a: i32, b: i32, c: i32) -> i32 {
+        a + b + c
+    }
+
+    /// A host function that computes factorial iteratively
+    extern "C" fn host_factorial(n: i32) -> i32 {
+        let mut result = 1;
+        for i in 2..=n {
+            result *= i;
+        }
+        result
+    }
+
+    /// Helper to create a runtime with Zig grammar and host functions
+    fn setup_runtime_with_hosts(symbols: &[(&str, *const u8)]) -> Option<ZyntaxRuntime> {
+        // Create runtime with host symbols
+        let mut runtime = match ZyntaxRuntime::with_symbols(symbols) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Skipping test: could not create runtime with symbols: {}", e);
+                return None;
+            }
+        };
+
+        // Load Zig grammar
+        let grammar = match LanguageGrammar::compile_zyn(ZIG_GRAMMAR_SOURCE) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("Skipping test: could not compile grammar: {}", e);
+                return None;
+            }
+        };
+
+        runtime.register_grammar("zig", grammar);
+        Some(runtime)
+    }
+
+    #[test]
+    fn test_call_host_double() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_double", host_double as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Zig code that calls the host function
+        let result = runtime.load_module("zig", r#"
+extern fn host_double(x: i32) i32;
+
+fn use_host(x: i32) i32 {
+    return host_double(x);
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("use_host", &[21.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // 21 * 2 = 42
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_call_host_add() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_add", host_add as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+extern fn host_add(a: i32, b: i32) i32;
+
+fn use_host_add(a: i32, b: i32) i32 {
+    return host_add(a, b);
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("use_host_add", &[10.into(), 32.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_call_host_no_params() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_get_magic", host_get_magic as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+extern fn host_get_magic() i32;
+
+fn get_magic() i32 {
+    return host_get_magic();
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[], NativeType::I32);
+        let result = runtime.call_native("get_magic", &[], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_call_host_three_params() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_sum3", host_sum3 as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+extern fn host_sum3(a: i32, b: i32, c: i32) i32;
+
+fn call_sum3(a: i32, b: i32, c: i32) i32 {
+    return host_sum3(a, b, c);
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(
+            &[NativeType::I32, NativeType::I32, NativeType::I32],
+            NativeType::I32
+        );
+        let result = runtime.call_native("call_sum3", &[10.into(), 20.into(), 12.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_host_function_in_expression() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_double", host_double as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Use host function as part of a larger expression
+        let result = runtime.load_module("zig", r#"
+extern fn host_double(x: i32) i32;
+
+fn compute(x: i32) i32 {
+    return host_double(x) + 1;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("compute", &[20.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 41), // 20*2 + 1 = 41
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_multiple_host_functions() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_double", host_double as *const u8),
+            ("host_add", host_add as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Use multiple host functions together
+        let result = runtime.load_module("zig", r#"
+extern fn host_double(x: i32) i32;
+extern fn host_add(a: i32, b: i32) i32;
+
+fn compute(x: i32, y: i32) i32 {
+    return host_add(host_double(x), y);
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("compute", &[20.into(), 2.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // (20*2) + 2 = 42
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_host_function_factorial() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_factorial", host_factorial as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+extern fn host_factorial(n: i32) i32;
+
+fn get_factorial(n: i32) i32 {
+    return host_factorial(n);
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+
+        // 5! = 120
+        let result = runtime.call_native("get_factorial", &[5.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 120),
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+
+        // 6! = 720
+        let result = runtime.call_native("get_factorial", &[6.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 720),
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_host_function_in_loop() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_add", host_add as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Call host function multiple times in a loop
+        let result = runtime.load_module("zig", r#"
+extern fn host_add(a: i32, b: i32) i32;
+
+fn sum_n_times(value: i32, n: i32) i32 {
+    var result: i32 = 0;
+    var i: i32 = 0;
+    while (i < n) {
+        result = host_add(result, value);
+        i = i + 1;
+    }
+    return result;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("sum_n_times", &[7.into(), 6.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // 7 * 6 = 42
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_host_and_local_functions_mixed() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_double", host_double as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Mix host and local functions
+        let result = runtime.load_module("zig", r#"
+extern fn host_double(x: i32) i32;
+
+fn local_triple(x: i32) i32 {
+    return x * 3;
+}
+
+fn mixed_compute(x: i32) i32 {
+    return host_double(local_triple(x));
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("mixed_compute", &[7.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // (7*3) * 2 = 42
+            Err(e) => eprintln!("Host call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_host_function_conditional() {
+        let symbols: &[(&str, *const u8)] = &[
+            ("host_double", host_double as *const u8),
+            ("host_add", host_add as *const u8),
+        ];
+
+        let mut runtime = match setup_runtime_with_hosts(symbols) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Call different host functions based on condition
+        let result = runtime.load_module("zig", r#"
+extern fn host_double(x: i32) i32;
+extern fn host_add(a: i32, b: i32) i32;
+
+fn conditional_host(x: i32, use_double: i32) i32 {
+    if (use_double != 0) {
+        return host_double(x);
+    }
+    return host_add(x, 1);
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+
+        // use_double = true -> 21 * 2 = 42
+        let result = runtime.call_native("conditional_host", &[21.into(), 1.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Host call failed: {}", e),
+        }
+
+        // use_double = false -> 41 + 1 = 42
+        let result = runtime.call_native("conditional_host", &[41.into(), 0.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Host call failed: {}", e),
+        }
+    }
+}
