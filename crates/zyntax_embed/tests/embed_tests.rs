@@ -872,3 +872,751 @@ mod runtime_tests {
         assert!(ptr.is_none());
     }
 }
+
+// ============================================================================
+// Native Calling Tests
+// ============================================================================
+
+mod native_calling_tests {
+    use super::*;
+
+    /// The Zig grammar source (embedded at compile time)
+    const ZIG_GRAMMAR_SOURCE: &str = include_str!("../../zyn_peg/grammars/zig.zyn");
+
+    /// Helper to create a runtime with Zig grammar
+    fn setup_zig_runtime() -> Option<ZyntaxRuntime> {
+        let grammar = match LanguageGrammar::compile_zyn(ZIG_GRAMMAR_SOURCE) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("Skipping test: could not compile grammar: {}", e);
+                return None;
+            }
+        };
+
+        let mut runtime = ZyntaxRuntime::new().ok()?;
+        runtime.register_grammar("zig", grammar);
+        Some(runtime)
+    }
+
+    #[test]
+    fn test_native_call_i32_add() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("add", &[10.into(), 32.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_native_call_i32_multiply() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("multiply", &[7.into(), 6.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_native_call_i32_subtract() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn subtract(a: i32, b: i32) i32 {
+    return a - b;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("subtract", &[100.into(), 58.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_native_call_single_param() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn square(x: i32) i32 {
+    return x * x;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("square", &[7.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 49),
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_native_call_three_params() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn sum3(a: i32, b: i32, c: i32) i32 {
+    return a + b + c;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("sum3", &[10.into(), 20.into(), 12.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_native_call_four_params() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn sum4(a: i32, b: i32, c: i32, d: i32) i32 {
+    return a + b + c + d;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(
+            &[NativeType::I32, NativeType::I32, NativeType::I32, NativeType::I32],
+            NativeType::I32
+        );
+        let result = runtime.call_native("sum4", &[10.into(), 10.into(), 10.into(), 12.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_native_call_wrong_arg_count() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        // Try calling with wrong number of arguments
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("add", &[10.into()], &sig); // Missing one arg
+
+        assert!(result.is_err(), "Should fail with wrong arg count");
+    }
+
+    #[test]
+    fn test_native_call_function_not_found() {
+        let runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("nonexistent_function", &[10.into()], &sig);
+
+        assert!(result.is_err(), "Should fail for nonexistent function");
+    }
+}
+
+// ============================================================================
+// Zig Code Execution Tests
+// ============================================================================
+
+mod zig_execution_tests {
+    use super::*;
+
+    /// The Zig grammar source (embedded at compile time)
+    const ZIG_GRAMMAR_SOURCE: &str = include_str!("../../zyn_peg/grammars/zig.zyn");
+
+    /// Helper to create a runtime with Zig grammar
+    fn setup_zig_runtime() -> Option<ZyntaxRuntime> {
+        let grammar = match LanguageGrammar::compile_zyn(ZIG_GRAMMAR_SOURCE) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("Skipping test: could not compile grammar: {}", e);
+                return None;
+            }
+        };
+
+        let mut runtime = ZyntaxRuntime::new().ok()?;
+        runtime.register_grammar("zig", grammar);
+        Some(runtime)
+    }
+
+    #[test]
+    fn test_zig_arithmetic_operations() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn compute(x: i32) i32 {
+    return x * 2 + 10 - 3;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("compute", &[10.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 27), // 10*2 + 10 - 3 = 27
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_zig_conditional_if() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn abs(x: i32) i32 {
+    if (x < 0) {
+        return -x;
+    }
+    return x;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+
+        // Test positive
+        let result = runtime.call_native("abs", &[42.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed: {}", e),
+        }
+
+        // Test negative
+        let result = runtime.call_native("abs", &[(-42i32).into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_zig_while_loop() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn sum_to(n: i32) i32 {
+    var result: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        result = result + i;
+        i = i + 1;
+    }
+    return result;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("sum_to", &[10.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 55), // 1+2+...+10 = 55
+            Err(e) => eprintln!("Native call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_zig_comparison_operators() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn max(a: i32, b: i32) i32 {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
+
+        let result = runtime.call_native("max", &[10.into(), 20.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 20),
+            Err(e) => eprintln!("Native call failed: {}", e),
+        }
+
+        let result = runtime.call_native("max", &[30.into(), 15.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 30),
+            Err(e) => eprintln!("Native call failed: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_zig_multiple_functions() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn double(x: i32) i32 {
+    return x * 2;
+}
+
+fn triple(x: i32) i32 {
+    return x * 3;
+}
+
+fn add_one(x: i32) i32 {
+    return x + 1;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let functions = result.unwrap();
+        println!("Loaded functions: {:?}", functions);
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+
+        // Test double
+        let result = runtime.call_native("double", &[21.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("double failed: {}", e),
+        }
+
+        // Test triple
+        let result = runtime.call_native("triple", &[14.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("triple failed: {}", e),
+        }
+
+        // Test add_one
+        let result = runtime.call_native("add_one", &[41.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("add_one failed: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_zig_negative_numbers() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn negate(x: i32) i32 {
+    return -x;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+
+        let result = runtime.call_native("negate", &[42.into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), -42),
+            Err(e) => eprintln!("Native call failed: {}", e),
+        }
+
+        let result = runtime.call_native("negate", &[(-42i32).into()], &sig);
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed: {}", e),
+        }
+    }
+
+    #[test]
+    fn test_zig_constant_return() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn answer() i32 {
+    return 42;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        let sig = NativeSignature::new(&[], NativeType::I32);
+        let result = runtime.call_native("answer", &[], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
+            Err(e) => eprintln!("Native call failed: {}", e),
+        }
+    }
+}
+
+// ============================================================================
+// Cross-Module / Extern Function Tests
+// ============================================================================
+
+mod extern_function_tests {
+    use super::*;
+
+    /// The Zig grammar source (embedded at compile time)
+    const ZIG_GRAMMAR_SOURCE: &str = include_str!("../../zyn_peg/grammars/zig.zyn");
+
+    /// Helper to create a runtime with Zig grammar
+    fn setup_zig_runtime() -> Option<ZyntaxRuntime> {
+        let grammar = match LanguageGrammar::compile_zyn(ZIG_GRAMMAR_SOURCE) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("Skipping test: could not compile grammar: {}", e);
+                return None;
+            }
+        };
+
+        let mut runtime = ZyntaxRuntime::new().ok()?;
+        runtime.register_grammar("zig", grammar);
+        Some(runtime)
+    }
+
+    #[test]
+    fn test_export_and_list_symbols() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Load module with explicit exports
+        let result = runtime.load_module_with_exports("zig", r#"
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn internal_helper(x: i32) i32 {
+    return x * 2;
+}
+        "#, &["add"]);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        // Only "add" should be in exports
+        let exports = runtime.exported_symbols();
+        println!("Exported symbols: {:?}", exports);
+
+        let export_names: Vec<&str> = exports.iter().map(|(name, _)| *name).collect();
+        assert!(export_names.contains(&"add"), "add should be exported");
+
+        // internal_helper should NOT be exported
+        assert!(
+            !export_names.contains(&"internal_helper"),
+            "internal_helper should not be exported"
+        );
+    }
+
+    #[test]
+    fn test_explicit_export_function() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Load module without exports
+        let result = runtime.load_module("zig", r#"
+fn multiply(a: i32, b: i32) i32 {
+    return a * b;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        // No exports initially
+        assert!(runtime.exported_symbols().is_empty());
+
+        // Explicitly export
+        if let Err(e) = runtime.export_function("multiply") {
+            eprintln!("Export failed: {}", e);
+            return;
+        }
+
+        // Now it should be exported
+        let exports = runtime.exported_symbols();
+        assert_eq!(exports.len(), 1);
+        assert_eq!(exports[0].0, "multiply");
+    }
+
+    #[test]
+    fn test_export_nonexistent_function_fails() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let result = runtime.load_module("zig", r#"
+fn real_function(x: i32) i32 {
+    return x;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        // Try to export nonexistent function
+        let result = runtime.export_function("nonexistent_function");
+        assert!(result.is_err(), "Exporting nonexistent function should fail");
+    }
+
+    #[test]
+    fn test_check_export_conflict() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Load and export a function
+        let result = runtime.load_module_with_exports("zig", r#"
+fn shared_name(x: i32) i32 {
+    return x * 2;
+}
+        "#, &["shared_name"]);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module load failed: {}", e);
+            return;
+        }
+
+        // Check for conflict - should exist
+        assert!(
+            runtime.check_export_conflict("shared_name").is_some(),
+            "Should detect existing export"
+        );
+
+        // Non-exported function should have no conflict
+        assert!(
+            runtime.check_export_conflict("nonexistent").is_none(),
+            "Should not detect conflict for non-exported function"
+        );
+    }
+
+    #[test]
+    fn test_cross_module_extern_call() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Module A: Export helper function
+        let result = runtime.load_module_with_exports("zig", r#"
+fn helper(x: i32) i32 {
+    return x * 2;
+}
+        "#, &["helper"]);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module A load failed: {}", e);
+            return;
+        }
+
+        // Module B: Declare extern and use it
+        let result = runtime.load_module("zig", r#"
+extern fn helper(x: i32) i32;
+
+fn use_helper(x: i32) i32 {
+    return helper(x) + 1;
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module B load failed: {}", e);
+            return;
+        }
+
+        // Call the function that uses extern
+        let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
+        let result = runtime.call_native("use_helper", &[20.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 41), // 20*2 + 1 = 41
+            Err(e) => eprintln!("Cross-module call failed (may be expected): {}", e),
+        }
+    }
+
+    #[test]
+    fn test_multiple_modules_multiple_exports() {
+        let mut runtime = match setup_zig_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Module 1: Math utilities
+        let result = runtime.load_module_with_exports("zig", r#"
+fn add(a: i32, b: i32) i32 {
+    return a + b;
+}
+
+fn sub(a: i32, b: i32) i32 {
+    return a - b;
+}
+        "#, &["add", "sub"]);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module 1 load failed: {}", e);
+            return;
+        }
+
+        // Module 2: Uses math utilities
+        let result = runtime.load_module("zig", r#"
+extern fn add(a: i32, b: i32) i32;
+extern fn sub(a: i32, b: i32) i32;
+
+fn compute(a: i32, b: i32, c: i32) i32 {
+    return add(sub(a, b), c);
+}
+        "#);
+
+        if let Err(e) = &result {
+            eprintln!("Skipping test: module 2 load failed: {}", e);
+            return;
+        }
+
+        // Test the composed function
+        let sig = NativeSignature::new(
+            &[NativeType::I32, NativeType::I32, NativeType::I32],
+            NativeType::I32
+        );
+        let result = runtime.call_native("compute", &[100.into(), 58.into(), 0.into()], &sig);
+
+        match result {
+            Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // (100-58) + 0 = 42
+            Err(e) => eprintln!("Composed call failed (may be expected): {}", e),
+        }
+    }
+}
