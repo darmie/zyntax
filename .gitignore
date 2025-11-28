@@ -25,3 +25,6 @@ crates/compiler/examples/
 
 # Session-specific documentation archives
 docs/session-archive/
+
+output/
+test/output/
