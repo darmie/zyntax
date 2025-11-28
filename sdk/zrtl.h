@@ -227,6 +227,28 @@ typedef uint32_t ZrtlTypeTag;
 /* Destructor function type for boxed values */
 typedef void (*ZrtlDropFn)(void* data);
 
+/* ============================================================
+ * Memory management helpers (defined early - used by other helpers)
+ * ============================================================ */
+
+/* Allocate memory (use platform malloc) */
+static inline void* zrtl_alloc(size_t size) {
+    extern void* malloc(size_t);
+    return malloc(size);
+}
+
+/* Free memory (use platform free) */
+static inline void zrtl_free(void* ptr) {
+    extern void free(void*);
+    free(ptr);
+}
+
+/* Reallocate memory */
+static inline void* zrtl_realloc(void* ptr, size_t size) {
+    extern void* realloc(void*, size_t);
+    return realloc(ptr, size);
+}
+
 /* Dynamic boxed value */
 typedef struct {
     ZrtlTypeTag tag;       /* Type tag identifying the type */
@@ -573,18 +595,186 @@ typedef uint16_t (*ZrtlRegisterTypeFn)(const ZrtlTypeInfo* info);
  * Common type definitions for runtime functions
  * ============================================================ */
 
-/* Zyntax string type (UTF-8, length-prefixed) */
-typedef struct {
-    int32_t length;     /* Length in bytes (not including null terminator) */
-    char* data;         /* UTF-8 encoded string data */
-} ZrtlString;
+/* ============================================================
+ * ZrtlString - Canonical String Format
+ * ============================================================
+ *
+ * IMPORTANT: Zyntax uses a length-prefixed inline string format.
+ * This is NOT a struct with a pointer - it's a contiguous memory block:
+ *
+ *   Memory layout: [length: i32][utf8_bytes...]
+ *   - First 4 bytes: length as little-endian i32 (byte count, NOT char count)
+ *   - Remaining bytes: UTF-8 encoded string data
+ *   - NO null terminator (use length to determine end)
+ *
+ * Example: "Hello" is stored as:
+ *   [0x05, 0x00, 0x00, 0x00, 'H', 'e', 'l', 'l', 'o']
+ *    ^--- length = 5 ---^    ^--- UTF-8 bytes ---^
+ *
+ * In C, strings are passed as `int32_t*` pointing to the length field.
+ * Use the helper macros below to access string data.
+ */
 
-/* Zyntax array type */
+/* String pointer type - points to the length header */
+typedef int32_t* ZrtlStringPtr;
+typedef const int32_t* ZrtlStringConstPtr;
+
+/* Get string length from a ZrtlStringPtr */
+#define ZRTL_STRING_LENGTH(str_ptr) (*(str_ptr))
+
+/* Get pointer to UTF-8 bytes from a ZrtlStringPtr */
+#define ZRTL_STRING_DATA(str_ptr) ((const char*)((str_ptr) + 1))
+
+/* Get mutable pointer to UTF-8 bytes */
+#define ZRTL_STRING_DATA_MUT(str_ptr) ((char*)((str_ptr) + 1))
+
+/* Calculate total allocation size for a string of given byte length */
+#define ZRTL_STRING_ALLOC_SIZE(byte_len) (sizeof(int32_t) + (byte_len))
+
+/* Create a new string from C string (null-terminated) */
+static inline ZrtlStringPtr zrtl_string_new(const char* cstr) {
+    extern size_t strlen(const char*);
+    extern void* memcpy(void*, const void*, size_t);
+
+    if (!cstr) return NULL;
+
+    int32_t len = (int32_t)strlen(cstr);
+    ZrtlStringPtr ptr = (ZrtlStringPtr)zrtl_alloc(ZRTL_STRING_ALLOC_SIZE(len));
+    if (!ptr) return NULL;
+
+    *ptr = len;
+    memcpy(ZRTL_STRING_DATA_MUT(ptr), cstr, len);
+    return ptr;
+}
+
+/* Create a new string from bytes with known length */
+static inline ZrtlStringPtr zrtl_string_from_bytes(const char* bytes, int32_t len) {
+    extern void* memcpy(void*, const void*, size_t);
+
+    if (len < 0) return NULL;
+
+    ZrtlStringPtr ptr = (ZrtlStringPtr)zrtl_alloc(ZRTL_STRING_ALLOC_SIZE(len));
+    if (!ptr) return NULL;
+
+    *ptr = len;
+    if (bytes && len > 0) {
+        memcpy(ZRTL_STRING_DATA_MUT(ptr), bytes, len);
+    }
+    return ptr;
+}
+
+/* Create an empty string */
+static inline ZrtlStringPtr zrtl_string_empty(void) {
+    ZrtlStringPtr ptr = (ZrtlStringPtr)zrtl_alloc(sizeof(int32_t));
+    if (ptr) *ptr = 0;
+    return ptr;
+}
+
+/* Free a ZrtlString */
+static inline void zrtl_string_free(ZrtlStringPtr str) {
+    if (str) zrtl_free(str);
+}
+
+/* Copy a ZrtlString */
+static inline ZrtlStringPtr zrtl_string_copy(ZrtlStringConstPtr str) {
+    extern void* memcpy(void*, const void*, size_t);
+
+    if (!str) return zrtl_string_empty();
+
+    int32_t len = ZRTL_STRING_LENGTH(str);
+    size_t total_size = ZRTL_STRING_ALLOC_SIZE(len);
+    ZrtlStringPtr copy = (ZrtlStringPtr)zrtl_alloc(total_size);
+    if (!copy) return NULL;
+
+    memcpy(copy, str, total_size);
+    return copy;
+}
+
+/* Print a ZrtlString to stdout */
+static inline void zrtl_string_print(ZrtlStringConstPtr str) {
+    extern int putchar(int);
+
+    if (!str) return;
+
+    int32_t len = ZRTL_STRING_LENGTH(str);
+    const char* data = ZRTL_STRING_DATA(str);
+
+    for (int32_t i = 0; i < len; i++) {
+        putchar((unsigned char)data[i]);
+    }
+}
+
+/* Compare two ZrtlStrings for equality */
+static inline int zrtl_string_equals(ZrtlStringConstPtr a, ZrtlStringConstPtr b) {
+    extern int memcmp(const void*, const void*, size_t);
+
+    if (a == b) return 1;
+    if (!a || !b) return 0;
+
+    int32_t len_a = ZRTL_STRING_LENGTH(a);
+    int32_t len_b = ZRTL_STRING_LENGTH(b);
+
+    if (len_a != len_b) return 0;
+
+    return memcmp(ZRTL_STRING_DATA(a), ZRTL_STRING_DATA(b), len_a) == 0;
+}
+
+/* ============================================================
+ * ZrtlStringView - Non-owning String Reference (for SDK use)
+ * ============================================================
+ *
+ * For SDK code that needs to work with string data without
+ * dealing with the inline format, use ZrtlStringView.
+ * This is NOT the format used by the compiler - only for SDK convenience.
+ */
 typedef struct {
-    int32_t length;     /* Number of elements */
-    int32_t capacity;   /* Allocated capacity */
-    void* data;         /* Pointer to element data */
-} ZrtlArray;
+    const char* data;   /* Pointer to UTF-8 bytes */
+    int32_t length;     /* Length in bytes */
+} ZrtlStringView;
+
+/* Create a view from a ZrtlStringPtr */
+static inline ZrtlStringView zrtl_string_view(ZrtlStringConstPtr str) {
+    ZrtlStringView view = { NULL, 0 };
+    if (str) {
+        view.length = ZRTL_STRING_LENGTH(str);
+        view.data = ZRTL_STRING_DATA(str);
+    }
+    return view;
+}
+
+/* ============================================================
+ * ZrtlArray - Canonical Array Format
+ * ============================================================
+ *
+ * Arrays use a similar inline format for the header:
+ *
+ *   Memory layout: [capacity: i32][length: i32][elem0, elem1, ...]
+ *   - First 4 bytes: allocated capacity
+ *   - Next 4 bytes: current length (number of elements)
+ *   - Remaining: element data
+ *
+ * Arrays are passed as `int32_t*` pointing to the capacity field.
+ */
+
+/* Array pointer type - points to the capacity header */
+typedef int32_t* ZrtlArrayPtr;
+typedef const int32_t* ZrtlArrayConstPtr;
+
+/* Get array capacity */
+#define ZRTL_ARRAY_CAPACITY(arr_ptr) ((arr_ptr)[0])
+
+/* Get array length */
+#define ZRTL_ARRAY_LENGTH(arr_ptr) ((arr_ptr)[1])
+
+/* Get pointer to array elements (typed) */
+#define ZRTL_ARRAY_DATA(arr_ptr, elem_type) ((elem_type*)((arr_ptr) + 2))
+
+/* Header size in i32 units */
+#define ZRTL_ARRAY_HEADER_SIZE 2
+
+/* Calculate allocation size for array */
+#define ZRTL_ARRAY_ALLOC_SIZE(capacity, elem_size) \
+    (sizeof(int32_t) * ZRTL_ARRAY_HEADER_SIZE + (capacity) * (elem_size))
 
 /* Zyntax optional type */
 typedef struct {
@@ -605,73 +795,57 @@ typedef struct {
 #define ZRTL_TYPE_END /* End type definition */
 
 /* ============================================================
- * Memory management helpers
+ * Array creation helpers
  * ============================================================ */
 
-/* Allocate memory (use platform malloc) */
-static inline void* zrtl_alloc(size_t size) {
-    extern void* malloc(size_t);
-    return malloc(size);
-}
+/* Create a new array with given capacity (for i32 elements) */
+static inline ZrtlArrayPtr zrtl_array_new_i32(int32_t initial_capacity) {
+    int32_t cap = initial_capacity > 0 ? initial_capacity : 8;
+    size_t size = ZRTL_ARRAY_ALLOC_SIZE(cap, sizeof(int32_t));
+    ZrtlArrayPtr ptr = (ZrtlArrayPtr)zrtl_alloc(size);
+    if (!ptr) return NULL;
 
-/* Free memory (use platform free) */
-static inline void zrtl_free(void* ptr) {
-    extern void free(void*);
-    free(ptr);
-}
-
-/* Reallocate memory */
-static inline void* zrtl_realloc(void* ptr, size_t size) {
-    extern void* realloc(void*, size_t);
-    return realloc(ptr, size);
-}
-
-/* ============================================================
- * String helpers
- * ============================================================ */
-
-/* Create a ZrtlString from a C string */
-static inline ZrtlString zrtl_string_from_cstr(const char* cstr) {
-    extern size_t strlen(const char*);
-    extern void* memcpy(void*, const void*, size_t);
-
-    ZrtlString str;
-    str.length = (int32_t)strlen(cstr);
-    str.data = (char*)zrtl_alloc(str.length + 1);
-    memcpy(str.data, cstr, str.length + 1);
-    return str;
-}
-
-/* Free a ZrtlString */
-static inline void zrtl_string_free(ZrtlString* str) {
-    if (str->data) {
-        zrtl_free(str->data);
-        str->data = NULL;
-        str->length = 0;
-    }
-}
-
-/* ============================================================
- * Array helpers
- * ============================================================ */
-
-/* Create a new array with given element size */
-static inline ZrtlArray zrtl_array_new(size_t element_size, int32_t initial_capacity) {
-    ZrtlArray arr;
-    arr.length = 0;
-    arr.capacity = initial_capacity > 0 ? initial_capacity : 8;
-    arr.data = zrtl_alloc(element_size * arr.capacity);
-    return arr;
+    ZRTL_ARRAY_CAPACITY(ptr) = cap;
+    ZRTL_ARRAY_LENGTH(ptr) = 0;
+    return ptr;
 }
 
 /* Free an array */
-static inline void zrtl_array_free(ZrtlArray* arr) {
-    if (arr->data) {
-        zrtl_free(arr->data);
-        arr->data = NULL;
-        arr->length = 0;
-        arr->capacity = 0;
+static inline void zrtl_array_free(ZrtlArrayPtr arr) {
+    if (arr) zrtl_free(arr);
+}
+
+/* Push an i32 element to array (may reallocate, returns new ptr) */
+static inline ZrtlArrayPtr zrtl_array_push_i32(ZrtlArrayPtr arr, int32_t value) {
+    if (!arr) return NULL;
+
+    int32_t cap = ZRTL_ARRAY_CAPACITY(arr);
+    int32_t len = ZRTL_ARRAY_LENGTH(arr);
+
+    /* Check if we need to grow */
+    if (len + ZRTL_ARRAY_HEADER_SIZE >= cap) {
+        int32_t new_cap = cap * 2;
+        size_t new_size = ZRTL_ARRAY_ALLOC_SIZE(new_cap, sizeof(int32_t));
+        ZrtlArrayPtr new_arr = (ZrtlArrayPtr)zrtl_realloc(arr, new_size);
+        if (!new_arr) return NULL;
+
+        arr = new_arr;
+        ZRTL_ARRAY_CAPACITY(arr) = new_cap;
     }
+
+    /* Add element */
+    ZRTL_ARRAY_DATA(arr, int32_t)[len] = value;
+    ZRTL_ARRAY_LENGTH(arr) = len + 1;
+
+    return arr;
+}
+
+/* Get element from array */
+static inline int32_t zrtl_array_get_i32(ZrtlArrayConstPtr arr, int32_t index) {
+    if (!arr || index < 0 || index >= ZRTL_ARRAY_LENGTH(arr)) {
+        return 0;
+    }
+    return ZRTL_ARRAY_DATA(arr, int32_t)[index];
 }
 
 #ifdef __cplusplus
