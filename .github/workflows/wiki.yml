@@ -33,6 +33,8 @@ jobs:
           cp book/07-typed-ast-builder.md wiki/07-TypedAST-Builder.md
           cp book/08-zig-example.md wiki/08-Zig-Example.md
           cp book/09-reference.md wiki/09-Reference.md
+          cp book/10-packaging-distribution.md wiki/10-Packaging-Distribution.md
+          cp book/11-hir-builder.md wiki/11-HIR-Builder.md
 
           # Fix internal links for wiki format
           sed -i 's|\./01-introduction\.md|01-Introduction|g' wiki/*.md
@@ -44,6 +46,8 @@ jobs:
           sed -i 's|\./07-typed-ast-builder\.md|07-TypedAST-Builder|g' wiki/*.md
           sed -i 's|\./08-zig-example\.md|08-Zig-Example|g' wiki/*.md
           sed -i 's|\./09-reference\.md|09-Reference|g' wiki/*.md
+          sed -i 's|\./10-packaging-distribution\.md|10-Packaging-Distribution|g' wiki/*.md
+          sed -i 's|\./11-hir-builder\.md|11-HIR-Builder|g' wiki/*.md
 
       - name: Upload wiki
         uses: Andrew-Chen-Wang/github-wiki-action@v4
