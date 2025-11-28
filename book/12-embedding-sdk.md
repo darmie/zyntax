@@ -415,7 +415,7 @@ match result {
 
 ### Native Calling with Signatures
 
-For JIT-compiled functions, use `call_native` with an explicit signature for optimal performance. This bypasses the `DynamicValue` ABI and calls functions with native types directly.
+For JIT-compiled functions, use `call_function` with an explicit signature for optimal performance. This bypasses the `DynamicValue` ABI and calls functions with native types directly.
 
 ```rust
 use zyntax_embed::{ZyntaxRuntime, NativeType, NativeSignature};
@@ -424,12 +424,12 @@ use zyntax_embed::{ZyntaxRuntime, NativeType, NativeSignature};
 let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
 
 // Call with native types
-let result = runtime.call_native("add", &[10.into(), 32.into()], &sig)?;
+let result = runtime.call_function("add", &[10.into(), 32.into()], &sig)?;
 assert_eq!(result.as_i32().unwrap(), 42);
 
 // Or parse signature from a string
 let sig = NativeSignature::parse("(i32, i32) -> i32").unwrap();
-let result = runtime.call_native("multiply", &[6.into(), 7.into()], &sig)?;
+let result = runtime.call_function("multiply", &[6.into(), 7.into()], &sig)?;
 ```
 
 #### Supported Native Types
@@ -455,7 +455,7 @@ The `NativeSignature::parse` method accepts strings in the format:
 
 #### When to Use Native Calling
 
-Use `call_native` when:
+Use `call_function` when:
 
 - You know the exact function signature at compile time
 - You need maximum performance for hot paths

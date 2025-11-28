@@ -43,7 +43,7 @@ fn add(a: i32, b: i32) i32 {
 
     // Use native calling for JIT-compiled functions with signature
     let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-    let result = runtime.call_native("add", &[10.into(), 32.into()], &sig)
+    let result = runtime.call_function("add", &[10.into(), 32.into()], &sig)
         .expect("Failed to call add");
     assert_eq!(result.as_i32().unwrap(), 42);
 }
@@ -110,11 +110,11 @@ fn sub(a: i32, b: i32) i32 {
 
     // But both functions should be callable using native calling
     let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-    let add_result = runtime.call_native("add", &[10.into(), 5.into()], &sig)
+    let add_result = runtime.call_function("add", &[10.into(), 5.into()], &sig)
         .expect("Failed to call add");
     assert_eq!(add_result.as_i32().unwrap(), 15);
 
-    let sub_result = runtime.call_native("sub", &[10.into(), 5.into()], &sig)
+    let sub_result = runtime.call_function("sub", &[10.into(), 5.into()], &sig)
         .expect("Failed to call sub");
     assert_eq!(sub_result.as_i32().unwrap(), 5);
 }
@@ -210,7 +210,7 @@ fn double_add(a: i32, b: i32) i32 {
 
     // Call the function that uses the extern
     let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-    let result = runtime.call_native("double_add", &[5.into(), 3.into()], &sig)
+    let result = runtime.call_function("double_add", &[5.into(), 3.into()], &sig)
         .expect("Failed to call double_add");
     assert_eq!(result.as_i32().unwrap(), 16); // (5+3) + (5+3) = 16
 }

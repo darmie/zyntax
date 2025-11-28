@@ -607,10 +607,10 @@ impl ZyntaxRuntime {
         }
     }
 
-    /// Call a JIT-compiled function with native calling convention
+    /// Call a JIT-compiled function with the specified signature
     ///
     /// This method dynamically constructs the function call based on the provided
-    /// signature, converting ZyntaxValue arguments to native types.
+    /// signature, converting ZyntaxValue arguments to the appropriate types.
     ///
     /// # Arguments
     /// * `name` - The function name
@@ -624,10 +624,10 @@ impl ZyntaxRuntime {
     ///
     /// // fn add(a: i32, b: i32) -> i32
     /// let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-    /// let result = runtime.call_native("add", &[10.into(), 32.into()], &sig)?;
+    /// let result = runtime.call_function("add", &[10.into(), 32.into()], &sig)?;
     /// assert_eq!(result, ZyntaxValue::Int(42));
     /// ```
-    pub fn call_native(
+    pub fn call_function(
         &self,
         name: &str,
         args: &[ZyntaxValue],

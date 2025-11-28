@@ -917,7 +917,7 @@ fn add(a: i32, b: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("add", &[10.into(), 32.into()], &sig);
+        let result = runtime.call_function("add", &[10.into(), 32.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -944,7 +944,7 @@ fn multiply(a: i32, b: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("multiply", &[7.into(), 6.into()], &sig);
+        let result = runtime.call_function("multiply", &[7.into(), 6.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -971,7 +971,7 @@ fn subtract(a: i32, b: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("subtract", &[100.into(), 58.into()], &sig);
+        let result = runtime.call_function("subtract", &[100.into(), 58.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -998,7 +998,7 @@ fn square(x: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("square", &[7.into()], &sig);
+        let result = runtime.call_function("square", &[7.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 49),
@@ -1025,7 +1025,7 @@ fn sum3(a: i32, b: i32, c: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("sum3", &[10.into(), 20.into(), 12.into()], &sig);
+        let result = runtime.call_function("sum3", &[10.into(), 20.into(), 12.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -1055,7 +1055,7 @@ fn sum4(a: i32, b: i32, c: i32, d: i32) i32 {
             &[NativeType::I32, NativeType::I32, NativeType::I32, NativeType::I32],
             NativeType::I32
         );
-        let result = runtime.call_native("sum4", &[10.into(), 10.into(), 10.into(), 12.into()], &sig);
+        let result = runtime.call_function("sum4", &[10.into(), 10.into(), 10.into(), 12.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -1083,7 +1083,7 @@ fn add(a: i32, b: i32) i32 {
 
         // Try calling with wrong number of arguments
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("add", &[10.into()], &sig); // Missing one arg
+        let result = runtime.call_function("add", &[10.into()], &sig); // Missing one arg
 
         assert!(result.is_err(), "Should fail with wrong arg count");
     }
@@ -1096,7 +1096,7 @@ fn add(a: i32, b: i32) i32 {
         };
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("nonexistent_function", &[10.into()], &sig);
+        let result = runtime.call_function("nonexistent_function", &[10.into()], &sig);
 
         assert!(result.is_err(), "Should fail for nonexistent function");
     }
@@ -1146,7 +1146,7 @@ fn compute(x: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("compute", &[10.into()], &sig);
+        let result = runtime.call_function("compute", &[10.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 27), // 10*2 + 10 - 3 = 27
@@ -1178,14 +1178,14 @@ fn abs(x: i32) i32 {
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
 
         // Test positive
-        let result = runtime.call_native("abs", &[42.into()], &sig);
+        let result = runtime.call_function("abs", &[42.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("Native call failed: {}", e),
         }
 
         // Test negative
-        let result = runtime.call_native("abs", &[(-42i32).into()], &sig);
+        let result = runtime.call_function("abs", &[(-42i32).into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("Native call failed: {}", e),
@@ -1217,7 +1217,7 @@ fn sum_to(n: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("sum_to", &[10.into()], &sig);
+        let result = runtime.call_function("sum_to", &[10.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 55), // 1+2+...+10 = 55
@@ -1248,13 +1248,13 @@ fn max(a: i32, b: i32) i32 {
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
 
-        let result = runtime.call_native("max", &[10.into(), 20.into()], &sig);
+        let result = runtime.call_function("max", &[10.into(), 20.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 20),
             Err(e) => eprintln!("Native call failed: {}", e),
         }
 
-        let result = runtime.call_native("max", &[30.into(), 15.into()], &sig);
+        let result = runtime.call_function("max", &[30.into(), 15.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 30),
             Err(e) => eprintln!("Native call failed: {}", e),
@@ -1293,21 +1293,21 @@ fn add_one(x: i32) i32 {
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
 
         // Test double
-        let result = runtime.call_native("double", &[21.into()], &sig);
+        let result = runtime.call_function("double", &[21.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("double failed: {}", e),
         }
 
         // Test triple
-        let result = runtime.call_native("triple", &[14.into()], &sig);
+        let result = runtime.call_function("triple", &[14.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("triple failed: {}", e),
         }
 
         // Test add_one
-        let result = runtime.call_native("add_one", &[41.into()], &sig);
+        let result = runtime.call_function("add_one", &[41.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("add_one failed: {}", e),
@@ -1334,13 +1334,13 @@ fn negate(x: i32) i32 {
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
 
-        let result = runtime.call_native("negate", &[42.into()], &sig);
+        let result = runtime.call_function("negate", &[42.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), -42),
             Err(e) => eprintln!("Native call failed: {}", e),
         }
 
-        let result = runtime.call_native("negate", &[(-42i32).into()], &sig);
+        let result = runtime.call_function("negate", &[(-42i32).into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("Native call failed: {}", e),
@@ -1366,7 +1366,7 @@ fn answer() i32 {
         }
 
         let sig = NativeSignature::new(&[], NativeType::I32);
-        let result = runtime.call_native("answer", &[], &sig);
+        let result = runtime.call_function("answer", &[], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -1561,7 +1561,7 @@ fn use_helper(x: i32) i32 {
 
         // Call the function that uses extern
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("use_helper", &[20.into()], &sig);
+        let result = runtime.call_function("use_helper", &[20.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 41), // 20*2 + 1 = 41
@@ -1612,7 +1612,7 @@ fn compute(a: i32, b: i32, c: i32) i32 {
             &[NativeType::I32, NativeType::I32, NativeType::I32],
             NativeType::I32
         );
-        let result = runtime.call_native("compute", &[100.into(), 58.into(), 0.into()], &sig);
+        let result = runtime.call_function("compute", &[100.into(), 58.into(), 0.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // (100-58) + 0 = 42
@@ -1713,7 +1713,7 @@ fn use_host(x: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("use_host", &[21.into()], &sig);
+        let result = runtime.call_function("use_host", &[21.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // 21 * 2 = 42
@@ -1746,7 +1746,7 @@ fn use_host_add(a: i32, b: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("use_host_add", &[10.into(), 32.into()], &sig);
+        let result = runtime.call_function("use_host_add", &[10.into(), 32.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -1779,7 +1779,7 @@ fn get_magic() i32 {
         }
 
         let sig = NativeSignature::new(&[], NativeType::I32);
-        let result = runtime.call_native("get_magic", &[], &sig);
+        let result = runtime.call_function("get_magic", &[], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -1815,7 +1815,7 @@ fn call_sum3(a: i32, b: i32, c: i32) i32 {
             &[NativeType::I32, NativeType::I32, NativeType::I32],
             NativeType::I32
         );
-        let result = runtime.call_native("call_sum3", &[10.into(), 20.into(), 12.into()], &sig);
+        let result = runtime.call_function("call_sum3", &[10.into(), 20.into(), 12.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -1849,7 +1849,7 @@ fn compute(x: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("compute", &[20.into()], &sig);
+        let result = runtime.call_function("compute", &[20.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 41), // 20*2 + 1 = 41
@@ -1885,7 +1885,7 @@ fn compute(x: i32, y: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("compute", &[20.into(), 2.into()], &sig);
+        let result = runtime.call_function("compute", &[20.into(), 2.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // (20*2) + 2 = 42
@@ -1920,14 +1920,14 @@ fn get_factorial(n: i32) i32 {
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
 
         // 5! = 120
-        let result = runtime.call_native("get_factorial", &[5.into()], &sig);
+        let result = runtime.call_function("get_factorial", &[5.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 120),
             Err(e) => eprintln!("Host call failed (may be expected): {}", e),
         }
 
         // 6! = 720
-        let result = runtime.call_native("get_factorial", &[6.into()], &sig);
+        let result = runtime.call_function("get_factorial", &[6.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 720),
             Err(e) => eprintln!("Host call failed (may be expected): {}", e),
@@ -1966,7 +1966,7 @@ fn sum_n_times(value: i32, n: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("sum_n_times", &[7.into(), 6.into()], &sig);
+        let result = runtime.call_function("sum_n_times", &[7.into(), 6.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // 7 * 6 = 42
@@ -2004,7 +2004,7 @@ fn mixed_compute(x: i32) i32 {
         }
 
         let sig = NativeSignature::new(&[NativeType::I32], NativeType::I32);
-        let result = runtime.call_native("mixed_compute", &[7.into()], &sig);
+        let result = runtime.call_function("mixed_compute", &[7.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42), // (7*3) * 2 = 42
@@ -2045,14 +2045,14 @@ fn conditional_host(x: i32, use_double: i32) i32 {
         let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32], NativeType::I32);
 
         // use_double = true -> 21 * 2 = 42
-        let result = runtime.call_native("conditional_host", &[21.into(), 1.into()], &sig);
+        let result = runtime.call_function("conditional_host", &[21.into(), 1.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("Host call failed: {}", e),
         }
 
         // use_double = false -> 41 + 1 = 42
-        let result = runtime.call_native("conditional_host", &[41.into(), 0.into()], &sig);
+        let result = runtime.call_function("conditional_host", &[41.into(), 0.into()], &sig);
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
             Err(e) => eprintln!("Host call failed: {}", e),
