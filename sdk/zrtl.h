@@ -783,6 +783,202 @@ typedef struct {
 } ZrtlOptional;
 
 /* ============================================================
+ * Iterator Protocol
+ * ============================================================
+ *
+ * The iterator protocol allows runtime functions to iterate over
+ * collections in a type-safe manner. It follows the Haxe/JavaScript
+ * pattern with hasNext() + next() methods.
+ *
+ * Two variants are provided:
+ * 1. ZrtlIterator - Generic iterator using DynamicBox values
+ * 2. ZrtlIteratorI32 - Specialized iterator for i32 values (common case)
+ *
+ * Usage example (C):
+ *
+ *   void print_all(ZrtlArrayConstPtr arr) {
+ *       ZrtlArrayIterator it = zrtl_array_iterator(arr);
+ *       while (zrtl_array_iterator_has_next(&it)) {
+ *           int32_t value = zrtl_array_iterator_next_i32(&it);
+ *           printf("%d\n", value);
+ *       }
+ *   }
+ */
+
+/* Generic iterator state */
+typedef struct {
+    const void* collection;     /* Pointer to the collection being iterated */
+    int32_t index;              /* Current position */
+    int32_t length;             /* Total number of elements */
+    ZrtlTypeTag element_type;   /* Type of elements (for generic containers) */
+} ZrtlIterator;
+
+/* Check if iterator has more elements */
+static inline int zrtl_iterator_has_next(const ZrtlIterator* it) {
+    return it && it->index < it->length;
+}
+
+/* Get current index */
+static inline int32_t zrtl_iterator_index(const ZrtlIterator* it) {
+    return it ? it->index : -1;
+}
+
+/* Reset iterator to beginning */
+static inline void zrtl_iterator_reset(ZrtlIterator* it) {
+    if (it) it->index = 0;
+}
+
+/* ============================================================
+ * Array Iterator (specialized for inline array format)
+ * ============================================================ */
+
+/* Array iterator state */
+typedef struct {
+    ZrtlArrayConstPtr array;    /* Pointer to the array */
+    int32_t index;              /* Current position */
+} ZrtlArrayIterator;
+
+/* Create iterator for an array */
+static inline ZrtlArrayIterator zrtl_array_iterator(ZrtlArrayConstPtr arr) {
+    ZrtlArrayIterator it = { arr, 0 };
+    return it;
+}
+
+/* Check if array iterator has more elements */
+static inline int zrtl_array_iterator_has_next(const ZrtlArrayIterator* it) {
+    if (!it || !it->array) return 0;
+    return it->index < ZRTL_ARRAY_LENGTH(it->array);
+}
+
+/* Get next i32 element and advance iterator */
+static inline int32_t zrtl_array_iterator_next_i32(ZrtlArrayIterator* it) {
+    if (!zrtl_array_iterator_has_next(it)) return 0;
+    int32_t value = ZRTL_ARRAY_DATA(it->array, int32_t)[it->index];
+    it->index++;
+    return value;
+}
+
+/* Get next element as pointer (for generic element types) */
+static inline const void* zrtl_array_iterator_next_ptr(ZrtlArrayIterator* it, size_t elem_size) {
+    if (!zrtl_array_iterator_has_next(it)) return NULL;
+    const char* data = (const char*)(it->array + ZRTL_ARRAY_HEADER_SIZE);
+    const void* elem = data + (it->index * elem_size);
+    it->index++;
+    return elem;
+}
+
+/* Reset array iterator */
+static inline void zrtl_array_iterator_reset(ZrtlArrayIterator* it) {
+    if (it) it->index = 0;
+}
+
+/* ============================================================
+ * String Iterator (iterate over UTF-8 bytes or codepoints)
+ * ============================================================ */
+
+/* String iterator state (byte-level) */
+typedef struct {
+    ZrtlStringConstPtr string;  /* Pointer to the string */
+    int32_t index;              /* Current byte position */
+} ZrtlStringIterator;
+
+/* Create iterator for a string */
+static inline ZrtlStringIterator zrtl_string_iterator(ZrtlStringConstPtr str) {
+    ZrtlStringIterator it = { str, 0 };
+    return it;
+}
+
+/* Check if string iterator has more bytes */
+static inline int zrtl_string_iterator_has_next(const ZrtlStringIterator* it) {
+    if (!it || !it->string) return 0;
+    return it->index < ZRTL_STRING_LENGTH(it->string);
+}
+
+/* Get next byte and advance iterator */
+static inline uint8_t zrtl_string_iterator_next_byte(ZrtlStringIterator* it) {
+    if (!zrtl_string_iterator_has_next(it)) return 0;
+    uint8_t byte = (uint8_t)ZRTL_STRING_DATA(it->string)[it->index];
+    it->index++;
+    return byte;
+}
+
+/* Get next UTF-8 codepoint and advance iterator
+ * Returns the codepoint value, or 0 on end/error
+ * Handles 1-4 byte UTF-8 sequences
+ */
+static inline uint32_t zrtl_string_iterator_next_codepoint(ZrtlStringIterator* it) {
+    if (!zrtl_string_iterator_has_next(it)) return 0;
+
+    const uint8_t* data = (const uint8_t*)ZRTL_STRING_DATA(it->string);
+    int32_t len = ZRTL_STRING_LENGTH(it->string);
+    int32_t i = it->index;
+
+    uint8_t b0 = data[i];
+    uint32_t cp;
+
+    if ((b0 & 0x80) == 0) {
+        /* 1-byte ASCII */
+        cp = b0;
+        it->index = i + 1;
+    } else if ((b0 & 0xE0) == 0xC0 && i + 1 < len) {
+        /* 2-byte sequence */
+        cp = ((b0 & 0x1F) << 6) | (data[i+1] & 0x3F);
+        it->index = i + 2;
+    } else if ((b0 & 0xF0) == 0xE0 && i + 2 < len) {
+        /* 3-byte sequence */
+        cp = ((b0 & 0x0F) << 12) | ((data[i+1] & 0x3F) << 6) | (data[i+2] & 0x3F);
+        it->index = i + 3;
+    } else if ((b0 & 0xF8) == 0xF0 && i + 3 < len) {
+        /* 4-byte sequence */
+        cp = ((b0 & 0x07) << 18) | ((data[i+1] & 0x3F) << 12) |
+             ((data[i+2] & 0x3F) << 6) | (data[i+3] & 0x3F);
+        it->index = i + 4;
+    } else {
+        /* Invalid UTF-8 or truncated, return replacement char */
+        cp = 0xFFFD;
+        it->index = i + 1;
+    }
+
+    return cp;
+}
+
+/* Reset string iterator */
+static inline void zrtl_string_iterator_reset(ZrtlStringIterator* it) {
+    if (it) it->index = 0;
+}
+
+/* ============================================================
+ * Iterator Vtable (for custom iterable types)
+ * ============================================================
+ *
+ * For custom types that want to be iterable, implement this vtable.
+ * This allows runtime functions to iterate over user-defined collections.
+ */
+
+/* Forward declaration */
+struct ZrtlIterableVtable;
+
+/* Iterable object header (embed at start of custom iterable structs) */
+typedef struct {
+    const struct ZrtlIterableVtable* vtable;
+} ZrtlIterableHeader;
+
+/* Vtable for iterable types */
+typedef struct ZrtlIterableVtable {
+    /* Returns non-zero if there are more elements */
+    int (*has_next)(void* iterator_state);
+
+    /* Returns next element as DynamicBox, advances iterator */
+    ZrtlDynamicBox (*next)(void* iterator_state);
+
+    /* Creates iterator state for this collection (caller must free) */
+    void* (*create_iterator)(const void* collection);
+
+    /* Frees iterator state */
+    void (*free_iterator)(void* iterator_state);
+} ZrtlIterableVtable;
+
+/* ============================================================
  * Helper macros for common patterns
  * ============================================================ */
 
@@ -847,6 +1043,306 @@ static inline int32_t zrtl_array_get_i32(ZrtlArrayConstPtr arr, int32_t index) {
     }
     return ZRTL_ARRAY_DATA(arr, int32_t)[index];
 }
+
+/* ============================================================
+ * Test Harness Macros
+ * ============================================================
+ *
+ * These macros provide a minimal test framework for ZRTL plugins.
+ * Tests can be run standalone or integrated with cargo test.
+ *
+ * Usage:
+ *
+ *   #include "zrtl.h"
+ *
+ *   // Initialize test state (must be at file scope, before tests)
+ *   ZRTL_TEST_INIT();
+ *
+ *   ZRTL_TEST(test_array_push) {
+ *       ZrtlArrayPtr arr = zrtl_array_new_i32(4);
+ *       arr = zrtl_array_push_i32(arr, 42);
+ *
+ *       ZRTL_ASSERT(arr != NULL);
+ *       ZRTL_ASSERT_EQ(ZRTL_ARRAY_LENGTH(arr), 1);
+ *       ZRTL_ASSERT_EQ(zrtl_array_get_i32(arr, 0), 42);
+ *
+ *       zrtl_array_free(arr);
+ *       ZRTL_PASS();
+ *   }
+ *
+ *   ZRTL_TEST(test_string_create) {
+ *       ZrtlStringPtr str = zrtl_string_new("Hello");
+ *       ZRTL_ASSERT_NOT_NULL(str);
+ *       ZRTL_ASSERT_EQ(ZRTL_STRING_LENGTH(str), 5);
+ *
+ *       zrtl_string_free(str);
+ *       ZRTL_PASS();
+ *   }
+ *
+ *   ZRTL_TEST_MAIN(
+ *       ZRTL_RUN(test_array_push),
+ *       ZRTL_RUN(test_string_create)
+ *   )
+ *
+ * Build and run:
+ *
+ *   gcc -o test_runtime test_runtime.c && ./test_runtime
+ *
+ * Output:
+ *
+ *   [PASS] test_array_push
+ *   [PASS] test_string_create
+ *   ========================
+ *   2 passed, 0 failed
+ */
+
+/* Test result codes */
+#define ZRTL_TEST_PASS 1
+#define ZRTL_TEST_FAIL 0
+
+/* Test function signature */
+typedef int (*ZrtlTestFn)(void);
+
+/* Test entry for registration */
+typedef struct {
+    const char* name;
+    ZrtlTestFn fn;
+} ZrtlTestEntry;
+
+/* Global test state (used by macros) */
+typedef struct {
+    int passed;
+    int failed;
+    const char* current_test;
+    const char* failure_file;
+    int failure_line;
+    const char* failure_msg;
+} ZrtlTestState;
+
+/* Declare a test function
+ * Note: ZRTL_TEST_INIT() must be used before any ZRTL_TEST declarations
+ */
+#define ZRTL_TEST(name) \
+    static int name(void)
+
+/* Pass the test */
+#define ZRTL_PASS() return ZRTL_TEST_PASS
+
+/* Fail the test with message */
+#define ZRTL_FAIL(msg) do { \
+    _zrtl_test_state.failure_file = __FILE__; \
+    _zrtl_test_state.failure_line = __LINE__; \
+    _zrtl_test_state.failure_msg = msg; \
+    return ZRTL_TEST_FAIL; \
+} while(0)
+
+/* Basic assertion */
+#define ZRTL_ASSERT(cond) do { \
+    if (!(cond)) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #cond; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assertion with custom message */
+#define ZRTL_ASSERT_MSG(cond, msg) do { \
+    if (!(cond)) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = msg; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert equality (integers) */
+#define ZRTL_ASSERT_EQ(a, b) do { \
+    if ((a) != (b)) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #a " == " #b; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert inequality */
+#define ZRTL_ASSERT_NE(a, b) do { \
+    if ((a) == (b)) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #a " != " #b; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert less than */
+#define ZRTL_ASSERT_LT(a, b) do { \
+    if (!((a) < (b))) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #a " < " #b; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert less than or equal */
+#define ZRTL_ASSERT_LE(a, b) do { \
+    if (!((a) <= (b))) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #a " <= " #b; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert greater than */
+#define ZRTL_ASSERT_GT(a, b) do { \
+    if (!((a) > (b))) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #a " > " #b; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert greater than or equal */
+#define ZRTL_ASSERT_GE(a, b) do { \
+    if (!((a) >= (b))) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #a " >= " #b; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert not null */
+#define ZRTL_ASSERT_NOT_NULL(ptr) do { \
+    if ((ptr) == NULL) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #ptr " != NULL"; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert null */
+#define ZRTL_ASSERT_NULL(ptr) do { \
+    if ((ptr) != NULL) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #ptr " == NULL"; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert string equality */
+#define ZRTL_ASSERT_STR_EQ(a, b) do { \
+    if (!zrtl_string_equals(a, b)) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: strings not equal"; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Assert float approximately equal (within epsilon) */
+#define ZRTL_ASSERT_FLOAT_EQ(a, b, epsilon) do { \
+    double _diff = (a) - (b); \
+    if (_diff < 0) _diff = -_diff; \
+    if (_diff > (epsilon)) { \
+        _zrtl_test_state.failure_file = __FILE__; \
+        _zrtl_test_state.failure_line = __LINE__; \
+        _zrtl_test_state.failure_msg = "Assertion failed: " #a " ~= " #b; \
+        return ZRTL_TEST_FAIL; \
+    } \
+} while(0)
+
+/* Run a test and track results */
+#define ZRTL_RUN(test_fn) { #test_fn, test_fn }
+
+/* Main test runner macro
+ * Note: Use ZRTL_TEST_INIT() at file scope before defining tests,
+ * then ZRTL_TEST_MAIN() at the end to generate main().
+ */
+#define ZRTL_TEST_MAIN(...) \
+    int main(void) { \
+        extern int printf(const char*, ...); \
+        ZrtlTestEntry _tests[] = { __VA_ARGS__ }; \
+        int _num_tests = sizeof(_tests) / sizeof(_tests[0]); \
+        \
+        for (int _i = 0; _i < _num_tests; _i++) { \
+            _zrtl_test_state.current_test = _tests[_i].name; \
+            _zrtl_test_state.failure_file = NULL; \
+            _zrtl_test_state.failure_line = 0; \
+            _zrtl_test_state.failure_msg = NULL; \
+            \
+            int _result = _tests[_i].fn(); \
+            \
+            if (_result == ZRTL_TEST_PASS) { \
+                printf("[PASS] %s\n", _tests[_i].name); \
+                _zrtl_test_state.passed++; \
+            } else { \
+                printf("[FAIL] %s\n", _tests[_i].name); \
+                if (_zrtl_test_state.failure_file) { \
+                    printf("       at %s:%d\n", \
+                           _zrtl_test_state.failure_file, \
+                           _zrtl_test_state.failure_line); \
+                } \
+                if (_zrtl_test_state.failure_msg) { \
+                    printf("       %s\n", _zrtl_test_state.failure_msg); \
+                } \
+                _zrtl_test_state.failed++; \
+            } \
+        } \
+        \
+        printf("========================\n"); \
+        printf("%d passed, %d failed\n", \
+               _zrtl_test_state.passed, \
+               _zrtl_test_state.failed); \
+        \
+        return _zrtl_test_state.failed > 0 ? 1 : 0; \
+    }
+
+/* Alternative: Test runner without main() for embedding in other test frameworks */
+#define ZRTL_RUN_TESTS(...) do { \
+    extern int printf(const char*, ...); \
+    ZrtlTestEntry _tests[] = { __VA_ARGS__ }; \
+    int _num_tests = sizeof(_tests) / sizeof(_tests[0]); \
+    \
+    for (int _i = 0; _i < _num_tests; _i++) { \
+        _zrtl_test_state.current_test = _tests[_i].name; \
+        _zrtl_test_state.failure_file = NULL; \
+        _zrtl_test_state.failure_line = 0; \
+        _zrtl_test_state.failure_msg = NULL; \
+        \
+        int _result = _tests[_i].fn(); \
+        \
+        if (_result == ZRTL_TEST_PASS) { \
+            printf("[PASS] %s\n", _tests[_i].name); \
+            _zrtl_test_state.passed++; \
+        } else { \
+            printf("[FAIL] %s\n", _tests[_i].name); \
+            if (_zrtl_test_state.failure_file) { \
+                printf("       at %s:%d\n", \
+                       _zrtl_test_state.failure_file, \
+                       _zrtl_test_state.failure_line); \
+            } \
+            if (_zrtl_test_state.failure_msg) { \
+                printf("       %s\n", _zrtl_test_state.failure_msg); \
+            } \
+            _zrtl_test_state.failed++; \
+        } \
+    } \
+} while(0)
+
+/* Initialize test state (for ZRTL_RUN_TESTS without main) */
+#define ZRTL_TEST_INIT() \
+    static ZrtlTestState _zrtl_test_state = { 0, 0, NULL, NULL, 0, NULL }
+
+/* Get test summary after ZRTL_RUN_TESTS */
+#define ZRTL_TEST_PASSED() (_zrtl_test_state.passed)
+#define ZRTL_TEST_FAILED() (_zrtl_test_state.failed)
 
 #ifdef __cplusplus
 }

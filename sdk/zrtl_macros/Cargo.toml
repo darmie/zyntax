@@ -3,7 +3,10 @@ name = "zrtl_macros"
 version = "0.1.0"
 edition = "2021"
 description = "Procedural macros for creating ZRTL (Zyntax Runtime Library) plugins"
-license = "MIT"
+license = "Apache-2.0"
+repository = "https://github.com/darmie/zyntax"
+keywords = ["compiler", "jit", "runtime", "macros", "proc-macro"]
+categories = ["development-tools::procedural-macro-helpers", "compilers"]
 
 [lib]
 proc-macro = true
@@ -11,5 +14,4 @@ proc-macro = true
 [dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
-syn = { version = "2.0", features = ["full", "parsing"] }
-inventory = "0.3"
+syn = { version = "2.0", features = ["full", "parsing", "derive"] }

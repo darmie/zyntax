@@ -1,9 +1,10 @@
 [package]
-name = "haxe_zyntax_runtime"
+name = "reflaxe_haxe_runtime"
 version = "0.1.0"
 edition = "2021"
 
-# It belongs to the Haxe frontend implementation
+# It belongs to the Haxe frontend implementation (reflaxe.zyntax)
+# Contains Haxe String, Array, Map, and other data structure implementations
 
 [lib]
 crate-type = ["cdylib", "rlib"]
