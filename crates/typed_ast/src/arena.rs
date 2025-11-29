@@ -185,10 +185,19 @@ impl AstArena {
 
         global_interned
     }
-    
+
     /// Resolve an interned string back to its value
+    ///
+    /// Since `intern_string` returns symbols from the global interner,
+    /// we must resolve via global interner. The string is leaked to provide
+    /// a stable &str reference (acceptable since interned strings are never freed).
     pub fn resolve_string(&self, interned: InternedString) -> Option<&str> {
-        self.string_interner.resolve(interned.symbol())
+        // Always use global interner since intern_string returns global symbols
+        interned.resolve_global().map(|s| {
+            // Leak the string to provide stable &str lifetime
+            // This is safe because interned strings live for the program duration
+            Box::leak(s.into_boxed_str()) as &str
+        })
     }
     
     /// Get statistics about arena usage
@@ -398,9 +407,62 @@ mod tests {
     #[test]
     fn test_capacity_estimation() {
         let (nodes, strings) = utils::estimate_arena_capacity(100, 50);
-        
+
         // Should add buffer
         assert!(nodes > 100);
         assert!(strings > 50);
+    }
+
+    #[test]
+    fn test_cross_arena_resolution() {
+        // Simulate what happens when multiple tests create separate arenas
+        // All arenas share the GLOBAL_INTERNER
+
+        // Arena 1 interns "std"
+        let std_symbol = {
+            let mut arena1 = AstArena::new();
+            arena1.intern_string("std")
+        };
+
+        // Arena 2 interns different strings, then tries to resolve "std" symbol
+        let mut arena2 = AstArena::new();
+        arena2.intern_string("hash_fn");
+        arena2.intern_string("malloc");
+
+        // The symbol from arena1 should still resolve correctly via global interner
+        let resolved = arena2.resolve_string(std_symbol);
+        assert_eq!(resolved, Some("std"), "Cross-arena resolution should work via global interner");
+    }
+
+    #[test]
+    fn test_sequential_arena_builds() {
+        // Simulates the stdlib test pattern where each test builds parts of stdlib
+
+        // Test 1: builds hashmap functions
+        {
+            let mut arena = AstArena::new();
+            let hash_fn = arena.intern_string("hash_fn");
+            let eq_fn = arena.intern_string("eq_fn");
+            assert_eq!(arena.resolve_string(hash_fn), Some("hash_fn"));
+            assert_eq!(arena.resolve_string(eq_fn), Some("eq_fn"));
+        }
+
+        // Test 2: builds memory functions
+        {
+            let mut arena = AstArena::new();
+            let malloc = arena.intern_string("malloc");
+            let free = arena.intern_string("free");
+            assert_eq!(arena.resolve_string(malloc), Some("malloc"));
+            assert_eq!(arena.resolve_string(free), Some("free"));
+        }
+
+        // Test 3: builds full stdlib with module name "std"
+        {
+            let mut arena = AstArena::new();
+            let std_name = arena.intern_string("std");
+            // The symbol should resolve correctly even though global interner
+            // already has many other strings from previous "tests"
+            assert_eq!(arena.resolve_string(std_name), Some("std"));
+        }
     }
 }
