@@ -786,6 +786,13 @@ impl AsyncCompiler {
     }
 
     /// Optimized path for single-block functions (most common case)
+    ///
+    /// For single-block async functions with await points:
+    /// - Segments BEFORE an await get a Branch terminator (to signal await point)
+    /// - The FINAL segment gets the original terminator (usually Return)
+    ///
+    /// This ensures that `segment_await_map` in `build_states` correctly identifies
+    /// which segments end with await, allowing proper AsyncTerminator::Await creation.
     fn split_single_block(
         &self,
         func: &HirFunction,
@@ -796,33 +803,49 @@ impl AsyncCompiler {
         if let Some(entry_block) = func.blocks.get(&func.entry_block) {
             log::trace!("[ASYNC] split_single_block: entry block terminator = {:?}", entry_block.terminator);
             log::trace!("[ASYNC] split_single_block: entry block has {} instructions", entry_block.instructions.len());
-            let mut current_segment = CodeSegment {
-                instructions: Vec::new(),
-                terminator: entry_block.terminator.clone(),
-                resolved_targets: None, // Single block has no branches to other segments
-            };
+            eprintln!("[DEBUG] split_single_block: entry block has {} instructions, {} await_points",
+                entry_block.instructions.len(), await_points.len());
+            for ap in await_points {
+                eprintln!("[DEBUG]   await_point at instruction {}", ap.instruction_index);
+            }
+
+            let mut current_instructions = Vec::new();
 
             for (i, inst) in entry_block.instructions.iter().enumerate() {
                 // Check if this is an await point
-                if await_points.iter().any(|ap| ap.instruction_index == i) {
-                    // End current segment and start new one
-                    if !current_segment.instructions.is_empty() {
-                        segments.push(current_segment);
-                        current_segment = CodeSegment {
-                            instructions: Vec::new(),
-                            terminator: entry_block.terminator.clone(),
-                            resolved_targets: None,
-                        };
-                    }
+                let is_await_point = await_points.iter().any(|ap| ap.instruction_index == i);
+
+                if is_await_point {
+                    // Push segment before await with a Branch terminator
+                    // The Branch terminator signals to build_states that this segment has an await
+                    eprintln!("[DEBUG] split_single_block: instruction {} is await point, creating segment with {} instructions",
+                        i, current_instructions.len());
+                    segments.push(CodeSegment {
+                        instructions: current_instructions,
+                        terminator: HirTerminator::Branch { target: HirId::new() }, // Dummy target
+                        resolved_targets: None,
+                    });
+                    current_instructions = Vec::new();
+                    // Skip the await instruction itself (it's handled by the state machine)
                 } else {
-                    current_segment.instructions.push(inst.clone());
+                    current_instructions.push(inst.clone());
                 }
             }
 
-            // Add final segment
-            if !current_segment.instructions.is_empty() || segments.is_empty() {
-                segments.push(current_segment);
-            }
+            // Add final segment with the original terminator (usually Return)
+            eprintln!("[DEBUG] split_single_block: final segment has {} instructions with original terminator",
+                current_instructions.len());
+            segments.push(CodeSegment {
+                instructions: current_instructions,
+                terminator: entry_block.terminator.clone(),
+                resolved_targets: None,
+            });
+        }
+
+        eprintln!("[DEBUG] split_single_block: created {} segments total", segments.len());
+        for (i, seg) in segments.iter().enumerate() {
+            eprintln!("[DEBUG]   segment[{}]: {} instructions, terminator={:?}",
+                i, seg.instructions.len(), seg.terminator);
         }
 
         Ok(segments)
