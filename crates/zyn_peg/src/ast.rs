@@ -408,11 +408,12 @@ mod tests {
 
         let action = rule.action.unwrap();
         assert_eq!(action.return_type, "TypedExpression");
-        // Grammar now parses action body as raw_code (more general) rather than structured fields
-        assert!(action.raw_code.is_some());
-        let raw = action.raw_code.unwrap();
-        assert!(raw.contains("expr:"));
-        assert!(raw.contains("ty:"));
+        // Grammar parses "field: value" syntax as action_field entries
+        assert_eq!(action.fields.len(), 2);
+        assert_eq!(action.fields[0].name, "expr");
+        assert!(action.fields[0].value.contains("IntLiteral"));
+        assert_eq!(action.fields[1].name, "ty");
+        assert!(action.fields[1].value.contains("Type::I32"));
     }
 
     #[test]
@@ -434,12 +435,14 @@ mod tests {
                 assert!(rule.action.is_some());
                 let action = rule.action.unwrap();
                 assert_eq!(action.return_type, "TestType");
-                // Grammar now parses action body as raw_code (more general) rather than structured fields
-                assert!(action.raw_code.is_some());
-                let raw = action.raw_code.unwrap();
-                assert!(raw.contains("decl:"));
-                assert!(raw.contains("visibility:"));
-                assert!(raw.contains("ConstDecl"));
+                // Grammar parses "field: value" syntax as action_field entries
+                // even with nested braces in the value
+                assert_eq!(action.fields.len(), 2);
+                assert_eq!(action.fields[0].name, "decl");
+                assert!(action.fields[0].value.contains("ConstDecl"));
+                assert!(action.fields[0].value.contains("intern($2)"));
+                assert_eq!(action.fields[1].name, "visibility");
+                assert!(action.fields[1].value.contains("Visibility::Private"));
             }
             Err(e) => {
                 panic!("Failed to parse: {}", e);
