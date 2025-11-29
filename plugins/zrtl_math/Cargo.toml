@@ -1,0 +1,12 @@
+[package]
+name = "zrtl_math"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL Math plugin - trigonometry, exponentials, rounding, random"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }

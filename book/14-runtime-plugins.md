@@ -4,7 +4,7 @@ The Zyntax Runtime Library (ZRTL) provides native functionality to languages bui
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                    Your Language                        │
 │              (Haxe, Zig, Custom DSL)                    │
@@ -161,6 +161,51 @@ Environment variables and process information.
 | `$Env$os` | `() -> StringPtr` | Get OS name |
 | `$Env$arch` | `() -> StringPtr` | Get CPU architecture |
 
+### zrtl_math - Mathematics
+
+Mathematical functions for numerical computation.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Math$sin` | `(f64) -> f64` | Sine (radians) |
+| `$Math$cos` | `(f64) -> f64` | Cosine (radians) |
+| `$Math$tan` | `(f64) -> f64` | Tangent (radians) |
+| `$Math$asin` | `(f64) -> f64` | Arcsine |
+| `$Math$acos` | `(f64) -> f64` | Arccosine |
+| `$Math$atan` | `(f64) -> f64` | Arctangent |
+| `$Math$atan2` | `(f64, f64) -> f64` | Two-argument arctangent |
+| `$Math$sinh` | `(f64) -> f64` | Hyperbolic sine |
+| `$Math$cosh` | `(f64) -> f64` | Hyperbolic cosine |
+| `$Math$tanh` | `(f64) -> f64` | Hyperbolic tangent |
+| `$Math$exp` | `(f64) -> f64` | e^x |
+| `$Math$exp2` | `(f64) -> f64` | 2^x |
+| `$Math$log` | `(f64) -> f64` | Natural logarithm |
+| `$Math$log2` | `(f64) -> f64` | Base-2 logarithm |
+| `$Math$log10` | `(f64) -> f64` | Base-10 logarithm |
+| `$Math$pow` | `(f64, f64) -> f64` | Power (x^y) |
+| `$Math$sqrt` | `(f64) -> f64` | Square root |
+| `$Math$cbrt` | `(f64) -> f64` | Cube root |
+| `$Math$hypot` | `(f64, f64) -> f64` | Hypotenuse |
+| `$Math$floor` | `(f64) -> f64` | Round down |
+| `$Math$ceil` | `(f64) -> f64` | Round up |
+| `$Math$round` | `(f64) -> f64` | Round to nearest |
+| `$Math$trunc` | `(f64) -> f64` | Truncate toward zero |
+| `$Math$abs` | `(f64) -> f64` | Absolute value (float) |
+| `$Math$abs_i64` | `(i64) -> i64` | Absolute value (int) |
+| `$Math$min` | `(f64, f64) -> f64` | Minimum |
+| `$Math$max` | `(f64, f64) -> f64` | Maximum |
+| `$Math$clamp` | `(f64, f64, f64) -> f64` | Clamp to range |
+| `$Math$random` | `() -> f64` | Random [0, 1) |
+| `$Math$random_range` | `(f64, f64) -> f64` | Random in range |
+| `$Math$random_int` | `(i64, i64) -> i64` | Random integer |
+| `$Math$seed` | `(u64) -> void` | Seed RNG |
+| `$Math$pi` | `() -> f64` | Pi constant |
+| `$Math$e` | `() -> f64` | Euler's number |
+| `$Math$tau` | `() -> f64` | Tau (2π) |
+| `$Math$lerp` | `(f64, f64, f64) -> f64` | Linear interpolation |
+| `$Math$to_radians` | `(f64) -> f64` | Degrees to radians |
+| `$Math$to_degrees` | `(f64) -> f64` | Radians to degrees |
+
 ## Building Plugins
 
 ### Dynamic Libraries (.zrtl)
@@ -171,13 +216,15 @@ cd plugins
 ```
 
 Output in `plugins/target/zrtl/`:
-```
+
+```text
 zrtl_io.zrtl
 zrtl_fs.zrtl
 zrtl_time.zrtl
 zrtl_thread.zrtl
 zrtl_net.zrtl
 zrtl_env.zrtl
+zrtl_math.zrtl
 plugins.json
 ```
 
@@ -195,7 +242,8 @@ cd plugins
 ```
 
 Output in `plugins/target/static/<target>/`:
-```
+
+```text
 libzrtl_io.a
 libzrtl_fs.a
 ...
@@ -227,7 +275,7 @@ Map your language's standard library to ZRTL symbols:
 
 ### In Your Language Source
 
-```
+```zig
 // Your custom language
 fn main() {
     println("Hello from ZRTL!");
@@ -239,23 +287,74 @@ fn main() {
 }
 ```
 
-### Loading at Runtime
+### Loading at Runtime (JIT)
+
+ZRTL plugins are loaded at runtime using the `ZyntaxRuntime` API:
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Step 1: Create a new runtime
+    let mut runtime = ZyntaxRuntime::new()?;
+
+    // Step 2: Load ZRTL plugins (dynamic libraries)
+    // Option A: Load individual plugins
+    runtime.load_plugin("plugins/target/zrtl/zrtl_io.zrtl")?;
+    runtime.load_plugin("plugins/target/zrtl/zrtl_fs.zrtl")?;
+
+    // Option B: Load all plugins from a directory
+    let count = runtime.load_plugins_from_directory("plugins/target/zrtl")?;
+    println!("Loaded {} plugins", count);
+
+    // Step 3: Load your language grammar
+    let grammar = LanguageGrammar::compile_zyn(include_str!("my_lang.zyn"))?;
+    runtime.register_grammar("mylang", grammar.clone())?;
+    runtime.map_extension("mylang", "ml")?;  // .ml files use this grammar
+
+    // Step 4: Compile source code that uses plugin functions
+    let source = r#"
+        fn main() {
+            // These calls resolve to $IO$println and $FS$read_file
+            println("Hello from ZRTL!");
+            let contents = readFile("data.txt");
+            println(contents);
+        }
+    "#;
+
+    runtime.compile_source(&grammar, source)?;
+
+    // Step 5: Call the compiled function
+    runtime.call::<()>("main", &[])?;
+
+    Ok(())
+}
+```
+
+### Loading Plugins with Custom Symbols
+
+For advanced use cases, you can also register external symbols directly:
 
 ```rust
 use zyntax_embed::ZyntaxRuntime;
 
-// Create runtime with ZRTL symbols
-let symbols = zrtl_io::symbols();  // Get plugin symbols
-let mut runtime = ZyntaxRuntime::with_symbols(&symbols)?;
+// Define a native function
+extern "C" fn my_custom_print(msg: i64) {
+    println!("Custom: {}", msg);
+}
 
-// Compile and run code that uses plugin functions
-runtime.compile_source(r#"
-    fn main() {
-        println("Hello from ZRTL!");
-    }
-"#)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Create runtime with custom symbols
+    let symbols: &[(&str, *const u8)] = &[
+        ("$Custom$print", my_custom_print as *const u8),
+    ];
+    let mut runtime = ZyntaxRuntime::with_symbols(symbols)?;
 
-runtime.call::<()>("main", &[])?;
+    // Now code can call $Custom$print
+    // ...
+
+    Ok(())
+}
 ```
 
 ### Static Linking (AOT)
@@ -371,7 +470,7 @@ The build scripts will automatically discover and build it.
 
 ZRTL uses a hierarchical naming scheme:
 
-```
+```text
 $Module$function_name
 ```
 

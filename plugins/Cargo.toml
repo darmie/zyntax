@@ -7,6 +7,7 @@ members = [
     "zrtl_net",
     "zrtl_time",
     "zrtl_env",
+    "zrtl_math",
 ]
 
 [workspace.dependencies]
