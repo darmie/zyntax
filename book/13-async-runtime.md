@@ -319,7 +319,166 @@ let tier = runtime.get_function_tier("hot_async")?;
 println!("Optimization tier: {:?}", tier);
 ```
 
-## Example: Async Computation Pipeline
+## Real-World Examples
+
+### Example 1: Async Loops with State
+
+Async functions can contain while loops with mutable state. The state machine correctly captures and restores loop variables across poll boundaries:
+
+```zig
+async fn sum_range(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+```
+
+```rust
+let promise = runtime.call_async("sum_range", &[ZyntaxValue::Int(100)])?;
+
+// Poll until completion
+while promise.is_pending() {
+    promise.poll();
+}
+
+// sum_range(100) = 1+2+...+100 = 5050
+assert_eq!(promise.state(), PromiseState::Ready(ZyntaxValue::Int(5050)));
+```
+
+### Example 2: Await Inside Loops
+
+A powerful pattern is awaiting other async functions inside loops. Each iteration creates a new nested Promise:
+
+```zig
+async fn double(x: i32) i32 {
+    return x * 2;
+}
+
+async fn sum_doubled(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        const doubled = await double(i);  // Await in loop!
+        total = total + doubled;
+        i = i + 1;
+    }
+    return total;
+}
+```
+
+```rust
+let promise = runtime.call_async("sum_doubled", &[ZyntaxValue::Int(5)])?;
+
+while promise.is_pending() {
+    promise.poll();
+}
+
+// sum_doubled(5) = double(1) + double(2) + ... + double(5)
+//                = 2 + 4 + 6 + 8 + 10 = 30
+assert_eq!(promise.state(), PromiseState::Ready(ZyntaxValue::Int(30)));
+```
+
+### Example 3: Chained Async Calls
+
+Async functions can await other async functions and perform additional computation:
+
+```zig
+async fn step1(x: i32) i32 {
+    return x + 10;
+}
+
+async fn step2(x: i32) i32 {
+    const result = await step1(x);
+    return result * 2;
+}
+
+async fn step3(x: i32) i32 {
+    const result = await step2(x);
+    return result + 5;
+}
+```
+
+```rust
+let promise = runtime.call_async("step3", &[ZyntaxValue::Int(5)])?;
+
+while promise.is_pending() {
+    promise.poll();
+}
+
+// step3(5) = step2(5) + 5 = (step1(5) * 2) + 5 = ((5+10) * 2) + 5 = 35
+assert_eq!(promise.state(), PromiseState::Ready(ZyntaxValue::Int(35)));
+```
+
+### Example 4: Long-Running Process with Await
+
+Await a long-running async function and process the result:
+
+```zig
+// A long-running async process that sums 1 to n
+async fn long_sum(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+// Awaits the long-running process and adds a constant
+async fn add_to_sum(n: i32) i32 {
+    const sum = await long_sum(n);
+    return sum + 100;
+}
+```
+
+```rust
+let promise = runtime.call_async("add_to_sum", &[ZyntaxValue::Int(50)])?;
+
+while promise.is_pending() {
+    promise.poll();
+}
+
+// add_to_sum(50) = long_sum(50) + 100 = 1275 + 100 = 1375
+assert_eq!(promise.state(), PromiseState::Ready(ZyntaxValue::Int(1375)));
+```
+
+### Example 5: Multiple Parameters
+
+Async functions handle multiple parameters correctly:
+
+```zig
+async fn sum_with_multiplier(start: i32, end: i32, multiplier: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = start;
+    while (i <= end) {
+        total = total + (i * multiplier);
+        i = i + 1;
+    }
+    return total;
+}
+```
+
+```rust
+let promise = runtime.call_async("sum_with_multiplier", &[
+    ZyntaxValue::Int(1),
+    ZyntaxValue::Int(5),
+    ZyntaxValue::Int(2),
+])?;
+
+while promise.is_pending() {
+    promise.poll();
+}
+
+// sum_with_multiplier(1, 5, 2) = (1*2)+(2*2)+(3*2)+(4*2)+(5*2) = 30
+assert_eq!(promise.state(), PromiseState::Ready(ZyntaxValue::Int(30)));
+```
+
+## Async Computation Pipeline (Legacy Example)
 
 ```rust
 use zyntax_embed::{ZyntaxRuntime, LanguageGrammar, ZyntaxValue};
