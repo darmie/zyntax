@@ -1045,6 +1045,252 @@ static inline int32_t zrtl_array_get_i32(ZrtlArrayConstPtr arr, int32_t index) {
 }
 
 /* ============================================================
+ * Async/Await Support
+ * ============================================================
+ *
+ * This section provides the C ABI for async functions that can be
+ * called from Zyntax-based languages. Native async functions return
+ * a ZrtlPromise which can be polled until completion.
+ *
+ * # Promise ABI Convention
+ *
+ * Async functions return a pointer to ZrtlPromise:
+ *   async fn foo(a: i32) -> i64  =>  ZrtlPromise* foo(int32_t a)
+ *
+ * The poll function returns an i64:
+ *   - 0 = Pending (operation not complete, poll again)
+ *   - positive = Ready(value) - operation completed successfully
+ *   - negative = Failed(error_code) - operation failed
+ *
+ * # Usage Example (C)
+ *
+ *   // Define async state machine
+ *   typedef struct {
+ *       ZrtlStateMachineHeader header;
+ *       int32_t counter;
+ *       int32_t target;
+ *   } CounterState;
+ *
+ *   // Poll function
+ *   int64_t counter_poll(void* state) {
+ *       CounterState* s = (CounterState*)state;
+ *       if (s->counter >= s->target) {
+ *           s->header.state = ZRTL_ASYNC_COMPLETED;
+ *           return s->counter;  // Ready(counter)
+ *       }
+ *       s->counter++;
+ *       return 0;  // Pending
+ *   }
+ *
+ *   // Create async function
+ *   ZrtlPromise* async_count_to(int32_t target) {
+ *       CounterState* state = malloc(sizeof(CounterState));
+ *       state->header = ZRTL_STATE_MACHINE_INIT;
+ *       state->counter = 0;
+ *       state->target = target;
+ *
+ *       ZrtlPromise* promise = malloc(sizeof(ZrtlPromise));
+ *       promise->state_machine = state;
+ *       promise->poll_fn = counter_poll;
+ *       return promise;
+ *   }
+ *
+ *   // Await (blocking)
+ *   int64_t result = zrtl_promise_block_on(async_count_to(100));
+ */
+
+/* Async state values */
+typedef enum {
+    ZRTL_ASYNC_INITIAL   = 0,          /* Initial state, not started */
+    ZRTL_ASYNC_RESUME1   = 1,          /* Resumed after first await */
+    ZRTL_ASYNC_RESUME2   = 2,          /* Resumed after second await */
+    ZRTL_ASYNC_RESUME3   = 3,
+    ZRTL_ASYNC_RESUME4   = 4,
+    ZRTL_ASYNC_RESUME5   = 5,
+    ZRTL_ASYNC_RESUME6   = 6,
+    ZRTL_ASYNC_RESUME7   = 7,
+    ZRTL_ASYNC_COMPLETED = 0xFFFFFFFE, /* Completed successfully */
+    ZRTL_ASYNC_FAILED    = 0xFFFFFFFF, /* Failed with error */
+} ZrtlAsyncState;
+
+/* State machine header - must be first field in async state structs */
+typedef struct {
+    uint32_t state;      /* Current async state (ZrtlAsyncState) */
+    uint32_t _reserved;  /* Reserved for alignment */
+} ZrtlStateMachineHeader;
+
+/* Initial value for state machine header */
+#define ZRTL_STATE_MACHINE_INIT { ZRTL_ASYNC_INITIAL, 0 }
+
+/* Poll function signature: takes state pointer, returns i64 ABI result */
+typedef int64_t (*ZrtlPollFn)(void* state_machine);
+
+/* Promise structure - returned by async functions */
+typedef struct {
+    void* state_machine;    /* Pointer to the state machine */
+    ZrtlPollFn poll_fn;     /* Poll function */
+} ZrtlPromise;
+
+/* Poll result values */
+#define ZRTL_POLL_PENDING 0
+
+/* Check if poll result is pending */
+#define ZRTL_POLL_IS_PENDING(result) ((result) == 0)
+
+/* Check if poll result is ready (positive = success) */
+#define ZRTL_POLL_IS_READY(result) ((result) > 0)
+
+/* Check if poll result is failed (negative = error) */
+#define ZRTL_POLL_IS_FAILED(result) ((result) < 0)
+
+/* Extract error code from failed result */
+#define ZRTL_POLL_ERROR_CODE(result) ((int32_t)(result))
+
+/* Poll a promise once */
+static inline int64_t zrtl_promise_poll(ZrtlPromise* promise) {
+    if (!promise || !promise->poll_fn) return -1;
+    return promise->poll_fn(promise->state_machine);
+}
+
+/* Block until promise completes (busy-wait) */
+static inline int64_t zrtl_promise_block_on(ZrtlPromise* promise) {
+    if (!promise) return -1;
+    int64_t result;
+    while ((result = zrtl_promise_poll(promise)) == ZRTL_POLL_PENDING) {
+        /* Spin - could add yield here for better CPU usage */
+    }
+    return result;
+}
+
+/* Free a promise and its state machine */
+static inline void zrtl_promise_free(ZrtlPromise* promise) {
+    if (promise) {
+        if (promise->state_machine) {
+            zrtl_free(promise->state_machine);
+        }
+        zrtl_free(promise);
+    }
+}
+
+/* Check if state machine is finished */
+static inline int zrtl_state_is_finished(const ZrtlStateMachineHeader* header) {
+    return header->state >= ZRTL_ASYNC_COMPLETED;
+}
+
+/* Advance state machine to next resume point */
+static inline void zrtl_state_advance(ZrtlStateMachineHeader* header) {
+    if (header->state < ZRTL_ASYNC_COMPLETED) {
+        header->state++;
+    }
+}
+
+/* Mark state machine as completed */
+static inline void zrtl_state_complete(ZrtlStateMachineHeader* header) {
+    header->state = ZRTL_ASYNC_COMPLETED;
+}
+
+/* Mark state machine as failed */
+static inline void zrtl_state_fail(ZrtlStateMachineHeader* header) {
+    header->state = ZRTL_ASYNC_FAILED;
+}
+
+/* ============================================================
+ * Promise Combinators
+ * ============================================================
+ *
+ * These helpers allow combining multiple promises.
+ *
+ * - zrtl_promise_all: Wait for all promises to complete
+ * - zrtl_promise_race: Wait for first promise to complete
+ */
+
+/* Promise array for combinators */
+typedef struct {
+    ZrtlPromise** promises;  /* Array of promise pointers */
+    uint32_t count;          /* Number of promises */
+    int64_t* results;        /* Results array (for all) */
+    uint32_t completed;      /* Number completed (for all) */
+    int32_t winner;          /* Index of first completed (for race), -1 if none */
+} ZrtlPromiseGroup;
+
+/* Create a promise group for Promise.all */
+static inline ZrtlPromiseGroup* zrtl_promise_group_new(uint32_t count) {
+    ZrtlPromiseGroup* group = (ZrtlPromiseGroup*)zrtl_alloc(sizeof(ZrtlPromiseGroup));
+    if (!group) return NULL;
+
+    group->promises = (ZrtlPromise**)zrtl_alloc(sizeof(ZrtlPromise*) * count);
+    group->results = (int64_t*)zrtl_alloc(sizeof(int64_t) * count);
+    group->count = count;
+    group->completed = 0;
+    group->winner = -1;
+
+    if (!group->promises || !group->results) {
+        if (group->promises) zrtl_free(group->promises);
+        if (group->results) zrtl_free(group->results);
+        zrtl_free(group);
+        return NULL;
+    }
+
+    for (uint32_t i = 0; i < count; i++) {
+        group->promises[i] = NULL;
+        group->results[i] = 0;
+    }
+
+    return group;
+}
+
+/* Add a promise to the group */
+static inline void zrtl_promise_group_add(ZrtlPromiseGroup* group, uint32_t index, ZrtlPromise* promise) {
+    if (group && index < group->count) {
+        group->promises[index] = promise;
+    }
+}
+
+/* Poll all promises (Promise.all pattern) - returns 1 when all complete */
+static inline int zrtl_promise_all_poll(ZrtlPromiseGroup* group) {
+    if (!group) return 1;
+
+    for (uint32_t i = 0; i < group->count; i++) {
+        if (group->results[i] == ZRTL_POLL_PENDING && group->promises[i]) {
+            int64_t result = zrtl_promise_poll(group->promises[i]);
+            if (result != ZRTL_POLL_PENDING) {
+                group->results[i] = result;
+                group->completed++;
+            }
+        }
+    }
+
+    return group->completed >= group->count;
+}
+
+/* Poll for first completion (Promise.race pattern) - returns winner index or -1 */
+static inline int32_t zrtl_promise_race_poll(ZrtlPromiseGroup* group) {
+    if (!group || group->winner >= 0) return group ? group->winner : -1;
+
+    for (uint32_t i = 0; i < group->count; i++) {
+        if (group->promises[i]) {
+            int64_t result = zrtl_promise_poll(group->promises[i]);
+            if (result != ZRTL_POLL_PENDING) {
+                group->results[i] = result;
+                group->winner = (int32_t)i;
+                return group->winner;
+            }
+        }
+    }
+
+    return -1;  /* None completed yet */
+}
+
+/* Free a promise group (does NOT free individual promises) */
+static inline void zrtl_promise_group_free(ZrtlPromiseGroup* group) {
+    if (group) {
+        if (group->promises) zrtl_free(group->promises);
+        if (group->results) zrtl_free(group->results);
+        zrtl_free(group);
+    }
+}
+
+/* ============================================================
  * Test Harness Macros
  * ============================================================
  *
