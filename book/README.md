@@ -17,6 +17,7 @@ A comprehensive guide to building language frontends with ZynPEG.
 11. [HIR Builder](./11-hir-builder.md) - Building HIR directly for custom backends
 12. [Embedding SDK](./12-embedding-sdk.md) - Embedding Zyntax in Rust applications with native calling
 13. [Async Runtime](./13-async-runtime.md) - Promise-based async native runtime
+14. [Runtime Plugins](./14-runtime-plugins.md) - ZRTL standard library plugins (I/O, FS, Net, Thread, etc.)
 
 ## Quick Start
 
