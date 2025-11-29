@@ -409,6 +409,8 @@ pub struct ZyntaxRuntime {
     grammars: HashMap<String, Arc<LanguageGrammar>>,
     /// File extension to language mapping (e.g., ".zig" -> "zig")
     extension_map: HashMap<String, String>,
+    /// Names of async functions (original name, not _new suffix)
+    async_functions: std::collections::HashSet<String>,
 }
 
 /// An external function that can be called from Zyntax code
@@ -444,6 +446,7 @@ impl ZyntaxRuntime {
             import_resolvers: Vec::new(),
             grammars: HashMap::new(),
             extension_map: HashMap::new(),
+            async_functions: std::collections::HashSet::new(),
         })
     }
 
@@ -461,6 +464,7 @@ impl ZyntaxRuntime {
             import_resolvers: Vec::new(),
             grammars: HashMap::new(),
             extension_map: HashMap::new(),
+            async_functions: std::collections::HashSet::new(),
         })
     }
 
@@ -478,9 +482,25 @@ impl ZyntaxRuntime {
         }
 
         // Store function name -> ID mapping (resolve InternedString to actual string)
+        // Also track which functions are async
         for (id, func) in &module.functions {
             if let Some(name) = func.name.resolve_global() {
-                self.function_ids.insert(name, *id);
+                self.function_ids.insert(name.clone(), *id);
+
+                // Track async functions by their original name
+                // Async functions are transformed into {name}_new (constructor) and {name}_poll (poll)
+                // We track the original name for call_async lookup
+                //
+                // Detection strategy:
+                // 1. If func.signature.is_async, use the function name directly
+                // 2. If function name ends with "_new", extract original name (async constructor)
+                if func.signature.is_async {
+                    self.async_functions.insert(name.clone());
+                } else if name.ends_with("_new") {
+                    // This is an async constructor - extract the original function name
+                    let orig_name = name[..name.len() - 4].to_string();
+                    self.async_functions.insert(orig_name);
+                }
             }
         }
 
@@ -655,6 +675,11 @@ impl ZyntaxRuntime {
     ///
     /// The promise can be awaited to get the result, or polled manually.
     ///
+    /// For async functions compiled from Zyntax source, this automatically uses
+    /// the state machine ABI:
+    /// - `{fn}_new(params...) -> *mut StateMachine` - constructor
+    /// - `{fn}_poll(state_machine, context) -> AsyncPollResult` - poll function
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -662,16 +687,46 @@ impl ZyntaxRuntime {
     /// let result: String = promise.await_result()?;
     /// ```
     pub fn call_async(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxPromise> {
-        let ptr = self.get_function_ptr(name)
-            .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+        // Check if this is an async function compiled with state machine ABI
+        if self.async_functions.contains(name) {
+            // Use the state machine pattern:
+            // 1. Look up {fn}_new as the constructor
+            // 2. Look up {fn}_poll as the poll function
+            let constructor_name = format!("{}_new", name);
+            let poll_name = format!("{}_poll", name);
 
-        // Convert arguments
-        let dynamic_args: Vec<DynamicValue> = args.iter()
-            .cloned()
-            .map(|v| v.into_dynamic())
-            .collect();
+            let init_ptr = self.get_function_ptr(&constructor_name)
+                .ok_or_else(|| RuntimeError::FunctionNotFound(format!(
+                    "Async constructor '{}' not found (for async function '{}')",
+                    constructor_name, name
+                )))?;
 
-        Ok(ZyntaxPromise::new(ptr, dynamic_args))
+            let poll_ptr = self.get_function_ptr(&poll_name)
+                .ok_or_else(|| RuntimeError::FunctionNotFound(format!(
+                    "Async poll function '{}' not found (for async function '{}')",
+                    poll_name, name
+                )))?;
+
+            // Convert arguments
+            let dynamic_args: Vec<DynamicValue> = args.iter()
+                .cloned()
+                .map(|v| v.into_dynamic())
+                .collect();
+
+            Ok(ZyntaxPromise::with_poll_fn(init_ptr, poll_ptr, dynamic_args))
+        } else {
+            // Fall back to simple function pointer for non-async or external functions
+            let ptr = self.get_function_ptr(name)
+                .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+
+            // Convert arguments
+            let dynamic_args: Vec<DynamicValue> = args.iter()
+                .cloned()
+                .map(|v| v.into_dynamic())
+                .collect();
+
+            Ok(ZyntaxPromise::new(ptr, dynamic_args))
+        }
     }
 
     /// Register an external function that can be called from Zyntax code
@@ -1291,21 +1346,50 @@ impl TieredRuntime {
 
     /// Call an async function, returning a Promise
     pub fn call_async(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxPromise> {
-        let func_id = self.function_ids.get(name)
-            .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+        // Async functions in Zyntax generate two functions:
+        // - {name}_new: constructor that returns the state machine
+        // - {name}_poll: poll function that advances the state machine
+        //
+        // Try to find both. If the user passed "double", look for "double_new" and "double_poll"
+        let new_name = format!("{}_new", name);
+        let poll_name = format!("{}_poll", name);
 
-        // Record the call
-        self.backend.record_call(*func_id);
+        // Try the async naming convention first
+        let (init_ptr, poll_ptr) = if let (Some(new_id), Some(poll_id)) =
+            (self.function_ids.get(&new_name), self.function_ids.get(&poll_name))
+        {
+            // Record calls
+            self.backend.record_call(*new_id);
+            self.backend.record_call(*poll_id);
 
-        let ptr = self.backend.get_function_pointer(*func_id)
-            .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+            let new_ptr = self.backend.get_function_pointer(*new_id)
+                .ok_or_else(|| RuntimeError::FunctionNotFound(new_name.clone()))?;
+            let poll_ptr = self.backend.get_function_pointer(*poll_id)
+                .ok_or_else(|| RuntimeError::FunctionNotFound(poll_name.clone()))?;
+
+            (new_ptr, Some(poll_ptr))
+        } else if let Some(func_id) = self.function_ids.get(name) {
+            // Fall back to direct function call (for sync functions used as async)
+            self.backend.record_call(*func_id);
+            let ptr = self.backend.get_function_pointer(*func_id)
+                .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+            (ptr, None)
+        } else {
+            return Err(RuntimeError::FunctionNotFound(format!(
+                "Neither '{}' nor '{}_new'/'{}_poll' found", name, name, name
+            )));
+        };
 
         let dynamic_args: Vec<DynamicValue> = args.iter()
             .cloned()
             .map(|v| v.into_dynamic())
             .collect();
 
-        Ok(ZyntaxPromise::new(ptr, dynamic_args))
+        if let Some(poll_ptr) = poll_ptr {
+            Ok(ZyntaxPromise::with_poll_fn(init_ptr, poll_ptr, dynamic_args))
+        } else {
+            Ok(ZyntaxPromise::new(init_ptr, dynamic_args))
+        }
     }
 
     /// Manually optimize a function to a specific tier
@@ -1603,7 +1687,7 @@ pub struct ZyntaxPromise {
 ///
 /// This matches the Zyntax async ABI where poll functions return a discriminated union.
 #[repr(C, u8)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum AsyncPollResult {
     /// Still pending, needs more polls
     Pending = 0,
@@ -1731,39 +1815,30 @@ impl ZyntaxPromise {
         if let Some(state_machine) = inner.state_machine {
             if let Some(poll_fn) = inner.poll_fn {
                 unsafe {
-                    // Create a waker for this task
+                    // Create a waker for this task (used for the Context parameter)
                     let waker = RuntimeWaker::new(inner.task_id, inner.ready_queue.clone());
                     let std_waker = waker.into_std_waker();
                     let waker_ptr = &std_waker as *const std::task::Waker as *const u8;
 
                     // Call the poll function on the state machine
-                    // poll(state_machine: *mut u8, waker: *const u8) -> AsyncPollResult
-                    let f: extern "C" fn(*mut u8, *const u8) -> AsyncPollResult =
+                    // Simplified ABI: poll(state_machine: *mut u8, context: *const u8) -> i64
+                    // Return value: 0 = Pending, positive = Ready(value), negative = Failed
+                    eprintln!("[Promise Poll] Calling poll_fn={:?} with state_machine={:?}", poll_fn, state_machine);
+                    let f: extern "C" fn(*mut u8, *const u8) -> i64 =
                         std::mem::transmute(poll_fn);
 
                     let result = f(state_machine, waker_ptr);
+                    eprintln!("[Promise Poll] Result = {}", result);
 
-                    match result {
-                        AsyncPollResult::Pending => {
-                            // Still pending, state remains unchanged
-                        }
-                        AsyncPollResult::Ready(dv) => {
-                            // Completed - convert DynamicValue to ZyntaxValue
-                            match ZyntaxValue::from_dynamic(dv) {
-                                Ok(value) => inner.state = PromiseState::Ready(value),
-                                Err(e) => inner.state = PromiseState::Failed(e.to_string()),
-                            }
-                        }
-                        AsyncPollResult::Failed(ptr, len) => {
-                            // Extract error message from pointer
-                            let err_msg = if !ptr.is_null() && len > 0 {
-                                let slice = std::slice::from_raw_parts(ptr, len);
-                                String::from_utf8_lossy(slice).to_string()
-                            } else {
-                                "Unknown async error".to_string()
-                            };
-                            inner.state = PromiseState::Failed(err_msg);
-                        }
+                    if result == 0 {
+                        // Pending - state remains unchanged
+                    } else if result < 0 {
+                        // Negative value indicates failure
+                        inner.state = PromiseState::Failed(format!("Async operation failed with code {}", result));
+                    } else {
+                        // Ready with value
+                        // For i64/i32 returns, the value is in the result directly
+                        inner.state = PromiseState::Ready(ZyntaxValue::Int(result));
                     }
                 }
             } else {
@@ -1773,22 +1848,54 @@ impl ZyntaxPromise {
             }
         } else {
             // Initialize the state machine on first poll
+            eprintln!("[Promise Poll] First poll - initializing state machine with init_fn={:?}", inner.init_fn);
+            eprintln!("[Promise Poll] poll_fn={:?}", inner.poll_fn);
             unsafe {
-                // The init function creates the state machine and optionally returns
-                // a poll function pointer. For simple async functions, both are the same.
+                // The init function creates the state machine and returns a pointer to it.
+                // ABI: init_fn(args...) -> *mut StateMachine
                 //
-                // ABI: init_fn() -> (*mut StateMachine, *const PollFn)
-                // Or simplified: init_fn() -> *mut StateMachine (poll_fn same as init_fn)
+                // For Zyntax async functions, the constructor takes the same parameters
+                // as the original async function and returns a state machine struct.
 
                 if inner.init_fn.is_null() {
                     inner.state = PromiseState::Failed("Null async function pointer".to_string());
                     return inner.state.clone();
                 }
 
-                // Simple ABI: init function returns the state machine pointer
-                // The poll function is inferred from the async function's structure
-                let f: extern "C" fn() -> *mut u8 = std::mem::transmute(inner.init_fn);
-                let state_machine = f();
+                // Call the init function with the provided arguments
+                // The state machine struct is returned by value (as a struct), not as a pointer
+                // For Cranelift, structs are returned via pointer in the first hidden argument
+                // We'll allocate space and pass the pointer
+                let state_machine: *mut u8 = match inner.args.len() {
+                    0 => {
+                        // No arguments - allocate state machine on stack and call init()
+                        // Allocate a fixed-size buffer for the state machine (state: u32 + local_x: i32 = 8 bytes)
+                        let buffer = Box::into_raw(Box::new([0u8; 64])) as *mut u8;
+                        let f: extern "C" fn(*mut u8) = std::mem::transmute(inner.init_fn);
+                        f(buffer);
+                        buffer
+                    }
+                    1 => {
+                        // Single argument (common case: async fn foo(x: i32) ...)
+                        // Allocate space for state machine, pass it as first arg (sret), original arg as second
+                        let arg0 = inner.args[0].get_i32()
+                            .map(|i| i as i64)
+                            .or_else(|| inner.args[0].get_i64())
+                            .unwrap_or(0i64);
+                        let buffer = Box::into_raw(Box::new([0u8; 64])) as *mut u8;
+                        let f: extern "C" fn(*mut u8, i64) = std::mem::transmute(inner.init_fn);
+                        f(buffer, arg0);
+                        buffer
+                    }
+                    _ => {
+                        // Multiple arguments not yet supported
+                        inner.state = PromiseState::Failed(format!(
+                            "Async functions with {} arguments not yet supported",
+                            inner.args.len()
+                        ));
+                        return inner.state.clone();
+                    }
+                };
 
                 if state_machine.is_null() {
                     inner.state = PromiseState::Failed("Failed to create async state machine".to_string());
@@ -1799,12 +1906,8 @@ impl ZyntaxPromise {
 
                 // The async ABI in Zyntax generates two functions:
                 // 1. Constructor: `{fn}_new(params...) -> StateMachine` (init_fn)
-                // 2. Poll: `async_wrapper(self: *StateMachine, cx: *Context) -> Poll`
-                //
-                // The poll function pointer should be provided separately when creating
-                // the promise. For now, we use the same function pointer pattern but
-                // the caller should pass the correct poll function via set_poll_fn().
-                // See: crates/compiler/src/async_support.rs for the async ABI details.
+                // 2. Poll: `{fn}_poll(self: *StateMachine, cx: *Context) -> i64`
+                //    where 0 = Pending, non-zero = Ready(value)
             }
         }
 

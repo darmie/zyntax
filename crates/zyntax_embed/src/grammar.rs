@@ -374,10 +374,20 @@ fn walk_pair_to_value<'a, H: AstHostFunctions>(
         .map(|c| walk_pair_to_value(c, interpreter))
         .collect();
 
+    if rule_name == "unary" || rule_name == "call_expr" || rule_name == "block" || rule_name == "statement" || rule_name == "while_stmt" {
+        eprintln!("[WALK_PAIR DEBUG] {}: children.len()={}, children={:?}", rule_name, children.len(), children);
+    }
+
     // Execute commands for this rule
-    interpreter
+    let result = interpreter
         .execute_rule(&rule_name, &text, children)
-        .unwrap_or(RuntimeValue::Null)
+        .unwrap_or(RuntimeValue::Null);
+
+    if rule_name == "unary" || rule_name == "call_expr" {
+        eprintln!("[WALK_PAIR DEBUG] {}: returned result={:?}", rule_name, result);
+    }
+
+    result
 }
 
 #[cfg(test)]

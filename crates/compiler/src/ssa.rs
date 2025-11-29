@@ -1254,6 +1254,23 @@ impl SsaBuilder {
         
         match &expr.node {
             TypedExpression::Variable(name) => {
+                // Debug: show what variable we're looking up
+                let name_for_debug = name.resolve_global().unwrap_or_else(|| {
+                    let arena = self.arena.lock().unwrap();
+                    arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
+                });
+                eprintln!("[SSA DEBUG] Looking up variable '{}' (name={:?}) in block {:?}", name_for_debug, name, block_id);
+                eprintln!("[SSA DEBUG]   entry_block = {:?}", self.function.entry_block);
+                if let Some(defs) = self.definitions.get(&block_id) {
+                    eprintln!("[SSA DEBUG]   definitions for this block ({} entries):", defs.len());
+                    for (var, val) in defs {
+                        let resolved = var.resolve_global().unwrap_or_else(|| "?".to_string());
+                        eprintln!("[SSA DEBUG]     {} ({:?}) -> {:?}", resolved, var, val);
+                    }
+                } else {
+                    eprintln!("[SSA DEBUG]   NO definitions for this block!");
+                }
+
                 // Check if this is an address-taken variable - need to load from stack
                 if let Some(&stack_slot) = self.stack_slots.get(name) {
                     let var_ty = self.var_types.get(name).cloned().unwrap_or(HirType::I64);
@@ -1266,6 +1283,7 @@ impl SsaBuilder {
                         volatile: false,
                     });
                     self.add_use(stack_slot, result);
+                    eprintln!("[SSA DEBUG]   Variable '{}' is address-taken, loaded from stack -> {:?}", name_for_debug, result);
                     log::debug!("[SSA] Load address-taken var {:?} from stack slot {:?} -> {:?}", name, stack_slot, result);
                     return Ok(result);
                 }
@@ -1273,8 +1291,11 @@ impl SsaBuilder {
                 // First try to read the variable - if it exists in scope, use it
                 // Only treat as enum constructor if it's not a defined variable
                 if let Some(value_id) = self.try_read_variable(*name, block_id) {
+                    eprintln!("[SSA DEBUG]   Variable '{}' found in scope -> {:?}", name_for_debug, value_id);
                     return Ok(value_id);
                 }
+
+                eprintln!("[SSA DEBUG]   Variable '{}' NOT found by try_read_variable!", name_for_debug);
 
                 // Variable not in scope - check for enum constructors
                 // Use resolve_global() since the string may have been interned by a different arena (e.g., ZigBuilder)
@@ -1845,14 +1866,42 @@ impl SsaBuilder {
             }
 
             TypedExpression::Await(async_expr) => {
-                // NOTE: Async integration requires architectural changes.
-                // AsyncCompiler works on complete HIR functions, but we're in SSA construction.
-                // Same architecture issue as pattern matching above.
+                // Emit an Intrinsic::Await call for the async state machine transformation.
+                // The AsyncCompiler will later detect these await points and split the function
+                // into a state machine with states before/after each await.
                 //
-                // WORKAROUND: Evaluates expression directly (works if no actual await inside)
-                // FUTURE (v2.0): Restructure compilation pipeline
-                // Estimated effort: 8-12 hours
-                self.translate_expression(block_id, async_expr)
+                // Translation: `await future_expr` becomes:
+                //   %future = <translate future_expr>
+                //   %result = call @intrinsic::await(%future)
+                //
+                // The async transformation phase will then convert this into proper
+                // state machine code that yields and resumes.
+
+                // First, translate the expression being awaited (the future/async call)
+                let future_val = self.translate_expression(block_id, async_expr)?;
+
+                // Determine the result type (the type of the await expression)
+                let result_ty = self.convert_type(&expr.ty);
+
+                // Create result value for the await
+                let result = self.create_value(result_ty.clone(), HirValueKind::Instruction);
+
+                // Emit the intrinsic await call
+                let await_inst = HirInstruction::Call {
+                    callee: crate::hir::HirCallable::Intrinsic(crate::hir::Intrinsic::Await),
+                    args: vec![future_val],
+                    result: Some(result),
+                    type_args: vec![],
+                    const_args: vec![],
+                    is_tail: false,
+                };
+
+                // Add instruction to the current block
+                if let Some(block) = self.function.blocks.get_mut(&block_id) {
+                    block.add_instruction(await_inst);
+                }
+
+                Ok(result)
             }
 
             TypedExpression::Try(try_expr) => {
@@ -1958,10 +2007,23 @@ impl SsaBuilder {
     }
 
     fn read_variable(&mut self, var: InternedString, block: HirId) -> HirId {
+        let var_name = var.resolve_global().unwrap_or_default();
+        eprintln!("[SSA DEBUG] read_variable('{}', {:?})", var_name, block);
+        if let Some(defs) = self.definitions.get(&block) {
+            eprintln!("[SSA DEBUG]   block has {} definitions", defs.len());
+            for (v, val) in defs {
+                let v_name = v.resolve_global().unwrap_or_default();
+                eprintln!("[SSA DEBUG]     '{}' -> {:?}", v_name, val);
+            }
+        } else {
+            eprintln!("[SSA DEBUG]   NO definitions for this block!");
+        }
         if let Some(&value) = self.definitions.get(&block).and_then(|defs| defs.get(&var)) {
+            eprintln!("[SSA DEBUG]   FOUND in definitions: {:?}", value);
             log::debug!("[SSA] read_variable({:?}, {:?}) = {:?} (found in definitions)", var, block, value);
             return value;
         }
+        eprintln!("[SSA DEBUG]   NOT found in definitions, calling read_variable_recursive");
 
         log::debug!("[SSA] read_variable({:?}, {:?}) - not in definitions, recursing", var, block);
         // Not defined in this block - need phi or recursive lookup
@@ -1971,10 +2033,15 @@ impl SsaBuilder {
     /// Recursively read variable, inserting phis as needed (before IDF)
     /// After IDF placement, this won't create new phis - it will only traverse existing ones
     fn read_variable_recursive(&mut self, var: InternedString, block: HirId) -> HirId {
+        let var_name_debug = var.resolve_global().unwrap_or_else(|| {
+            let arena = self.arena.lock().unwrap();
+            arena.resolve_string(var).map(|s| s.to_string()).unwrap_or_default()
+        });
         let (predecessors, is_sealed) = {
             let block_info = self.function.blocks.get(&block).unwrap();
             (block_info.predecessors.clone(), self.sealed_blocks.contains(&block))
         };
+        eprintln!("[SSA DEBUG] read_variable_recursive('{}', {:?}): sealed={}, predecessors={:?}", var_name_debug, block, is_sealed, predecessors);
 
         if !is_sealed {
             // Block not sealed - create incomplete phi (ONLY if IDF not done yet)

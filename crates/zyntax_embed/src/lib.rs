@@ -75,6 +75,8 @@ pub use runtime::{
     ChainedResolver, BuiltinResolver,
     // Native calling interface
     NativeType, NativeSignature,
+    // Async ABI types
+    AsyncPollResult,
 };
 pub use grammar::{LanguageGrammar, GrammarError, GrammarResult};
 

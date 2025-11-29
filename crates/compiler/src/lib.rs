@@ -230,6 +230,7 @@ pub fn compile_to_hir(
                 let wrapper_func = async_compiler.generate_async_wrapper_with_arena(
                     &state_machine,
                     &mut *lowering_ctx.arena.lock().unwrap(),
+                    &original_func,
                 )?;
 
                 // Replace the original async function with the state machine wrapper

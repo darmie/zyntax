@@ -1,0 +1,447 @@
+// ===================================================================
+// Async Test Language Grammar
+// ===================================================================
+//
+// A minimal language designed to test async/await functionality in the
+// Zyntax runtime. This grammar supports:
+// - Async function declarations
+// - Await expressions
+// - Basic arithmetic and control flow
+// - Promise-based concurrency patterns
+//
+// Usage:
+//   zyntax compile --source file.async --grammar async_test.zyn --run
+//
+// Example:
+//   async fn fetch_data() i32 {
+//       const x = await compute(10);
+//       return x + 1;
+//   }
+//
+// ===================================================================
+
+@language {
+    name: "AsyncTest",
+    version: "0.1",
+    file_extensions: [".async", ".at"],
+    entry_point: "main",
+}
+
+// ===== Program Structure =====
+
+program = { SOI ~ declarations ~ EOI }
+  -> TypedProgram {
+      "get_child": { "index": 0 }
+  }
+
+declarations = { declaration* }
+  -> TypedProgram {
+      "get_all_children": true,
+      "define": "program",
+      "args": { "declarations": "$result" }
+  }
+
+declaration = { async_fn_decl | fn_decl | extern_fn_decl | const_decl | var_decl }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// ===== Async Function Declaration =====
+// async fn name(params) return_type { body }
+
+async_fn_decl = { async_fn_decl_with_params | async_fn_decl_no_params }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+async_fn_decl_with_params = { "async" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "async_function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4",
+              "is_async": true
+          }}
+      ]
+  }
+
+async_fn_decl_no_params = { "async" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "async_function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "$2",
+              "body": "$3",
+              "is_async": true
+          }}
+      ]
+  }
+
+// ===== Regular Function Declaration =====
+
+fn_decl = { fn_decl_with_params | fn_decl_no_params }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+fn_decl_with_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+fn_decl_no_params = { "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "$2",
+              "body": "$3"
+          }}
+      ]
+  }
+
+// ===== Extern Function Declaration =====
+
+extern_fn_decl = { extern_fn_decl_with_params | extern_fn_decl_no_params }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+extern_fn_decl_with_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "extern_function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3"
+          }}
+      ]
+  }
+
+extern_fn_decl_no_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "extern_function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "$2"
+          }}
+      ]
+  }
+
+// ===== Function Parameters =====
+
+fn_params = { fn_param ~ ("," ~ fn_param)* }
+  -> List {
+      "get_all_children": true
+  }
+
+fn_param = { identifier ~ ":" ~ type_expr }
+  -> TypedParameter {
+      "commands": [
+          { "define": "param", "args": { "name": "$1", "type": "$2" } }
+      ]
+  }
+
+// ===== Variable Declarations =====
+
+const_decl = { const_decl_typed | const_decl_untyped }
+  -> TypedDeclaration { "get_child": { "index": 0 } }
+
+const_decl_typed = { "const" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3",
+              "is_const": true
+          }}
+      ]
+  }
+
+const_decl_untyped = { "const" ~ identifier ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "init": "$2",
+              "is_const": true
+          }}
+      ]
+  }
+
+var_decl = { var_decl_typed | var_decl_untyped }
+  -> TypedDeclaration { "get_child": { "index": 0 } }
+
+var_decl_typed = { "var" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3",
+              "is_const": false
+          }}
+      ]
+  }
+
+var_decl_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "init": "$2",
+              "is_const": false
+          }}
+      ]
+  }
+
+// ===== Type Expressions =====
+
+type_expr = { promise_type | optional_type | primitive_type | identifier }
+  -> Type {
+      "get_child": { "index": 0 }
+  }
+
+// Promise type: Promise<T> for async return types
+promise_type = { "Promise" ~ "<" ~ type_expr ~ ">" }
+  -> Type {
+      "commands": [
+          { "define": "promise_type", "args": { "inner": "$1" } }
+      ]
+  }
+
+// Optional type: ?T
+optional_type = { "?" ~ type_expr }
+  -> Type {
+      "commands": [
+          { "define": "optional_type", "args": { "inner": "$1" } }
+      ]
+  }
+
+primitive_type = { "i32" | "i64" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" }
+  -> Type {
+      "get_text": true,
+      "define": "primitive_type",
+      "args": { "name": "$result" }
+  }
+
+// ===== Statements =====
+
+block = { "{" ~ statement* ~ "}" }
+  -> Block {
+      "get_all_children": true,
+      "define": "block",
+      "args": { "statements": "$result" }
+  }
+
+statement = { return_stmt | if_stmt | while_stmt | var_stmt | const_stmt | expr_stmt }
+  -> Statement {
+      "get_child": { "index": 0 }
+  }
+
+return_stmt = { "return" ~ expr? ~ ";" }
+  -> Statement {
+      "commands": [
+          { "define": "return_stmt", "args": { "value": "$1" } }
+      ]
+  }
+
+if_stmt = { "if" ~ "(" ~ expr ~ ")" ~ block ~ ("else" ~ block)? }
+  -> Statement {
+      "commands": [
+          { "define": "if_stmt", "args": {
+              "condition": "$1",
+              "then_branch": "$2",
+              "else_branch": "$3"
+          }}
+      ]
+  }
+
+while_stmt = { "while" ~ "(" ~ expr ~ ")" ~ block }
+  -> Statement {
+      "commands": [
+          { "define": "while_stmt", "args": {
+              "condition": "$1",
+              "body": "$2"
+          }}
+      ]
+  }
+
+var_stmt = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
+  -> Statement {
+      "commands": [
+          { "define": "var_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3"
+          }}
+      ]
+  }
+
+const_stmt = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
+  -> Statement {
+      "commands": [
+          { "define": "const_stmt", "args": {
+              "name": "$1",
+              "type": "$2",
+              "init": "$3"
+          }}
+      ]
+  }
+
+expr_stmt = { (assignment | expr) ~ ";" }
+  -> Statement {
+      "get_child": { "index": 0 },
+      "define": "expr_stmt",
+      "args": { "expr": "$result" }
+  }
+
+// ===== Expressions =====
+
+expr = { await_expr | comparison }
+  -> Expression {
+      "get_child": { "index": 0 }
+  }
+
+// Await expression: await <expr>
+await_expr = { "await" ~ call_expr }
+  -> Expression {
+      "commands": [
+          { "define": "await_expr", "args": {
+              "future": "$1"
+          }}
+      ]
+  }
+
+// Assignment: identifier = expr
+assignment = { identifier ~ "=" ~ expr }
+  -> Expression {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": "$1",
+              "value": "$2"
+          }}
+      ]
+  }
+
+// Comparison operators
+comparison = { addition ~ (comparison_op ~ addition)* }
+  -> Expression {
+      "fold_binary": true
+  }
+
+comparison_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
+  -> Operator { "get_text": true }
+
+// Addition/subtraction
+addition = { multiplication ~ ((add_op | sub_op) ~ multiplication)* }
+  -> Expression {
+      "fold_binary": { "operand": "multiplication", "operator": "add_op|sub_op" }
+  }
+
+add_op = { "+" }
+  -> Operator { "get_text": true }
+
+sub_op = { "-" }
+  -> Operator { "get_text": true }
+
+// Multiplication/division
+multiplication = { unary ~ ((mul_op | div_op | mod_op) ~ unary)* }
+  -> Expression {
+      "fold_binary": { "operand": "unary", "operator": "mul_op|div_op|mod_op" }
+  }
+
+mul_op = { "*" }
+  -> Operator { "get_text": true }
+
+div_op = { "/" }
+  -> Operator { "get_text": true }
+
+mod_op = { "%" }
+  -> Operator { "get_text": true }
+
+// Unary operators
+unary = { unary_with_op | call_expr }
+  -> Expression {
+      "get_child": { "index": 0 }
+  }
+
+unary_with_op = { ("-"|"!") ~ unary }
+  -> Expression {
+      "commands": [
+          { "define": "unary", "args": { "op": "$1", "operand": "$2" } }
+      ]
+  }
+
+// Function call
+call_expr = { primary ~ ("(" ~ arg_list? ~ ")")? }
+  -> Expression {
+      "commands": [
+          { "define": "call_or_primary", "args": {
+              "callee": "$1",
+              "args": "$2"
+          }}
+      ]
+  }
+
+arg_list = { expr ~ ("," ~ expr)* }
+  -> List {
+      "get_all_children": true
+  }
+
+// Primary expressions
+primary = { "(" ~ expr ~ ")" | number | bool_literal | identifier }
+  -> Expression {
+      "get_child": { "index": 0 }
+  }
+
+number = { float_literal | integer_literal }
+  -> Expression {
+      "get_child": { "index": 0 }
+  }
+
+integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
+  -> Expression {
+      "get_text": true,
+      "define": "integer",
+      "args": { "value": "$result" }
+  }
+
+float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+  -> Expression {
+      "get_text": true,
+      "define": "float",
+      "args": { "value": "$result" }
+  }
+
+bool_literal = { "true" | "false" }
+  -> Expression {
+      "get_text": true,
+      "define": "bool",
+      "args": { "value": "$result" }
+  }
+
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+  -> Identifier {
+      "get_text": true,
+      "define": "identifier",
+      "args": { "name": "$result" }
+  }
+
+// ===== Lexical Rules =====
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }

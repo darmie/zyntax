@@ -639,6 +639,23 @@ impl LoweringContext {
         let mut typed_cfg_builder = crate::typed_cfg::TypedCfgBuilder::new();
         let typed_cfg = typed_cfg_builder.build_from_block(body, hir_func.entry_block)?;
 
+        // Debug: check TypedCFG
+        eprintln!("[LOWERING DEBUG] TypedCFG for function {:?} (is_async={}):", func.name, func.is_async);
+        eprintln!("[LOWERING DEBUG]   Entry block: {:?}", hir_func.entry_block);
+        eprintln!("[LOWERING DEBUG]   CFG nodes: {}", typed_cfg.graph.node_count());
+        eprintln!("[LOWERING DEBUG]   CFG edges: {}", typed_cfg.graph.edge_count());
+        for node in typed_cfg.graph.node_indices() {
+            let block = &typed_cfg.graph[node];
+            let pred_count = typed_cfg.graph.edges_directed(node, petgraph::Direction::Incoming).count();
+            eprintln!("[LOWERING DEBUG]   CFG Block {:?}: {} statements, {} predecessors", block.id, block.statements.len(), pred_count);
+        }
+        if func.is_async {
+            eprintln!("[LOWERING DEBUG]   Body statements: {:?}", body.statements.len());
+            for stmt in &body.statements {
+                eprintln!("[LOWERING DEBUG]   Statement: {:?}", stmt);
+            }
+        }
+
         // Convert to SSA form, processing TypedStatements to emit HIR instructions
         let ssa_builder = SsaBuilder::new(
             hir_func,
@@ -647,6 +664,15 @@ impl LoweringContext {
             self.symbols.functions.clone()
         ).with_return_type(func.return_type.clone());
         let ssa = ssa_builder.build_from_typed_cfg(&typed_cfg)?;
+
+        // Debug: check SSA result
+        if func.is_async {
+            eprintln!("[LOWERING DEBUG] After SSA build for async function {:?}:", func.name);
+            eprintln!("[LOWERING DEBUG]   SSA blocks: {}", ssa.function.blocks.len());
+            for (bid, block) in &ssa.function.blocks {
+                eprintln!("[LOWERING DEBUG]   SSA Block {:?}: {} instructions", bid, block.instructions.len());
+            }
+        }
 
         // Verify SSA properties
         ssa.verify()?;
@@ -682,6 +708,20 @@ impl LoweringContext {
 
         // Gap 6 Phase 2: Transform async functions to state machines
         if func.is_async {
+            eprintln!("[LOWERING DEBUG] Before transform_async_function:");
+            eprintln!("[LOWERING DEBUG]   Function: {:?}", hir_func.name);
+            eprintln!("[LOWERING DEBUG]   Values: {} entries", hir_func.values.len());
+            for (vid, val) in &hir_func.values {
+                eprintln!("[LOWERING DEBUG]     {:?} -> {:?}", vid, val.kind);
+            }
+            eprintln!("[LOWERING DEBUG]   Blocks: {}", hir_func.blocks.len());
+            for (bid, block) in &hir_func.blocks {
+                eprintln!("[LOWERING DEBUG]   Block {:?}: {} instructions, terminator = {:?}",
+                    bid, block.instructions.len(), block.terminator);
+                for (i, inst) in block.instructions.iter().enumerate() {
+                    eprintln!("[LOWERING DEBUG]     inst[{}]: {:?}", i, inst);
+                }
+            }
             hir_func = self.transform_async_function(hir_func)?;
         }
 
@@ -722,7 +762,8 @@ impl LoweringContext {
             // 2. Generate the poll() wrapper that implements Future::poll
             let poll_wrapper = async_compiler.generate_async_wrapper_with_arena(
                 &state_machine,
-                &mut *arena
+                &mut *arena,
+                &original_func,
             )?;
 
             // 3. Generate the constructor function

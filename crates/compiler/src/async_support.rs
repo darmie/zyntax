@@ -15,8 +15,10 @@ use zyntax_typed_ast::InternedString;
 pub struct AsyncStateMachine {
     /// Unique identifier for this state machine
     pub id: HirId,
-    /// Original async function
+    /// Original async function ID
     pub original_function: HirId,
+    /// Original async function name (used for generating _new and _poll functions)
+    pub original_name: InternedString,
     /// States in the state machine
     pub states: IndexMap<AsyncStateId, AsyncState>,
     /// Initial state
@@ -27,6 +29,8 @@ pub struct AsyncStateMachine {
     pub captures: Vec<AsyncCapture>,
     /// Type of the final result
     pub result_type: HirType,
+    /// Values from the original function (constants, etc.) needed by instructions
+    pub values: IndexMap<HirId, HirValue>,
 }
 
 /// State identifier in an async state machine
@@ -171,11 +175,14 @@ impl AsyncCompiler {
         let mut state_machine = AsyncStateMachine {
             id: machine_id,
             original_function: func.id,
+            original_name: func.name,
             states: IndexMap::new(),
             initial_state,
             final_state,
             captures: self.analyze_captures(func)?,
             result_type: func.signature.returns.first().cloned().unwrap_or(HirType::Void),
+            // Copy values from the original function (constants, etc.) needed by instructions
+            values: func.values.clone(),
         };
         
         // Build states based on await points
@@ -239,11 +246,29 @@ impl AsyncCompiler {
             })
             .collect();
 
+        // Build a map from parameter index to SSA value ID
+        // The SSA builder creates new HirIds for parameters that are different from param.id
+        let param_ssa_ids: Vec<HirId> = (0..func.signature.params.len())
+            .map(|idx| {
+                // Find the value with HirValueKind::Parameter(idx)
+                func.values.iter()
+                    .find(|(_, v)| matches!(&v.kind, HirValueKind::Parameter(i) if *i as usize == idx))
+                    .map(|(id, _)| *id)
+                    .unwrap_or_else(|| func.signature.params[idx].id) // Fallback to param.id
+            })
+            .collect();
+
+        eprintln!("[ASYNC DEBUG] analyze_captures: param_ssa_ids = {:?}", param_ssa_ids);
+        for (idx, param) in func.signature.params.iter().enumerate() {
+            eprintln!("[ASYNC DEBUG]   param[{}] signature id = {:?}, SSA id = {:?}", idx, param.id, param_ssa_ids.get(idx));
+        }
+
         // If no await points, we still need to capture all parameters for the state machine
         if await_indices.is_empty() {
-            for param in &func.signature.params {
+            for (idx, param) in func.signature.params.iter().enumerate() {
+                let ssa_id = param_ssa_ids.get(idx).copied().unwrap_or(param.id);
                 captures.push(AsyncCapture {
-                    id: param.id,
+                    id: ssa_id, // Use SSA value ID, not signature param.id
                     name: param.name,
                     ty: param.ty.clone(),
                     mode: AsyncCaptureMode::ByValue,
@@ -255,9 +280,9 @@ impl AsyncCompiler {
         // Collect all values defined before each await point
         let mut defined_before_await: HashSet<HirId> = HashSet::new();
 
-        // Parameters are always defined at the start
-        for param in &func.signature.params {
-            defined_before_await.insert(param.id);
+        // Parameters are always defined at the start (use SSA IDs)
+        for ssa_id in &param_ssa_ids {
+            defined_before_await.insert(*ssa_id);
         }
 
         // Collect all values used after await points
@@ -294,12 +319,13 @@ impl AsyncCompiler {
             .copied()
             .collect();
 
-        // Add parameters that need capturing
-        for param in &func.signature.params {
-            if needs_capture.contains(&param.id) && !captured_ids.contains(&param.id) {
-                captured_ids.insert(param.id);
+        // Add parameters that need capturing (use SSA IDs)
+        for (idx, param) in func.signature.params.iter().enumerate() {
+            let ssa_id = param_ssa_ids.get(idx).copied().unwrap_or(param.id);
+            if needs_capture.contains(&ssa_id) && !captured_ids.contains(&ssa_id) {
+                captured_ids.insert(ssa_id);
                 captures.push(AsyncCapture {
-                    id: param.id,
+                    id: ssa_id, // Use SSA value ID
                     name: param.name,
                     ty: param.ty.clone(),
                     mode: AsyncCaptureMode::ByValue,
@@ -326,10 +352,27 @@ impl AsyncCompiler {
 
         // If no captures identified but we have parameters, capture all parameters
         // (conservative fallback for safety)
+        // IMPORTANT: Use the parameter VALUE id from func.values, not the param declaration id.
+        // Instructions reference the value id, not the declaration id.
         if captures.is_empty() && !func.signature.params.is_empty() {
-            for param in &func.signature.params {
+            eprintln!("[ASYNC DEBUG] Capturing parameters for {:?}", func.name);
+            eprintln!("[ASYNC DEBUG]   func.values has {} entries", func.values.len());
+            for (id, v) in &func.values {
+                eprintln!("[ASYNC DEBUG]     {:?} -> {:?}", id, v.kind);
+            }
+            for (param_idx, param) in func.signature.params.iter().enumerate() {
+                // Find the HirId for this parameter's VALUE (not declaration)
+                // The SSA builder creates values with HirValueKind::Parameter(idx) for each parameter
+                let value_id = func.values.iter()
+                    .find(|(_, v)| matches!(v.kind, HirValueKind::Parameter(idx) if idx == param_idx as u32))
+                    .map(|(id, _)| *id)
+                    .unwrap_or(param.id); // Fallback to declaration id if not found
+
+                eprintln!("[ASYNC DEBUG]   param[{}] {:?}: declaration id={:?}, value id={:?}",
+                    param_idx, param.name, param.id, value_id);
+
                 captures.push(AsyncCapture {
-                    id: param.id,
+                    id: value_id,
                     name: param.name,
                     ty: param.ty.clone(),
                     mode: AsyncCaptureMode::ByValue,
@@ -437,8 +480,21 @@ impl AsyncCompiler {
                     }
                 }
             } else {
-                // Final segment
-                AsyncTerminator::Return { value: None }
+                // Final segment - extract return value from segment's terminator
+                match &segment.terminator {
+                    HirTerminator::Return { values } => {
+                        // Use the first return value if present
+                        eprintln!("[ASYNC DEBUG] build_states: segment terminator has return values: {:?}", values);
+                        AsyncTerminator::Return {
+                            value: values.first().copied()
+                        }
+                    }
+                    _ => {
+                        // No explicit return value (void function or other terminator)
+                        eprintln!("[ASYNC DEBUG] build_states: segment terminator is not Return: {:?}", segment.terminator);
+                        AsyncTerminator::Return { value: None }
+                    }
+                }
             };
             
             let state = AsyncState {
@@ -579,6 +635,8 @@ impl AsyncCompiler {
         let mut segments = Vec::new();
 
         if let Some(entry_block) = func.blocks.get(&func.entry_block) {
+            eprintln!("[ASYNC DEBUG] split_single_block: entry block terminator = {:?}", entry_block.terminator);
+            eprintln!("[ASYNC DEBUG] split_single_block: entry block has {} instructions", entry_block.instructions.len());
             let mut current_segment = CodeSegment {
                 instructions: Vec::new(),
                 terminator: entry_block.terminator.clone(),
@@ -709,12 +767,29 @@ impl AsyncCompiler {
     }
     
     /// Generate async wrapper function with arena
+    ///
+    /// This creates the poll function for the state machine. The function is named
+    /// `{original_name}_poll` to allow multiple async functions to coexist.
+    ///
+    /// For `async fn compute(x: i32) i32`, this generates:
+    /// - `compute_poll(self: *StateMachine, cx: *Context) -> Poll`
     pub fn generate_async_wrapper_with_arena(
-        &self, 
+        &self,
         state_machine: &AsyncStateMachine,
         arena: &mut zyntax_typed_ast::arena::AstArena,
+        original_func: &HirFunction,
     ) -> CompilerResult<HirFunction> {
+        // Generate function-specific poll function name: {original}_poll
+        let poll_fn_name = if let Some(name_str) = state_machine.original_name.resolve_global() {
+            arena.intern_string(&format!("{}_poll", name_str))
+        } else {
+            arena.intern_string("anonymous_async_poll")
+        };
+
         // Create wrapper function that implements the Future trait
+        // Return type convention for poll:
+        //   - Returns i64: 0 = Pending, otherwise Ready(value)
+        //   - For void async functions, Ready is represented as any non-zero value
         let wrapper_sig = HirFunctionSignature {
             params: vec![
                 // self parameter (the state machine)
@@ -732,25 +807,172 @@ impl AsyncCompiler {
                     attributes: ParamAttributes::default(),
                 },
             ],
-            returns: vec![HirType::Opaque(arena.intern_string("Poll"))],
+            // Use i64 for poll result: 0 = Pending, non-zero = Ready(value)
+            returns: vec![HirType::I64],
             type_params: vec![],
             const_params: vec![],
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false, // The wrapper function itself is not async (it's a poll function)
         };
-        
+
         let mut wrapper = HirFunction::new(
-            arena.intern_string("async_wrapper"),
+            poll_fn_name,
             wrapper_sig
         );
-        
-        // Build state machine dispatch logic
-        self.build_state_dispatch(&mut wrapper, state_machine)?;
-        
+
+        // Check if this is a simple async function (no await points)
+        // For simple functions, we can preserve the original block structure
+        eprintln!("[ASYNC DEBUG] generate_async_wrapper_with_arena: states.len() = {}", state_machine.states.len());
+        if state_machine.states.len() == 1 {
+            eprintln!("[ASYNC DEBUG] Using build_simple_async_wrapper (single state)");
+            self.build_simple_async_wrapper(&mut wrapper, state_machine, original_func)?;
+        } else {
+            eprintln!("[ASYNC DEBUG] Using build_state_dispatch (multiple states)");
+            // Build state machine dispatch logic for functions with await points
+            self.build_state_dispatch(&mut wrapper, state_machine, original_func)?;
+        }
+
         Ok(wrapper)
     }
-    
+
+    /// Build a simple async wrapper that preserves the original function's block structure
+    ///
+    /// This is used for async functions WITHOUT await points. Instead of creating
+    /// a state machine dispatch, we:
+    /// 1. Copy all blocks from the original function
+    /// 2. Add parameter loading from state machine at the entry
+    /// 3. Transform Return terminators to return Poll::Ready(value)
+    fn build_simple_async_wrapper(
+        &self,
+        wrapper: &mut HirFunction,
+        state_machine: &AsyncStateMachine,
+        original_func: &HirFunction,
+    ) -> CompilerResult<()> {
+        // Remove the default entry block created by HirFunction::new()
+        // We'll add our own param_load block as the entry
+        let old_entry = wrapper.entry_block;
+        wrapper.blocks.remove(&old_entry);
+
+        // Copy all values from the original function EXCEPT Parameters
+        // Parameters are loaded from the state machine, so we don't copy them.
+        // If we copy them, Cranelift will create iconst instructions for them
+        // instead of using the loaded values.
+        eprintln!("[ASYNC DEBUG] Copying values from original func to wrapper (excluding Parameters)");
+        eprintln!("[ASYNC DEBUG]   Original func has {} values", original_func.values.len());
+        for (hir_id, hir_value) in &original_func.values {
+            // Skip Parameter values - they will be loaded from state machine
+            if matches!(hir_value.kind, HirValueKind::Parameter(_)) {
+                eprintln!("[ASYNC DEBUG]   SKIPPING {:?} -> {:?} (will be loaded from state machine)", hir_id, hir_value.kind);
+                continue;
+            }
+            eprintln!("[ASYNC DEBUG]   Copying value {:?} -> {:?}", hir_id, hir_value.kind);
+            if !wrapper.values.contains_key(hir_id) {
+                wrapper.values.insert(*hir_id, hir_value.clone());
+            }
+        }
+
+        // Get self parameter (state machine pointer)
+        let self_param = wrapper.create_value(
+            HirType::Ptr(Box::new(HirType::Opaque(InternedString::new_global("StateMachine")))),
+            HirValueKind::Parameter(0)
+        );
+
+        // Create a new entry block that loads parameters from state machine
+        let param_load_block_id = HirId::new();
+        let mut param_load_block = HirBlock::new(param_load_block_id);
+        param_load_block.label = Some(InternedString::new_global("param_load"));
+
+        // Load captured parameters from the state machine struct
+        eprintln!("[ASYNC DEBUG] build_simple_async_wrapper: {} captures", state_machine.captures.len());
+        let mut current_offset: i64 = 4; // Start after state field
+        for capture in &state_machine.captures {
+            let offset_const = wrapper.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(current_offset)));
+            let field_ptr = wrapper.create_value(HirType::Ptr(Box::new(capture.ty.clone())), HirValueKind::Instruction);
+
+            param_load_block.add_instruction(HirInstruction::Binary {
+                result: field_ptr,
+                op: BinaryOp::Add,
+                ty: HirType::I64,
+                left: self_param,
+                right: offset_const,
+            });
+
+            param_load_block.add_instruction(HirInstruction::Load {
+                result: capture.id,
+                ty: capture.ty.clone(),
+                ptr: field_ptr,
+                align: 4,
+                volatile: false,
+            });
+
+            wrapper.values.insert(capture.id, HirValue {
+                id: capture.id,
+                ty: capture.ty.clone(),
+                kind: HirValueKind::Instruction,
+                uses: HashSet::new(),
+                span: None,
+            });
+
+            current_offset += 4;
+        }
+
+        // Branch to original entry block
+        param_load_block.set_terminator(HirTerminator::Branch {
+            target: original_func.entry_block,
+        });
+
+        // Copy all blocks from original function, transforming Return terminators
+        for (block_id, block) in &original_func.blocks {
+            let mut new_block = HirBlock::new(*block_id);
+            new_block.label = block.label;
+            new_block.phis = block.phis.clone();
+            new_block.instructions = block.instructions.clone();
+
+            // Transform terminator
+            let new_terminator = match &block.terminator {
+                HirTerminator::Return { values } => {
+                    eprintln!("[ASYNC DEBUG] Transforming return with values: {:?}", values);
+                    // Transform return to Poll::Ready(value)
+                    if let Some(v) = values.first() {
+                        eprintln!("[ASYNC DEBUG]   Return value: {:?}", v);
+                        eprintln!("[ASYNC DEBUG]   Is {:?} in wrapper.values? {}", v, wrapper.values.contains_key(v));
+                        // Cast to i64
+                        let cast_result = wrapper.create_value(HirType::I64, HirValueKind::Instruction);
+                        new_block.add_instruction(HirInstruction::Cast {
+                            op: CastOp::SExt,
+                            result: cast_result,
+                            ty: HirType::I64,
+                            operand: *v,
+                        });
+                        HirTerminator::Return { values: vec![cast_result] }
+                    } else {
+                        // Void return -> return 1 (Ready with no value)
+                        let ready_const = wrapper.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(1)));
+                        HirTerminator::Return { values: vec![ready_const] }
+                    }
+                }
+                other => other.clone(),
+            };
+            new_block.set_terminator(new_terminator);
+
+            wrapper.blocks.insert(*block_id, new_block);
+        }
+
+        // Add the param load block and set it as entry
+        wrapper.blocks.insert(param_load_block_id, param_load_block);
+        wrapper.entry_block = param_load_block_id;
+
+        eprintln!("[ASYNC DEBUG] build_simple_async_wrapper complete:");
+        eprintln!("[ASYNC DEBUG]   Entry block: {:?}", wrapper.entry_block);
+        eprintln!("[ASYNC DEBUG]   Total blocks: {}", wrapper.blocks.len());
+        for (bid, block) in &wrapper.blocks {
+            eprintln!("[ASYNC DEBUG]   Block {:?}: {} instructions, terminator = {:?}", bid, block.instructions.len(), block.terminator);
+        }
+
+        Ok(())
+    }
+
     /// Build state machine dispatch logic
     ///
     /// This creates the switch dispatch that routes to the correct state handler
@@ -759,7 +981,17 @@ impl AsyncCompiler {
         &self,
         wrapper: &mut HirFunction,
         state_machine: &AsyncStateMachine,
+        original_func: &HirFunction,
     ) -> CompilerResult<()> {
+        // Copy all values from the original function to the wrapper.
+        // The state instructions reference HirIds from the original function,
+        // so we need these values to exist in the wrapper's values map.
+        for (hir_id, hir_value) in &original_func.values {
+            if !wrapper.values.contains_key(hir_id) {
+                wrapper.values.insert(*hir_id, hir_value.clone());
+            }
+        }
+
         // Create switch on current state
         let state_field = wrapper.create_value(HirType::U32, HirValueKind::Instruction);
 
@@ -788,23 +1020,81 @@ impl AsyncCompiler {
             let mut state_block = HirBlock::new(block_id);
             state_block.label = Some(InternedString::new_global(&format!("state_{}", state_id.0)));
 
+            // Load captured parameters from the state machine struct
+            // Layout: { state: u32 (offset 0), param1: T1 (offset 4), param2: T2 (offset 8), ... }
+            let mut current_offset: i64 = 4; // Start after state field
+            for capture in &state_machine.captures {
+                // Create offset constant
+                let offset_const = wrapper.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(current_offset)));
+
+                // Calculate pointer: self_param + offset
+                let field_ptr = wrapper.create_value(HirType::Ptr(Box::new(capture.ty.clone())), HirValueKind::Instruction);
+                state_block.add_instruction(HirInstruction::Binary {
+                    result: field_ptr,
+                    op: BinaryOp::Add,
+                    ty: HirType::I64,
+                    left: self_param,
+                    right: offset_const,
+                });
+
+                // Load the captured value - use the ORIGINAL capture HirId so instructions can reference it
+                // This is the key: we're defining a value with the capture's original HirId
+                state_block.add_instruction(HirInstruction::Load {
+                    result: capture.id,
+                    ty: capture.ty.clone(),
+                    ptr: field_ptr,
+                    align: 4,
+                    volatile: false,
+                });
+
+                // Register this value in the wrapper's values map
+                wrapper.values.insert(capture.id, HirValue {
+                    id: capture.id,
+                    ty: capture.ty.clone(),
+                    kind: HirValueKind::Instruction,
+                    uses: HashSet::new(),
+                    span: None,
+                });
+
+                // Move to next field (assuming 4 bytes for i32, should match constructor)
+                current_offset += 4;
+            }
+
             // Add instructions from this state
+            // Values from the original function have already been copied to the wrapper,
+            // so constants and other values referenced by these instructions should be available.
             for inst in &state.instructions {
                 state_block.add_instruction(inst.clone());
             }
 
             // Set terminator based on async terminator
+            // Poll convention: 0 = Pending, non-zero = Ready(value)
             let terminator = match &state.terminator {
                 AsyncTerminator::Return { value } => {
                     // Return Poll::Ready(value)
-                    HirTerminator::Return {
-                        values: value.map(|v| vec![v]).unwrap_or_default()
+                    // For Ready, we return the value itself (or 1 if void)
+                    if let Some(v) = value {
+                        // Cast the return value to i64 (poll function returns i64)
+                        // We need to sign-extend i32 to i64
+                        let cast_result = wrapper.create_value(HirType::I64, HirValueKind::Instruction);
+                        state_block.add_instruction(HirInstruction::Cast {
+                            op: CastOp::SExt,
+                            result: cast_result,
+                            ty: HirType::I64,
+                            operand: *v,
+                        });
+                        HirTerminator::Return { values: vec![cast_result] }
+                    } else {
+                        // Void return - create a "Ready with no value" constant (use 1)
+                        let ready_const = wrapper.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(1)));
+                        HirTerminator::Return { values: vec![ready_const] }
                     }
                 }
                 AsyncTerminator::Await { future: _, resume_state } => {
-                    // Update state and return Poll::Pending
+                    // Update state and return Poll::Pending (0)
                     // Store new state value before returning
                     let new_state_val = wrapper.create_value(HirType::U32, HirValueKind::Instruction);
+                    let resume_state_const = wrapper.create_value(HirType::U32, HirValueKind::Constant(HirConstant::U32(resume_state.0)));
                     let store_new_state = HirInstruction::Store {
                         value: new_state_val,
                         ptr: self_param,
@@ -816,16 +1106,18 @@ impl AsyncCompiler {
                         op: BinaryOp::Add,
                         ty: HirType::U32,
                         left: state_field,
-                        right: wrapper.create_value(HirType::U32, HirValueKind::Instruction), // Would be const resume_state
+                        right: resume_state_const,
                     });
                     state_block.add_instruction(store_new_state);
 
-                    // Return Pending (represented as return with no value for now)
-                    HirTerminator::Return { values: vec![] }
+                    // Return Pending (0)
+                    let pending_const = wrapper.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(0)));
+                    HirTerminator::Return { values: vec![pending_const] }
                 }
                 AsyncTerminator::Continue { next_state: _ } => {
-                    // Continue to next state block
-                    HirTerminator::Return { values: vec![] }
+                    // Continue to next state - return Pending (0) to indicate not done yet
+                    let pending_const = wrapper.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(0)));
+                    HirTerminator::Return { values: vec![pending_const] }
                 }
                 AsyncTerminator::Yield { value, resume_state: _ } => {
                     // Yield value and return Poll::Ready(Some(value))
@@ -895,15 +1187,21 @@ impl AsyncCompiler {
     /// Generate constructor function for the state machine
     ///
     /// Creates a function that:
-    /// - Takes original function parameters
-    /// - Creates state machine instance
+    /// - Takes a pointer to output buffer as first parameter (sret convention)
+    /// - Takes original function parameters as remaining parameters
     /// - Initializes state = 0
     /// - Stores parameters as captures
-    /// - Returns state machine
+    /// - Returns void (struct is written to the output pointer)
+    ///
+    /// This uses explicit sret convention for reliable FFI with Rust.
+    /// The struct layout is:
+    /// - Offset 0: state (u32, 4 bytes)
+    /// - Offset 4: first captured param (4 bytes for i32)
+    /// - etc.
     pub fn generate_state_machine_constructor(
         &self,
         state_machine: &AsyncStateMachine,
-        struct_type: HirType,
+        _struct_type: HirType,
         original_func: &HirFunction,
         arena: &mut zyntax_typed_ast::arena::AstArena,
     ) -> HirFunction {
@@ -911,6 +1209,17 @@ impl AsyncCompiler {
         let mut blocks = IndexMap::new();
         let mut values = IndexMap::new();
         let mut instructions = Vec::new();
+
+        // Parameter 0: output pointer (sret) - generic pointer type
+        let out_ptr_id = HirId::new();
+        let out_ptr_ty = HirType::Ptr(Box::new(HirType::U8)); // Generic byte pointer
+        values.insert(out_ptr_id, HirValue {
+            id: out_ptr_id,
+            ty: out_ptr_ty.clone(),
+            kind: HirValueKind::Parameter(0),
+            uses: HashSet::new(),
+            span: None,
+        });
 
         // Create constant for state = 0
         let state_const_id = HirId::new();
@@ -922,84 +1231,81 @@ impl AsyncCompiler {
             span: None,
         });
 
-        // Build struct by inserting fields one by one
-        // Start with an empty/undefined struct
-        let mut current_struct_id = HirId::new();
-        values.insert(current_struct_id, HirValue {
-            id: current_struct_id,
-            ty: struct_type.clone(),
-            kind: HirValueKind::Undef,
-            uses: HashSet::new(),
-            span: None,
-        });
-
-        // Field 0: Insert state = 0
-        let struct_with_state = HirId::new();
-        values.insert(struct_with_state, HirValue {
-            id: struct_with_state,
-            ty: struct_type.clone(),
-            kind: HirValueKind::Instruction,
-            uses: HashSet::new(),
-            span: None,
-        });
-
-        instructions.push(HirInstruction::InsertValue {
-            result: struct_with_state,
-            ty: struct_type.clone(),
-            aggregate: current_struct_id,
+        // Store state = 0 directly at the base pointer (offset 0)
+        instructions.push(HirInstruction::Store {
+            ptr: out_ptr_id,
             value: state_const_id,
-            indices: vec![0],
+            align: 4,
+            volatile: false,
         });
 
-        current_struct_id = struct_with_state;
+        // Store captured parameters at successive offsets
+        // Each field is 4 bytes apart (assuming i32 captures)
+        // Offset: 0 = state (u32), 4 = first param, 8 = second param, etc.
+        let mut current_offset: i64 = 4; // Start after state field
 
-        // Insert captured parameters (fields 1, 2, 3, ...)
-        for (idx, capture) in state_machine.captures.iter().enumerate() {
+        for (idx, _capture) in state_machine.captures.iter().enumerate() {
             // Find the corresponding parameter
             if let Some(param) = original_func.signature.params.get(idx) {
-                // Create parameter value reference
+                // Create parameter value reference (shifted by 1 for sret)
                 let param_value_id = HirId::new();
                 values.insert(param_value_id, HirValue {
                     id: param_value_id,
                     ty: param.ty.clone(),
-                    kind: HirValueKind::Parameter(idx as u32),
+                    kind: HirValueKind::Parameter((idx + 1) as u32), // +1 for sret
                     uses: HashSet::new(),
                     span: None,
                 });
 
-                // Insert parameter into struct
-                let new_struct_id = HirId::new();
-                values.insert(new_struct_id, HirValue {
-                    id: new_struct_id,
-                    ty: struct_type.clone(),
+                // Create offset constant
+                let offset_const_id = HirId::new();
+                values.insert(offset_const_id, HirValue {
+                    id: offset_const_id,
+                    ty: HirType::I64,
+                    kind: HirValueKind::Constant(HirConstant::I64(current_offset)),
+                    uses: HashSet::new(),
+                    span: None,
+                });
+
+                // Calculate pointer: base + offset using Binary Add (as pointer arithmetic)
+                let field_ptr = HirId::new();
+                values.insert(field_ptr, HirValue {
+                    id: field_ptr,
+                    ty: HirType::Ptr(Box::new(param.ty.clone())),
                     kind: HirValueKind::Instruction,
                     uses: HashSet::new(),
                     span: None,
                 });
 
-                instructions.push(HirInstruction::InsertValue {
-                    result: new_struct_id,
-                    ty: struct_type.clone(),
-                    aggregate: current_struct_id,
-                    value: param_value_id,
-                    indices: vec![(idx + 1) as u32], // +1 because field 0 is state
+                instructions.push(HirInstruction::Binary {
+                    result: field_ptr,
+                    op: BinaryOp::Add,
+                    ty: HirType::I64, // Pointer is 64-bit on modern systems
+                    left: out_ptr_id,
+                    right: offset_const_id,
                 });
 
-                current_struct_id = new_struct_id;
+                // Store parameter value at the calculated address
+                instructions.push(HirInstruction::Store {
+                    ptr: field_ptr,
+                    value: param_value_id,
+                    align: 4,
+                    volatile: false,
+                });
+
+                // Move to next field (4 bytes for i32)
+                current_offset += 4;
             }
         }
 
-        // Final result is the fully constructed struct
-        let result_id = current_struct_id;
-
-        // Create entry block with return
+        // Create entry block with void return
         blocks.insert(entry_block_id, HirBlock {
             id: entry_block_id,
             label: None,
             phis: Vec::new(),
             instructions,
             terminator: HirTerminator::Return {
-                values: vec![result_id],
+                values: vec![], // Void return
             },
             dominance_frontier: HashSet::new(),
             predecessors: Vec::new(),
@@ -1007,15 +1313,28 @@ impl AsyncCompiler {
         });
 
         // Create constructor function signature
-        let constructor_name = arena.intern_string(&format!("{}_new",
-            original_func.name));
+        // Resolve the original function name first, then create _new suffix
+        let base_name = original_func.name.resolve_global()
+            .unwrap_or_else(|| format!("async_fn_{:?}", original_func.id));
+        let constructor_name = arena.intern_string(&format!("{}_new", base_name));
+
+        // Build parameter list: first is output pointer (sret), then original params
+        let mut params = vec![
+            HirParam {
+                id: HirId::new(),
+                name: arena.intern_string("__sret"),
+                ty: out_ptr_ty,
+                attributes: ParamAttributes::default(),
+            }
+        ];
+        params.extend(original_func.signature.params.clone());
 
         HirFunction {
             id: HirId::new(),
             name: constructor_name,
             signature: HirFunctionSignature {
-                params: original_func.signature.params.clone(),
-                returns: vec![struct_type],
+                params,
+                returns: vec![], // Void return - struct is written via sret pointer
                 type_params: Vec::new(),
                 const_params: Vec::new(),
                 lifetime_params: Vec::new(),
