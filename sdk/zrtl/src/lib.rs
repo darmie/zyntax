@@ -10,6 +10,7 @@
 //! - **GenericBox**: Support for generic types like `Array<T>`, `Map<K,V>`
 //! - **String/Array**: Inline format helpers matching Zyntax's memory layout
 //! - **Plugin Support**: Macros for defining ZRTL plugins
+//! - **Async Support**: Promise-based async runtime for Zyntax async functions
 //!
 //! ## Quick Start
 //!
@@ -34,6 +35,39 @@
 //!     ]
 //! }
 //! ```
+//!
+//! ## Native Async Functions (for Language Frontends)
+//!
+//! When building a custom language with Zyntax that supports async/await,
+//! you can expose native async functions that guest code can await:
+//!
+//! ```rust,ignore
+//! use zrtl::prelude::*;
+//! use zrtl_macros::zrtl_async;
+//!
+//! // This function can be awaited from any Zyntax-based language
+//! #[zrtl_async("$IO$read_file")]
+//! pub async fn read_file(path_ptr: *const u8) -> i64 {
+//!     // Real async I/O - can use tokio, async-std, etc.
+//!     let contents = async_read(path_ptr).await;
+//!     contents.len() as i64
+//! }
+//! ```
+//!
+//! In your custom language:
+//! ```text
+//! // MyLang source code
+//! async fn main() {
+//!     let size = await read_file("data.txt");  // Calls native async!
+//!     print(size);
+//! }
+//! ```
+//!
+//! The async support includes:
+//! - `ZrtlPromise`: C ABI promise type for native async functions
+//! - `PollResult`: Poll result enum (Pending/Ready/Failed) with i64 ABI
+//! - `StateMachineHeader`: Base type for manual state machines
+//! - `PromiseAll`, `PromiseRace`, `PromiseAllSettled`: Promise combinators
 //!
 //! ## Memory Formats
 //!
@@ -66,6 +100,7 @@ pub mod generic_box;
 pub mod string;
 pub mod array;
 pub mod plugin;
+pub mod async_support;
 
 // Re-export main types at crate root
 pub use type_system::{TypeCategory, TypeFlags, TypeTag, PrimitiveSize};
@@ -74,6 +109,15 @@ pub use generic_box::{GenericBox, GenericTypeArgs, MAX_TYPE_ARGS};
 pub use string::{OwnedString, StringPtr, StringConstPtr, StringView};
 pub use array::{OwnedArray, ArrayPtr, ArrayConstPtr, ArrayIterator};
 pub use plugin::{ZrtlSymbol, ZrtlInfo, ZrtlSymbolEntry, ZrtlTyped, TypeInfo, ZRTL_VERSION};
+
+// Re-export async types
+pub use async_support::{
+    ZrtlPromise, PollResult, PromiseError,
+    AsyncState, StateMachineHeader,
+    PromiseAll, PromiseRace, PromiseAllSettled, SettledResult,
+    FutureAdapter, YieldOnce, Timer,
+    noop_waker, noop_context, yield_once, sleep, next_task_id,
+};
 
 // Re-export string functions
 pub use string::{
@@ -97,6 +141,12 @@ pub mod prelude {
     pub use crate::string::OwnedString;
     pub use crate::array::OwnedArray;
     pub use crate::plugin::{ZrtlTyped, TypeInfo};
+    pub use crate::async_support::{
+        ZrtlPromise, PollResult, PromiseError,
+        AsyncState, StateMachineHeader,
+        PromiseAll, PromiseRace, PromiseAllSettled, SettledResult,
+        yield_once, sleep,
+    };
     pub use crate::zrtl_tag;
     pub use crate::zrtl_plugin;
     pub use crate::zrtl_symbol;
