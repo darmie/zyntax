@@ -1177,6 +1177,20 @@ pub enum Intrinsic {
     // Error handling (Gap 8)
     Panic,     // Panic with message (unrecoverable error)
     Abort,     // Abort execution immediately (no cleanup)
+
+    // ZRTL Value Conversion (for extern/plugin calls)
+    /// Convert closure to ZrtlClosure: (fn_ptr, env_ptr, env_size) -> *ZrtlClosure
+    /// Args: fn_ptr (raw function pointer), env_ptr (captured environment), env_size (i64)
+    ClosureToZrtl,
+    /// Convert DynamicBox to ZRTL DynamicBox: (tag, value_ptr) -> *DynamicBox
+    /// Args: type_tag (i32), value_ptr (pointer to value)
+    BoxToZrtl,
+    /// Convert primitive to DynamicBox: (value, type_tag) -> *DynamicBox
+    /// Args: value (any primitive), type_tag (i32)
+    PrimitiveToBox,
+    /// Get type tag for a type: () -> i32
+    /// Computes ZRTL TypeTag from HIR type
+    TypeTagOf,
 }
 
 /// Local variable

@@ -3198,6 +3198,117 @@ impl CraneliftBackend {
                                 builder.ins().call(abort_func_ref, &[]);
                                 builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
                             }
+
+                            // ZRTL Value Conversion Intrinsics
+                            crate::hir::Intrinsic::ClosureToZrtl => {
+                                // Convert closure to ZrtlClosure
+                                // Args: fn_ptr (pointer), env_ptr (pointer), env_size (i64)
+                                // Returns: pointer to ZrtlClosure
+                                if arg_vals.len() >= 3 {
+                                    let fn_ptr = arg_vals[0];
+                                    let env_ptr = arg_vals[1];
+                                    let env_size = arg_vals[2];
+
+                                    // Declare zyntax_closure_to_zrtl
+                                    let mut sig = self.module.make_signature();
+                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64)); // fn_ptr
+                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64)); // env_ptr
+                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64)); // env_size
+                                    sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I64)); // result ptr
+
+                                    let func = self.module
+                                        .declare_function("zyntax_closure_to_zrtl", cranelift_module::Linkage::Import, &sig)
+                                        .map_err(|e| CompilerError::Backend(format!("Failed to declare zyntax_closure_to_zrtl: {}", e)))?;
+                                    let func_ref = self.module.declare_func_in_func(func, builder.func);
+
+                                    let call_inst = builder.ins().call(func_ref, &[fn_ptr, env_ptr, env_size]);
+                                    let result_val = builder.inst_results(call_inst)[0];
+
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, result_val);
+                                    }
+                                }
+                            }
+
+                            crate::hir::Intrinsic::BoxToZrtl => {
+                                // Convert value to DynamicBox
+                                // Args: value_ptr (pointer), type_tag (i32), size (i32)
+                                // Returns: pointer to DynamicBox
+                                if arg_vals.len() >= 3 {
+                                    let value_ptr = arg_vals[0];
+                                    let type_tag = arg_vals[1];
+                                    let size = arg_vals[2];
+
+                                    // Declare zyntax_primitive_to_box
+                                    let mut sig = self.module.make_signature();
+                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I64)); // value_ptr
+                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I32)); // type_tag
+                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(types::I32)); // size
+                                    sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I64)); // result ptr
+
+                                    let func = self.module
+                                        .declare_function("zyntax_primitive_to_box", cranelift_module::Linkage::Import, &sig)
+                                        .map_err(|e| CompilerError::Backend(format!("Failed to declare zyntax_primitive_to_box: {}", e)))?;
+                                    let func_ref = self.module.declare_func_in_func(func, builder.func);
+
+                                    let call_inst = builder.ins().call(func_ref, &[value_ptr, type_tag, size]);
+                                    let result_val = builder.inst_results(call_inst)[0];
+
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, result_val);
+                                    }
+                                }
+                            }
+
+                            crate::hir::Intrinsic::PrimitiveToBox => {
+                                // Convert primitive value to DynamicBox based on type
+                                // Args: value (any), type_tag (i32)
+                                // Returns: pointer to DynamicBox
+                                if arg_vals.len() >= 2 {
+                                    let value = arg_vals[0];
+                                    let _type_tag = arg_vals[1];
+                                    let value_ty = builder.func.dfg.value_type(value);
+
+                                    // Determine which boxing function to call based on type
+                                    let func_name = if value_ty == types::I32 {
+                                        "zyntax_box_i32"
+                                    } else if value_ty == types::I64 {
+                                        "zyntax_box_i64"
+                                    } else if value_ty == types::F32 {
+                                        "zyntax_box_f32"
+                                    } else if value_ty == types::F64 {
+                                        "zyntax_box_f64"
+                                    } else {
+                                        "zyntax_box_i64" // fallback
+                                    };
+
+                                    let mut sig = self.module.make_signature();
+                                    sig.params.push(cranelift_codegen::ir::AbiParam::new(value_ty));
+                                    sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I64));
+
+                                    let func = self.module
+                                        .declare_function(func_name, cranelift_module::Linkage::Import, &sig)
+                                        .map_err(|e| CompilerError::Backend(format!("Failed to declare {}: {}", func_name, e)))?;
+                                    let func_ref = self.module.declare_func_in_func(func, builder.func);
+
+                                    let call_inst = builder.ins().call(func_ref, &[value]);
+                                    let result_val = builder.inst_results(call_inst)[0];
+
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, result_val);
+                                    }
+                                }
+                            }
+
+                            crate::hir::Intrinsic::TypeTagOf => {
+                                // Get TypeTag constant for a type
+                                // This is resolved at compile time based on the type argument
+                                // For now, return 0 (void) as placeholder
+                                let result_val = builder.ins().iconst(types::I32, 0);
+                                if let Some(result_id) = result {
+                                    self.value_map.insert(*result_id, result_val);
+                                }
+                            }
                         }
                     }
                     HirCallable::Symbol(symbol_name) => {

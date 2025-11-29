@@ -6,6 +6,7 @@
 //!
 //! ### Thread Operations
 //! - `$Thread$spawn` - Spawn a new thread with a function pointer
+//! - `$Thread$spawn_closure` - Spawn a new thread with a ZrtlClosure
 //! - `$Thread$join` - Wait for thread to complete
 //! - `$Thread$current_id` - Get current thread ID
 //! - `$Thread$yield_now` - Yield execution to other threads
@@ -33,7 +34,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle, Thread};
-use zrtl::zrtl_plugin;
+use zrtl::{zrtl_plugin, ZrtlClosure, DynamicBox};
 
 // ============================================================================
 // Handle Management
@@ -82,6 +83,163 @@ pub extern "C" fn thread_spawn(func: ThreadFn, arg: i64) -> u64 {
 
     let join_handle = thread::spawn(move || {
         func(arg)
+    });
+
+    // Store thread reference for unpark
+    {
+        let mut refs = get_map!(THREAD_REFS, ThreadRefMap);
+        if let Some(ref mut m) = *refs {
+            m.insert(handle_id, join_handle.thread().clone());
+        }
+    }
+
+    // Store join handle
+    {
+        let mut threads = get_map!(THREADS, ThreadMap);
+        if let Some(ref mut m) = *threads {
+            m.insert(handle_id, join_handle);
+        }
+    }
+
+    handle_id
+}
+
+/// Spawn a new thread with a closure
+///
+/// The closure will be called with the provided argument.
+/// Returns a thread handle (0 on error).
+///
+/// # Safety
+/// The closure pointer must be valid and owned (will be consumed).
+#[no_mangle]
+pub unsafe extern "C" fn thread_spawn_closure(closure: *mut ZrtlClosure, arg: i64) -> u64 {
+    if closure.is_null() {
+        return 0;
+    }
+
+    // Take ownership of the closure
+    let closure = Box::from_raw(closure);
+    let handle_id = next_handle();
+
+    let join_handle = thread::spawn(move || {
+        match closure.call(arg) {
+            r if r.is_ok() => r.value,
+            _ => i64::MIN,
+        }
+    });
+
+    // Store thread reference for unpark
+    {
+        let mut refs = get_map!(THREAD_REFS, ThreadRefMap);
+        if let Some(ref mut m) = *refs {
+            m.insert(handle_id, join_handle.thread().clone());
+        }
+    }
+
+    // Store join handle
+    {
+        let mut threads = get_map!(THREADS, ThreadMap);
+        if let Some(ref mut m) = *threads {
+            m.insert(handle_id, join_handle);
+        }
+    }
+
+    handle_id
+}
+
+/// Spawn a new thread with a closure (no argument needed)
+///
+/// Use this when the closure already has all captured state it needs.
+/// This is the preferred API for compiler-generated closures.
+/// Returns a thread handle (0 on error).
+///
+/// # Safety
+/// The closure pointer must be valid and owned (will be consumed).
+#[no_mangle]
+pub unsafe extern "C" fn thread_spawn_closure_noarg(closure: *mut ZrtlClosure) -> u64 {
+    thread_spawn_closure(closure, 0)
+}
+
+/// Spawn a new thread with a DynamicBox containing a closure
+///
+/// This is the most flexible API - accepts any DynamicBox that contains
+/// a ZrtlClosure. The box is consumed.
+/// Returns a thread handle (0 on error, including if box doesn't contain closure).
+///
+/// # Safety
+/// The box pointer must be valid and owned (will be consumed).
+#[no_mangle]
+pub unsafe extern "C" fn thread_spawn_boxed(boxed: *mut DynamicBox) -> u64 {
+    if boxed.is_null() {
+        return 0;
+    }
+
+    let mut boxed = Box::from_raw(boxed);
+
+    // Check if it's a closure
+    if !boxed.is_closure() {
+        return 0;
+    }
+
+    // Extract the closure
+    let closure = match boxed.as_closure() {
+        Some(c) => c.clone(),
+        None => return 0,
+    };
+
+    // Free the box
+    boxed.free();
+
+    let handle_id = next_handle();
+
+    let join_handle = thread::spawn(move || {
+        match closure.call(0) {
+            r if r.is_ok() => r.value,
+            _ => i64::MIN,
+        }
+    });
+
+    // Store thread reference for unpark
+    {
+        let mut refs = get_map!(THREAD_REFS, ThreadRefMap);
+        if let Some(ref mut m) = *refs {
+            m.insert(handle_id, join_handle.thread().clone());
+        }
+    }
+
+    // Store join handle
+    {
+        let mut threads = get_map!(THREADS, ThreadMap);
+        if let Some(ref mut m) = *threads {
+            m.insert(handle_id, join_handle);
+        }
+    }
+
+    handle_id
+}
+
+/// Spawn a new thread with a cloned closure (closure is not consumed)
+///
+/// The closure will be cloned before spawning, so it can be reused.
+/// Returns a thread handle (0 on error).
+///
+/// # Safety
+/// The closure pointer must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn thread_spawn_closure_cloned(closure: *const ZrtlClosure, arg: i64) -> u64 {
+    if closure.is_null() {
+        return 0;
+    }
+
+    // Clone the closure instead of taking ownership
+    let closure = (*closure).clone();
+    let handle_id = next_handle();
+
+    let join_handle = thread::spawn(move || {
+        match closure.call(arg) {
+            r if r.is_ok() => r.value,
+            _ => i64::MIN,
+        }
     });
 
     // Store thread reference for unpark
@@ -411,6 +569,10 @@ zrtl_plugin! {
     symbols: [
         // Thread operations
         ("$Thread$spawn", thread_spawn),
+        ("$Thread$spawn_closure", thread_spawn_closure),
+        ("$Thread$spawn_closure_noarg", thread_spawn_closure_noarg),
+        ("$Thread$spawn_closure_cloned", thread_spawn_closure_cloned),
+        ("$Thread$spawn_boxed", thread_spawn_boxed),
         ("$Thread$join", thread_join),
         ("$Thread$current_id", thread_current_id),
         ("$Thread$yield_now", thread_yield_now),
@@ -440,6 +602,8 @@ zrtl_plugin! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicI64;
+    use zrtl::zrtl_closure_from_fn;
 
     #[test]
     fn test_atomic_operations() {
@@ -503,5 +667,72 @@ mod tests {
         assert_eq!(mutex_lock(handle), 0);
 
         mutex_free(handle);
+    }
+
+    #[test]
+    fn test_thread_spawn_closure() {
+        extern "C" fn triple(x: i64) -> i64 {
+            x * 3
+        }
+
+        unsafe {
+            let closure = zrtl_closure_from_fn(triple);
+            let handle = thread_spawn_closure(closure, 14);
+            assert!(handle > 0);
+
+            let result = thread_join(handle);
+            assert_eq!(result, 42);
+        }
+    }
+
+    #[test]
+    fn test_thread_spawn_closure_cloned() {
+        // Test spawning multiple threads with the same cloned closure
+        let counter = Arc::new(AtomicI64::new(0));
+        let counter_clone = counter.clone();
+
+        let closure = ZrtlClosure::new(move |x| {
+            counter_clone.fetch_add(x, Ordering::SeqCst)
+        });
+
+        unsafe {
+            let closure_ptr = &closure as *const ZrtlClosure;
+
+            // Spawn 3 threads with the same cloned closure
+            let h1 = thread_spawn_closure_cloned(closure_ptr, 10);
+            let h2 = thread_spawn_closure_cloned(closure_ptr, 20);
+            let h3 = thread_spawn_closure_cloned(closure_ptr, 30);
+
+            // Join all threads
+            thread_join(h1);
+            thread_join(h2);
+            thread_join(h3);
+
+            // Counter should be 10 + 20 + 30 = 60
+            assert_eq!(counter.load(Ordering::SeqCst), 60);
+        }
+    }
+
+    #[test]
+    fn test_thread_closure_with_captures() {
+        let value = Arc::new(AtomicI64::new(100));
+        let value_clone = value.clone();
+
+        let closure = ZrtlClosure::new(move |delta| {
+            value_clone.fetch_add(delta, Ordering::SeqCst)
+        });
+
+        let closure_box = Box::new(closure);
+        let closure_ptr = Box::into_raw(closure_box);
+
+        unsafe {
+            let handle = thread_spawn_closure(closure_ptr, 42);
+            let prev = thread_join(handle);
+
+            // Previous value was 100
+            assert_eq!(prev, 100);
+            // New value is 142
+            assert_eq!(value.load(Ordering::SeqCst), 142);
+        }
     }
 }

@@ -101,6 +101,7 @@ pub mod string;
 pub mod array;
 pub mod plugin;
 pub mod async_support;
+pub mod closure;
 
 // Re-export main types at crate root
 pub use type_system::{TypeCategory, TypeFlags, TypeTag, PrimitiveSize};
@@ -117,6 +118,14 @@ pub use async_support::{
     PromiseAll, PromiseRace, PromiseAllSettled, SettledResult,
     FutureAdapter, YieldOnce, Timer,
     noop_waker, noop_context, yield_once, sleep, next_task_id,
+};
+
+// Re-export closure types
+pub use closure::{
+    ZrtlClosure, ZrtlOnceClosure, ClosureResult, ThreadEntry, RawClosureFn,
+    zrtl_closure_from_fn, zrtl_closure_call, zrtl_closure_clone,
+    zrtl_closure_free, zrtl_closure_is_null,
+    zrtl_closure_from_raw, zrtl_closure_from_raw_noenv,
 };
 
 // Re-export string functions
@@ -146,6 +155,9 @@ pub mod prelude {
         AsyncState, StateMachineHeader,
         PromiseAll, PromiseRace, PromiseAllSettled, SettledResult,
         yield_once, sleep,
+    };
+    pub use crate::closure::{
+        ZrtlClosure, ZrtlOnceClosure, ClosureResult, ThreadEntry,
     };
     pub use crate::zrtl_tag;
     pub use crate::zrtl_plugin;

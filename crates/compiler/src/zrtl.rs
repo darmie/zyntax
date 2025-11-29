@@ -1087,6 +1087,363 @@ impl Default for ZrtlRegistry {
     }
 }
 
+// ============================================================
+// C ABI Value Conversion Functions
+// ============================================================
+//
+// These functions are called by the Cranelift backend to convert
+// between compiler values and ZRTL values.
+
+/// Raw closure function type matching ZRTL's RawClosureFn
+pub type RawClosureFn = extern "C" fn(*mut u8, i64) -> i64;
+
+/// ZrtlClosure layout (must match sdk/zrtl/src/closure.rs)
+#[repr(C)]
+pub struct ZrtlClosureRepr {
+    pub inner: *const (),
+    pub call_fn: extern "C" fn(*const (), i64) -> i64,
+    pub call_void_fn: extern "C" fn(*const (), i64),
+    pub drop_fn: extern "C" fn(*const ()),
+    pub clone_fn: extern "C" fn(*const ()) -> *const (),
+}
+
+/// DynamicBox layout (must match sdk/zrtl/src/dynamic_box.rs)
+#[repr(C)]
+pub struct DynamicBoxRepr {
+    pub tag: u32,     // TypeTag
+    pub size: u32,    // Size in bytes
+    pub data: *mut u8,
+    pub dropper: Option<extern "C" fn(*mut u8)>,
+}
+
+/// Convert compiler closure to ZrtlClosure
+///
+/// This creates a ZrtlClosure from a raw function pointer and environment.
+/// The function signature must be `fn(env: *mut u8, arg: i64) -> i64`.
+///
+/// # Arguments
+/// * `fn_ptr` - Function pointer (cast from closure implementation)
+/// * `env_ptr` - Pointer to captured environment data
+/// * `env_size` - Size of environment in bytes (0 if no captures)
+///
+/// # Returns
+/// Pointer to heap-allocated ZrtlClosure. Caller must free with `zrtl_closure_free`.
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_closure_to_zrtl(
+    fn_ptr: RawClosureFn,
+    env_ptr: *const u8,
+    env_size: usize,
+) -> *mut ZrtlClosureRepr {
+    // Allocate and copy environment if present
+    let env_copy = if env_size > 0 && !env_ptr.is_null() {
+        let layout = std::alloc::Layout::from_size_align(env_size, 8).unwrap();
+        let ptr = std::alloc::alloc(layout);
+        std::ptr::copy_nonoverlapping(env_ptr, ptr, env_size);
+        ptr
+    } else {
+        std::ptr::null_mut()
+    };
+
+    // Create inner raw closure wrapper
+    let inner = Box::new(RawClosureWrapper {
+        func: fn_ptr,
+        env: env_copy,
+        env_size,
+    });
+    let inner_ptr = Box::into_raw(inner) as *const ();
+
+    // Create the ZrtlClosure struct
+    let closure = Box::new(ZrtlClosureRepr {
+        inner: inner_ptr,
+        call_fn: raw_closure_call,
+        call_void_fn: raw_closure_call_void,
+        drop_fn: raw_closure_drop,
+        clone_fn: raw_closure_clone,
+    });
+
+    Box::into_raw(closure)
+}
+
+/// Internal wrapper for raw closures
+struct RawClosureWrapper {
+    func: RawClosureFn,
+    env: *mut u8,
+    env_size: usize,
+}
+
+impl Drop for RawClosureWrapper {
+    fn drop(&mut self) {
+        if !self.env.is_null() && self.env_size > 0 {
+            unsafe {
+                let layout = std::alloc::Layout::from_size_align(self.env_size, 8).unwrap();
+                std::alloc::dealloc(self.env, layout);
+            }
+        }
+    }
+}
+
+// SAFETY: Raw closures are designed to be thread-safe
+unsafe impl Send for RawClosureWrapper {}
+unsafe impl Sync for RawClosureWrapper {}
+
+extern "C" fn raw_closure_call(ptr: *const (), arg: i64) -> i64 {
+    unsafe {
+        let wrapper = &*(ptr as *const RawClosureWrapper);
+        (wrapper.func)(wrapper.env, arg)
+    }
+}
+
+extern "C" fn raw_closure_call_void(ptr: *const (), arg: i64) {
+    unsafe {
+        let wrapper = &*(ptr as *const RawClosureWrapper);
+        let _ = (wrapper.func)(wrapper.env, arg);
+    }
+}
+
+extern "C" fn raw_closure_drop(ptr: *const ()) {
+    unsafe {
+        let _ = Box::from_raw(ptr as *mut RawClosureWrapper);
+    }
+}
+
+extern "C" fn raw_closure_clone(ptr: *const ()) -> *const () {
+    unsafe {
+        let wrapper = &*(ptr as *const RawClosureWrapper);
+
+        // Copy environment
+        let env_copy = if wrapper.env_size > 0 && !wrapper.env.is_null() {
+            let layout = std::alloc::Layout::from_size_align(wrapper.env_size, 8).unwrap();
+            let new_ptr = std::alloc::alloc(layout);
+            std::ptr::copy_nonoverlapping(wrapper.env, new_ptr, wrapper.env_size);
+            new_ptr
+        } else {
+            std::ptr::null_mut()
+        };
+
+        let cloned = Box::new(RawClosureWrapper {
+            func: wrapper.func,
+            env: env_copy,
+            env_size: wrapper.env_size,
+        });
+
+        Box::into_raw(cloned) as *const ()
+    }
+}
+
+/// Free a ZrtlClosure created by zyntax_closure_to_zrtl
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_closure_free(closure: *mut ZrtlClosureRepr) {
+    if !closure.is_null() {
+        let c = Box::from_raw(closure);
+        (c.drop_fn)(c.inner);
+    }
+}
+
+/// Convert a primitive value to a DynamicBox
+///
+/// # Arguments
+/// * `value_ptr` - Pointer to the value data
+/// * `type_tag` - ZRTL TypeTag (packed u32)
+/// * `size` - Size of value in bytes
+///
+/// # Returns
+/// Pointer to heap-allocated DynamicBox. Caller must free with `zyntax_box_free`.
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_primitive_to_box(
+    value_ptr: *const u8,
+    type_tag: u32,
+    size: u32,
+) -> *mut DynamicBoxRepr {
+    // Allocate and copy value data
+    let data = if size > 0 && !value_ptr.is_null() {
+        let layout = std::alloc::Layout::from_size_align(size as usize, 8).unwrap();
+        let ptr = std::alloc::alloc(layout);
+        std::ptr::copy_nonoverlapping(value_ptr, ptr, size as usize);
+        ptr
+    } else {
+        std::ptr::null_mut()
+    };
+
+    let boxed = Box::new(DynamicBoxRepr {
+        tag: type_tag,
+        size,
+        data,
+        dropper: Some(default_box_dropper),
+    });
+
+    Box::into_raw(boxed)
+}
+
+/// Create a DynamicBox for an i32 value
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_i32(value: i32) -> *mut DynamicBoxRepr {
+    let data = Box::into_raw(Box::new(value)) as *mut u8;
+    let boxed = Box::new(DynamicBoxRepr {
+        tag: TypeTag::I32.0,
+        size: 4,
+        data,
+        dropper: Some(drop_box_i32),
+    });
+    Box::into_raw(boxed)
+}
+
+/// Create a DynamicBox for an i64 value
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_i64(value: i64) -> *mut DynamicBoxRepr {
+    let data = Box::into_raw(Box::new(value)) as *mut u8;
+    let boxed = Box::new(DynamicBoxRepr {
+        tag: TypeTag::I64.0,
+        size: 8,
+        data,
+        dropper: Some(drop_box_i64),
+    });
+    Box::into_raw(boxed)
+}
+
+/// Create a DynamicBox for an f32 value
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_f32(value: f32) -> *mut DynamicBoxRepr {
+    let data = Box::into_raw(Box::new(value)) as *mut u8;
+    let boxed = Box::new(DynamicBoxRepr {
+        tag: TypeTag::F32.0,
+        size: 4,
+        data,
+        dropper: Some(drop_box_f32),
+    });
+    Box::into_raw(boxed)
+}
+
+/// Create a DynamicBox for an f64 value
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_f64(value: f64) -> *mut DynamicBoxRepr {
+    let data = Box::into_raw(Box::new(value)) as *mut u8;
+    let boxed = Box::new(DynamicBoxRepr {
+        tag: TypeTag::F64.0,
+        size: 8,
+        data,
+        dropper: Some(drop_box_f64),
+    });
+    Box::into_raw(boxed)
+}
+
+/// Create a DynamicBox for a bool value
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_bool(value: i32) -> *mut DynamicBoxRepr {
+    let data = Box::into_raw(Box::new(value as u8)) as *mut u8;
+    let boxed = Box::new(DynamicBoxRepr {
+        tag: TypeTag::BOOL.0,
+        size: 1,
+        data,
+        dropper: Some(drop_box_u8),
+    });
+    Box::into_raw(boxed)
+}
+
+/// Free a DynamicBox created by zyntax_box_* functions
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_free(boxed: *mut DynamicBoxRepr) {
+    if !boxed.is_null() {
+        let b = Box::from_raw(boxed);
+        if let Some(dropper) = b.dropper {
+            if !b.data.is_null() {
+                dropper(b.data);
+            }
+        }
+    }
+}
+
+/// Get the value from a DynamicBox as i64
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_get_i64(boxed: *const DynamicBoxRepr) -> i64 {
+    if boxed.is_null() || (*boxed).data.is_null() {
+        return 0;
+    }
+    match (*boxed).size {
+        1 => *((*boxed).data as *const i8) as i64,
+        2 => *((*boxed).data as *const i16) as i64,
+        4 => *((*boxed).data as *const i32) as i64,
+        8 => *((*boxed).data as *const i64),
+        _ => 0,
+    }
+}
+
+/// Get the TypeTag from a DynamicBox
+#[no_mangle]
+pub unsafe extern "C" fn zyntax_box_get_tag(boxed: *const DynamicBoxRepr) -> u32 {
+    if boxed.is_null() {
+        return TypeTag::VOID.0;
+    }
+    (*boxed).tag
+}
+
+// Default dropper for raw data
+extern "C" fn default_box_dropper(ptr: *mut u8) {
+    // Can't properly deallocate without knowing the layout
+    // This is a fallback - typed droppers should be used
+    let _ = ptr;
+}
+
+// Typed droppers
+extern "C" fn drop_box_i32(ptr: *mut u8) {
+    unsafe { let _ = Box::from_raw(ptr as *mut i32); }
+}
+
+extern "C" fn drop_box_i64(ptr: *mut u8) {
+    unsafe { let _ = Box::from_raw(ptr as *mut i64); }
+}
+
+extern "C" fn drop_box_f32(ptr: *mut u8) {
+    unsafe { let _ = Box::from_raw(ptr as *mut f32); }
+}
+
+extern "C" fn drop_box_f64(ptr: *mut u8) {
+    unsafe { let _ = Box::from_raw(ptr as *mut f64); }
+}
+
+extern "C" fn drop_box_u8(ptr: *mut u8) {
+    unsafe { let _ = Box::from_raw(ptr); }
+}
+
+/// Get the TypeTag for a HIR type
+///
+/// This is called at compile time (during lowering) to get the
+/// ZRTL TypeTag for a given type.
+pub fn type_tag_for_hir_type(ty: &crate::hir::HirType) -> TypeTag {
+    use crate::hir::HirType;
+
+    match ty {
+        HirType::Void => TypeTag::VOID,
+        HirType::Bool => TypeTag::BOOL,
+        HirType::I8 => TypeTag::I8,
+        HirType::I16 => TypeTag::I16,
+        HirType::I32 => TypeTag::I32,
+        HirType::I64 => TypeTag::I64,
+        HirType::I128 => TypeTag::new(TypeCategory::Int, 0x10, TypeFlags::NONE), // 128-bit
+        HirType::U8 => TypeTag::U8,
+        HirType::U16 => TypeTag::U16,
+        HirType::U32 => TypeTag::U32,
+        HirType::U64 => TypeTag::U64,
+        HirType::U128 => TypeTag::new(TypeCategory::UInt, 0x10, TypeFlags::NONE), // 128-bit
+        HirType::F32 => TypeTag::F32,
+        HirType::F64 => TypeTag::F64,
+        HirType::Ptr(_) => TypeTag::new(TypeCategory::Pointer, 0, TypeFlags::NONE),
+        HirType::Ref { .. } => TypeTag::new(TypeCategory::Pointer, 1, TypeFlags::NONE),
+        HirType::Array(_, _) => TypeTag::new(TypeCategory::Array, 0, TypeFlags::NONE),
+        HirType::Vector(_, _) => TypeTag::new(TypeCategory::Array, 1, TypeFlags::NONE), // SIMD vector
+        HirType::Struct(_) => TypeTag::new(TypeCategory::Struct, 0, TypeFlags::NONE),
+        HirType::Union(_) => TypeTag::new(TypeCategory::Union, 0, TypeFlags::NONE),
+        HirType::Function(_) => TypeTag::new(TypeCategory::Function, 0, TypeFlags::NONE),
+        HirType::Closure(_) => TypeTag::new(TypeCategory::Function, 1, TypeFlags::NONE), // Closure
+        HirType::Opaque(_) => TypeTag::new(TypeCategory::Opaque, 0, TypeFlags::NONE),
+        HirType::ConstGeneric(_) => TypeTag::new(TypeCategory::Opaque, 1, TypeFlags::NONE),
+        HirType::Generic { .. } => TypeTag::new(TypeCategory::Custom, 0, TypeFlags::NONE),
+        HirType::TraitObject { .. } => TypeTag::new(TypeCategory::TraitObject, 0, TypeFlags::NONE),
+        HirType::Interface { .. } => TypeTag::new(TypeCategory::TraitObject, 1, TypeFlags::NONE),
+        HirType::Promise(_) => TypeTag::new(TypeCategory::Opaque, 2, TypeFlags::NONE), // Promise
+        HirType::AssociatedType { .. } => TypeTag::new(TypeCategory::Opaque, 3, TypeFlags::NONE), // Associated type
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
