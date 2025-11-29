@@ -150,6 +150,14 @@ pub mod prelude {
     pub use crate::zrtl_tag;
     pub use crate::zrtl_plugin;
     pub use crate::zrtl_symbol;
+    // Test framework macros
+    pub use crate::zrtl_assert;
+    pub use crate::zrtl_assert_eq;
+    pub use crate::zrtl_assert_ne;
+    pub use crate::zrtl_assert_some;
+    pub use crate::zrtl_assert_none;
+    pub use crate::zrtl_assert_ok;
+    pub use crate::zrtl_assert_err;
 }
 
 #[cfg(test)]

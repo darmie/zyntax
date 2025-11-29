@@ -11,6 +11,9 @@ categories = ["development-tools::ffi", "compilers"]
 [dependencies]
 inventory = "0.3"
 
+[dev-dependencies]
+zrtl_macros = { path = "../zrtl_macros" }
+
 [features]
 default = []
 # Enable test harness macros

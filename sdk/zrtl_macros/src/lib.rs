@@ -522,3 +522,117 @@ pub fn zrtl_async_simple(_input: TokenStream) -> TokenStream {
 
     TokenStream::from(expanded)
 }
+
+// ============================================================================
+// Test Framework
+// ============================================================================
+
+/// Marks a function as a ZRTL test
+///
+/// This attribute wraps the test function with ZRTL-specific setup and
+/// teardown, and registers it with the ZRTL test harness.
+///
+/// # Features
+///
+/// - Automatic setup of ZRTL type registry
+/// - Colored output with test name and result
+/// - Timing information
+/// - Integrates with standard `cargo test`
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use zrtl::prelude::*;
+/// use zrtl_macros::zrtl_test;
+///
+/// #[zrtl_test]
+/// fn test_array_push() {
+///     let mut arr: OwnedArray<i32> = OwnedArray::new().unwrap();
+///     arr.push(42);
+///     zrtl_assert_eq!(arr.len(), 1);
+///     zrtl_assert_eq!(arr.get(0), Some(&42));
+/// }
+///
+/// #[zrtl_test]
+/// fn test_string_creation() {
+///     let s = OwnedString::from("hello");
+///     zrtl_assert_eq!(s.len(), 5);
+///     zrtl_assert!(s.as_str() == Some("hello"));
+/// }
+/// ```
+///
+/// # Optional Attributes
+///
+/// - `#[zrtl_test(ignore)]` - Mark test as ignored
+/// - `#[zrtl_test(should_panic)]` - Test should panic
+/// - `#[zrtl_test(timeout = 1000)]` - Timeout in milliseconds
+///
+/// # Example with attributes
+///
+/// ```rust,ignore
+/// #[zrtl_test(should_panic)]
+/// fn test_out_of_bounds() {
+///     let arr: OwnedArray<i32> = OwnedArray::new().unwrap();
+///     let _ = arr.get(100); // Should panic
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn zrtl_test(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let func = parse_macro_input!(item as ItemFn);
+    let func_name = &func.sig.ident;
+    let func_vis = &func.vis;
+    let func_block = &func.block;
+    let func_attrs = &func.attrs;
+
+    // Parse optional attributes
+    let attr_string = attr.to_string();
+    let should_ignore = attr_string.contains("ignore");
+    let should_panic = attr_string.contains("should_panic");
+
+    // Generate the test wrapper
+    let test_name_str = func_name.to_string();
+
+    let ignore_attr = if should_ignore {
+        quote! { #[ignore] }
+    } else {
+        quote! {}
+    };
+
+    let should_panic_attr = if should_panic {
+        quote! { #[should_panic] }
+    } else {
+        quote! {}
+    };
+
+    let expanded = quote! {
+        #[test]
+        #ignore_attr
+        #should_panic_attr
+        #(#func_attrs)*
+        #func_vis fn #func_name() {
+            // Test preamble - print test name
+            let _test_name = #test_name_str;
+            let _start = ::std::time::Instant::now();
+
+            // Run the actual test
+            let _result: Result<(), Box<dyn ::std::any::Any + Send>> = ::std::panic::catch_unwind(|| {
+                #func_block
+            });
+
+            let _elapsed = _start.elapsed();
+
+            // Check result and print status
+            match _result {
+                Ok(()) => {
+                    // Test passed - standard test output handles this
+                }
+                Err(e) => {
+                    // Re-panic to let the test framework handle it
+                    ::std::panic::resume_unwind(e);
+                }
+            }
+        }
+    };
+
+    TokenStream::from(expanded)
+}

@@ -208,6 +208,306 @@ impl_zrtl_typed_primitive!(usize, UInt);
 impl_zrtl_typed_primitive!(f32, Float);
 impl_zrtl_typed_primitive!(f64, Float);
 
+// ============================================================================
+// Test Framework Macros
+// ============================================================================
+
+/// ZRTL-specific assertion macro with enhanced error messages
+///
+/// Works like `assert!()` but provides better output for ZRTL tests.
+///
+/// # Example
+///
+/// ```rust
+/// use zrtl::zrtl_assert;
+///
+/// let x = 5;
+/// zrtl_assert!(x > 0);
+/// zrtl_assert!(x > 0, "x must be positive, got {}", x);
+/// ```
+#[macro_export]
+macro_rules! zrtl_assert {
+    ($cond:expr) => {
+        if !$cond {
+            panic!(
+                "[ZRTL] Assertion failed: `{}`\n  at {}:{}",
+                stringify!($cond),
+                file!(),
+                line!()
+            );
+        }
+    };
+    ($cond:expr, $($arg:tt)+) => {
+        if !$cond {
+            panic!(
+                "[ZRTL] Assertion failed: `{}`\n  at {}:{}\n  {}",
+                stringify!($cond),
+                file!(),
+                line!(),
+                format_args!($($arg)+)
+            );
+        }
+    };
+}
+
+/// ZRTL-specific equality assertion with enhanced error messages
+///
+/// Works like `assert_eq!()` but provides better output for ZRTL tests.
+///
+/// # Example
+///
+/// ```rust
+/// use zrtl::zrtl_assert_eq;
+///
+/// let arr_len = 3;
+/// zrtl_assert_eq!(arr_len, 3);
+/// zrtl_assert_eq!(arr_len, 3, "Array should have 3 elements");
+/// ```
+#[macro_export]
+macro_rules! zrtl_assert_eq {
+    ($left:expr, $right:expr) => {
+        match (&$left, &$right) {
+            (left_val, right_val) => {
+                if !(*left_val == *right_val) {
+                    panic!(
+                        "[ZRTL] Assertion failed: `{} == {}`\n  left:  {:?}\n  right: {:?}\n  at {}:{}",
+                        stringify!($left),
+                        stringify!($right),
+                        left_val,
+                        right_val,
+                        file!(),
+                        line!()
+                    );
+                }
+            }
+        }
+    };
+    ($left:expr, $right:expr, $($arg:tt)+) => {
+        match (&$left, &$right) {
+            (left_val, right_val) => {
+                if !(*left_val == *right_val) {
+                    panic!(
+                        "[ZRTL] Assertion failed: `{} == {}`\n  left:  {:?}\n  right: {:?}\n  at {}:{}\n  {}",
+                        stringify!($left),
+                        stringify!($right),
+                        left_val,
+                        right_val,
+                        file!(),
+                        line!(),
+                        format_args!($($arg)+)
+                    );
+                }
+            }
+        }
+    };
+}
+
+/// ZRTL-specific inequality assertion with enhanced error messages
+///
+/// Works like `assert_ne!()` but provides better output for ZRTL tests.
+///
+/// # Example
+///
+/// ```rust
+/// use zrtl::zrtl_assert_ne;
+///
+/// let x = 5;
+/// let y = 10;
+/// zrtl_assert_ne!(x, y);
+/// zrtl_assert_ne!(x, y, "Values should be different");
+/// ```
+#[macro_export]
+macro_rules! zrtl_assert_ne {
+    ($left:expr, $right:expr) => {
+        match (&$left, &$right) {
+            (left_val, right_val) => {
+                if *left_val == *right_val {
+                    panic!(
+                        "[ZRTL] Assertion failed: `{} != {}`\n  both equal: {:?}\n  at {}:{}",
+                        stringify!($left),
+                        stringify!($right),
+                        left_val,
+                        file!(),
+                        line!()
+                    );
+                }
+            }
+        }
+    };
+    ($left:expr, $right:expr, $($arg:tt)+) => {
+        match (&$left, &$right) {
+            (left_val, right_val) => {
+                if *left_val == *right_val {
+                    panic!(
+                        "[ZRTL] Assertion failed: `{} != {}`\n  both equal: {:?}\n  at {}:{}\n  {}",
+                        stringify!($left),
+                        stringify!($right),
+                        left_val,
+                        file!(),
+                        line!(),
+                        format_args!($($arg)+)
+                    );
+                }
+            }
+        }
+    };
+}
+
+/// ZRTL assertion for Option types - asserts that the value is Some
+///
+/// # Example
+///
+/// ```rust
+/// use zrtl::zrtl_assert_some;
+///
+/// let value: Option<i32> = Some(42);
+/// let result = zrtl_assert_some!(value);
+/// assert_eq!(result, 42);
+/// ```
+#[macro_export]
+macro_rules! zrtl_assert_some {
+    ($opt:expr) => {
+        match $opt {
+            Some(v) => v,
+            None => panic!(
+                "[ZRTL] Assertion failed: expected Some, got None\n  expression: `{}`\n  at {}:{}",
+                stringify!($opt),
+                file!(),
+                line!()
+            ),
+        }
+    };
+    ($opt:expr, $($arg:tt)+) => {
+        match $opt {
+            Some(v) => v,
+            None => panic!(
+                "[ZRTL] Assertion failed: expected Some, got None\n  expression: `{}`\n  at {}:{}\n  {}",
+                stringify!($opt),
+                file!(),
+                line!(),
+                format_args!($($arg)+)
+            ),
+        }
+    };
+}
+
+/// ZRTL assertion for Option types - asserts that the value is None
+///
+/// # Example
+///
+/// ```rust
+/// use zrtl::zrtl_assert_none;
+///
+/// let value: Option<i32> = None;
+/// zrtl_assert_none!(value);
+/// ```
+#[macro_export]
+macro_rules! zrtl_assert_none {
+    ($opt:expr) => {
+        if let Some(v) = &$opt {
+            panic!(
+                "[ZRTL] Assertion failed: expected None, got Some({:?})\n  expression: `{}`\n  at {}:{}",
+                v,
+                stringify!($opt),
+                file!(),
+                line!()
+            );
+        }
+    };
+    ($opt:expr, $($arg:tt)+) => {
+        if let Some(v) = &$opt {
+            panic!(
+                "[ZRTL] Assertion failed: expected None, got Some({:?})\n  expression: `{}`\n  at {}:{}\n  {}",
+                v,
+                stringify!($opt),
+                file!(),
+                line!(),
+                format_args!($($arg)+)
+            );
+        }
+    };
+}
+
+/// ZRTL assertion for Result types - asserts that the value is Ok
+///
+/// # Example
+///
+/// ```rust
+/// use zrtl::zrtl_assert_ok;
+///
+/// let result: Result<i32, &str> = Ok(42);
+/// let value = zrtl_assert_ok!(result);
+/// assert_eq!(value, 42);
+/// ```
+#[macro_export]
+macro_rules! zrtl_assert_ok {
+    ($result:expr) => {
+        match $result {
+            Ok(v) => v,
+            Err(e) => panic!(
+                "[ZRTL] Assertion failed: expected Ok, got Err({:?})\n  expression: `{}`\n  at {}:{}",
+                e,
+                stringify!($result),
+                file!(),
+                line!()
+            ),
+        }
+    };
+    ($result:expr, $($arg:tt)+) => {
+        match $result {
+            Ok(v) => v,
+            Err(e) => panic!(
+                "[ZRTL] Assertion failed: expected Ok, got Err({:?})\n  expression: `{}`\n  at {}:{}\n  {}",
+                e,
+                stringify!($result),
+                file!(),
+                line!(),
+                format_args!($($arg)+)
+            ),
+        }
+    };
+}
+
+/// ZRTL assertion for Result types - asserts that the value is Err
+///
+/// # Example
+///
+/// ```rust
+/// use zrtl::zrtl_assert_err;
+///
+/// let result: Result<i32, &str> = Err("error");
+/// let error = zrtl_assert_err!(result);
+/// assert_eq!(error, "error");
+/// ```
+#[macro_export]
+macro_rules! zrtl_assert_err {
+    ($result:expr) => {
+        match $result {
+            Err(e) => e,
+            Ok(v) => panic!(
+                "[ZRTL] Assertion failed: expected Err, got Ok({:?})\n  expression: `{}`\n  at {}:{}",
+                v,
+                stringify!($result),
+                file!(),
+                line!()
+            ),
+        }
+    };
+    ($result:expr, $($arg:tt)+) => {
+        match $result {
+            Err(e) => e,
+            Ok(v) => panic!(
+                "[ZRTL] Assertion failed: expected Err, got Ok({:?})\n  expression: `{}`\n  at {}:{}\n  {}",
+                v,
+                stringify!($result),
+                file!(),
+                line!(),
+                format_args!($($arg)+)
+            ),
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +533,52 @@ mod tests {
         assert_eq!(info.name, "i32");
         assert_eq!(info.size, 4);
         assert_eq!(info.category, crate::TypeCategory::Int);
+    }
+
+    #[test]
+    fn test_zrtl_assert() {
+        zrtl_assert!(true);
+        zrtl_assert!(1 + 1 == 2);
+        zrtl_assert!(1 < 2, "one should be less than two");
+    }
+
+    #[test]
+    fn test_zrtl_assert_eq() {
+        zrtl_assert_eq!(1, 1);
+        zrtl_assert_eq!("hello", "hello");
+        zrtl_assert_eq!(vec![1, 2, 3], vec![1, 2, 3], "vectors should match");
+    }
+
+    #[test]
+    fn test_zrtl_assert_ne() {
+        zrtl_assert_ne!(1, 2);
+        zrtl_assert_ne!("hello", "world");
+    }
+
+    #[test]
+    fn test_zrtl_assert_some() {
+        let opt: Option<i32> = Some(42);
+        let value = zrtl_assert_some!(opt);
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn test_zrtl_assert_none() {
+        let opt: Option<i32> = None;
+        zrtl_assert_none!(opt);
+    }
+
+    #[test]
+    fn test_zrtl_assert_ok() {
+        let result: Result<i32, &str> = Ok(42);
+        let value = zrtl_assert_ok!(result);
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn test_zrtl_assert_err() {
+        let result: Result<i32, &str> = Err("error");
+        let error = zrtl_assert_err!(result);
+        assert_eq!(error, "error");
     }
 }

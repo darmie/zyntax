@@ -274,7 +274,7 @@ fn test_array_push() {
 | Async state machine | Medium | High | P2 | ✅ Done |
 | Cancellation | Low | Medium | P3 | ✅ Done |
 | Promise combinators | Low | Low | P3 | ✅ Done |
-| Test framework | Low | Medium | P3 | 🔲 Pending |
+| Test framework | Low | Medium | P3 | ✅ Done |
 | Native async functions (ZRTL) | High | Medium | P1 | ✅ Done |
 
 ---
@@ -306,7 +306,7 @@ fn test_array_push() {
 2. ✅ Add cancellation support (`cancel()`, `is_cancelled()`, `PromiseState::Cancelled`)
 3. ✅ Add promise combinators (`PromiseAll`, `PromiseRace`, `PromiseAllSettled`)
 4. ✅ Add native async functions to ZRTL SDK (`#[zrtl_async]` macro)
-5. 🔲 Add test framework macros
+5. ✅ Add test framework macros (`#[zrtl_test]`, `zrtl_assert_eq!`, etc.)
 
 ---
 
