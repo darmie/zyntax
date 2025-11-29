@@ -8,6 +8,10 @@ members = [
     "zrtl_time",
     "zrtl_env",
     "zrtl_math",
+    "zrtl_string",
+    "zrtl_json",
+    "zrtl_regex",
+    "zrtl_process",
 ]
 
 [workspace.dependencies]

@@ -206,6 +206,91 @@ Mathematical functions for numerical computation.
 | `$Math$to_radians` | `(f64) -> f64` | Degrees to radians |
 | `$Math$to_degrees` | `(f64) -> f64` | Radians to degrees |
 
+### zrtl_string - String Manipulation
+
+String manipulation and formatting functions.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$String$length` | `(StringPtr) -> i64` | Get byte length |
+| `$String$char_count` | `(StringPtr) -> i64` | Get character count (Unicode) |
+| `$String$is_empty` | `(StringPtr) -> i32` | Check if empty |
+| `$String$concat` | `(StringPtr, StringPtr) -> StringPtr` | Concatenate strings |
+| `$String$repeat` | `(StringPtr, i64) -> StringPtr` | Repeat n times |
+| `$String$to_upper` | `(StringPtr) -> StringPtr` | Convert to uppercase |
+| `$String$to_lower` | `(StringPtr) -> StringPtr` | Convert to lowercase |
+| `$String$trim` | `(StringPtr) -> StringPtr` | Trim whitespace |
+| `$String$contains` | `(StringPtr, StringPtr) -> i32` | Check if contains |
+| `$String$starts_with` | `(StringPtr, StringPtr) -> i32` | Check prefix |
+| `$String$ends_with` | `(StringPtr, StringPtr) -> i32` | Check suffix |
+| `$String$index_of` | `(StringPtr, StringPtr) -> i64` | Find first index |
+| `$String$replace_all` | `(StringPtr, StringPtr, StringPtr) -> StringPtr` | Replace all |
+| `$String$substring` | `(StringPtr, i64, i64) -> StringPtr` | Extract substring |
+| `$String$split` | `(StringPtr, StringPtr) -> ArrayPtr` | Split by delimiter |
+| `$String$parse_int` | `(StringPtr) -> i64` | Parse as integer |
+| `$String$parse_float` | `(StringPtr) -> f64` | Parse as float |
+| `$String$from_int` | `(i64) -> StringPtr` | Integer to string |
+| `$String$from_float` | `(f64) -> StringPtr` | Float to string |
+
+### zrtl_json - JSON Parsing
+
+JSON parsing and manipulation using opaque handles.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Json$parse` | `(StringPtr) -> u64` | Parse JSON string |
+| `$Json$stringify` | `(u64) -> StringPtr` | Convert to JSON string |
+| `$Json$free` | `(u64) -> void` | Free JSON handle |
+| `$Json$get_type` | `(u64) -> i32` | Get type (0=null,1=bool,2=num,3=str,4=arr,5=obj) |
+| `$Json$get_bool` | `(u64) -> i32` | Get boolean value |
+| `$Json$get_int` | `(u64) -> i64` | Get integer value |
+| `$Json$get_float` | `(u64) -> f64` | Get float value |
+| `$Json$get_string` | `(u64) -> StringPtr` | Get string value |
+| `$Json$get` | `(u64, StringPtr) -> u64` | Get object property |
+| `$Json$set` | `(u64, StringPtr, u64) -> void` | Set object property |
+| `$Json$array_length` | `(u64) -> i64` | Get array length |
+| `$Json$array_get` | `(u64, i64) -> u64` | Get array element |
+| `$Json$object` | `() -> u64` | Create empty object |
+| `$Json$array` | `() -> u64` | Create empty array |
+| `$Json$path_get` | `(u64, StringPtr) -> u64` | Get by dot-path |
+
+### zrtl_regex - Regular Expressions
+
+Regex matching and replacement using compiled patterns.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Regex$compile` | `(StringPtr) -> u64` | Compile pattern |
+| `$Regex$free` | `(u64) -> void` | Free pattern handle |
+| `$Regex$matches` | `(u64, StringPtr) -> i32` | Check if matches |
+| `$Regex$find_match` | `(u64, StringPtr) -> StringPtr` | Find first match |
+| `$Regex$find_all` | `(u64, StringPtr) -> ArrayPtr` | Find all matches |
+| `$Regex$replace_first` | `(u64, StringPtr, StringPtr) -> StringPtr` | Replace first |
+| `$Regex$replace_all_compiled` | `(u64, StringPtr, StringPtr) -> StringPtr` | Replace all |
+| `$Regex$capture` | `(u64, StringPtr, i32) -> StringPtr` | Get capture group |
+| `$Regex$split` | `(u64, StringPtr) -> ArrayPtr` | Split by pattern |
+| `$Regex$is_match` | `(StringPtr, StringPtr) -> i32` | Quick match check |
+| `$Regex$replace_all` | `(StringPtr, StringPtr, StringPtr) -> StringPtr` | Quick replace |
+
+### zrtl_process - Subprocess Execution
+
+Process spawning and management.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Process$run` | `(StringPtr, ArrayPtr) -> i32` | Run command, return exit code |
+| `$Process$run_capture` | `(StringPtr, ArrayPtr) -> StringPtr` | Run and capture stdout |
+| `$Process$shell` | `(StringPtr) -> i32` | Run shell command |
+| `$Process$shell_capture` | `(StringPtr) -> StringPtr` | Shell with capture |
+| `$Process$spawn` | `(StringPtr, ArrayPtr) -> u64` | Spawn process |
+| `$Process$wait` | `(u64) -> i32` | Wait for completion |
+| `$Process$kill` | `(u64) -> i32` | Kill process |
+| `$Process$is_running` | `(u64) -> i32` | Check if running |
+| `$Process$read_stdout` | `(u64) -> StringPtr` | Read stdout |
+| `$Process$write_stdin` | `(u64, StringPtr) -> i32` | Write to stdin |
+| `$Process$current_pid` | `() -> u32` | Get current PID |
+| `$Process$command_exists` | `(StringPtr) -> i32` | Check if command exists |
+
 ## Building Plugins
 
 ### Dynamic Libraries (.zrtl)
@@ -225,6 +310,10 @@ zrtl_thread.zrtl
 zrtl_net.zrtl
 zrtl_env.zrtl
 zrtl_math.zrtl
+zrtl_string.zrtl
+zrtl_json.zrtl
+zrtl_regex.zrtl
+zrtl_process.zrtl
 plugins.json
 ```
 

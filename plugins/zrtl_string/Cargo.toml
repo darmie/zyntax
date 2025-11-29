@@ -1,0 +1,12 @@
+[package]
+name = "zrtl_string"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL String plugin - string manipulation and formatting"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }
