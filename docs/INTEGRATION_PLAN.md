@@ -265,12 +265,12 @@ fn test_array_push() {
 |------|--------|--------|----------|--------|
 | Type tags in zrtl_macros | High | Medium | P0 | ✅ Done (in zrtl crate) |
 | DynamicBox in zrtl_macros | High | Medium | P0 | ✅ Done (in zrtl crate) |
-| TypeRegistry in embed | High | Low | P0 | 🔲 Pending |
+| TypeRegistry in embed | High | Low | P0 | ✅ Done (re-exported) |
 | ZRTL plugin loading | High | Medium | P1 | ✅ Done |
 | Variadic function calls | High | High | P1 | ✅ Done (0-8 args) |
 | GenericBox support | Medium | Medium | P1 | ✅ Done (in zrtl crate) |
 | Iterator traits | Medium | Medium | P2 | ✅ Done |
-| Collection interop | Medium | Low | P2 | 🔲 Pending |
+| Collection interop | Medium | Low | P2 | ✅ Done |
 | Async state machine | Medium | High | P2 | ✅ Done |
 | Cancellation | Low | Medium | P3 | ✅ Done |
 | Promise combinators | Low | Low | P3 | ✅ Done |
@@ -286,7 +286,7 @@ fn test_array_push() {
 1. ✅ Add `TypeCategory`, `TypeFlags`, `TypeTag` to `zrtl` crate
 2. ✅ Add `DynamicBox` struct and accessors to `zrtl` crate
 3. ✅ Add `#[derive(ZrtlType)]` macro to `zrtl_macros`
-4. 🔲 Re-export `TypeRegistry` in `zyntax_embed`
+4. ✅ Re-export `TypeRegistry` in `zyntax_embed`
 
 ### Sprint 2: Runtime Integration ✅ COMPLETE
 
@@ -298,7 +298,7 @@ fn test_array_push() {
 
 1. ✅ Add `ZrtlIterable` and `ZrtlIterator` traits
 2. ✅ Implement for `ZyntaxArray` and `ZyntaxString`
-3. 🔲 Add collection conversion helpers (partial - basic From/Into impls exist)
+3. ✅ Add collection conversion helpers (Extend, FromIterator, From, Into)
 
 ### Sprint 4: Async & Polish ✅ COMPLETE
 

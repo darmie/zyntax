@@ -1095,6 +1095,9 @@ async fn compute_value(x: i32) i32 {
                 PromiseState::Failed(err) => {
                     panic!("Async function failed: {}", err);
                 }
+                PromiseState::Cancelled => {
+                    panic!("Async function was cancelled");
+                }
                 PromiseState::Pending => {
                     if polls > 10 {
                         panic!("Too many polls");

@@ -380,6 +380,25 @@ impl<'a, T: Copy> IntoIterator for &'a mut ZyntaxArray<T> {
 unsafe impl<T: Copy + Send> Send for ZyntaxArray<T> {}
 unsafe impl<T: Copy + Sync> Sync for ZyntaxArray<T> {}
 
+impl<T: Copy> Extend<T> for ZyntaxArray<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        for item in iter {
+            self.push(item);
+        }
+    }
+}
+
+impl<T: Copy> std::iter::FromIterator<T> for ZyntaxArray<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let iter = iter.into_iter();
+        let (lower, upper) = iter.size_hint();
+        let capacity = upper.unwrap_or(lower).max(8);
+        let mut arr = Self::with_capacity(capacity);
+        arr.extend(iter);
+        arr
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -458,5 +477,25 @@ mod tests {
         let mut arr: ZyntaxArray<i32> = [1, 2, 3].into();
         arr[1] = 42;
         assert_eq!(arr.as_slice(), &[1, 42, 3]);
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut arr: ZyntaxArray<i32> = [1, 2].into();
+        arr.extend([3, 4, 5]);
+        assert_eq!(arr.as_slice(), &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_from_iterator() {
+        let arr: ZyntaxArray<i32> = (0..5).collect();
+        assert_eq!(arr.as_slice(), &[0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_collect_after_map() {
+        let arr: ZyntaxArray<i32> = [1, 2, 3].into();
+        let doubled: ZyntaxArray<i32> = arr.as_slice().iter().map(|x| x * 2).collect();
+        assert_eq!(doubled.as_slice(), &[2, 4, 6]);
     }
 }
