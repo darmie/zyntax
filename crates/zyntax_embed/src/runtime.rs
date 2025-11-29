@@ -187,14 +187,19 @@ unsafe fn call_native_with_signature(
 
     // Dispatch based on argument count and return type
     // This generates the actual function call with proper ABI
+    // Supports up to 8 arguments
     let result_i64 = match native_args.len() {
         0 => call_0(ptr, signature.ret),
         1 => call_1(ptr, native_args[0], signature.ret),
         2 => call_2(ptr, native_args[0], native_args[1], signature.ret),
         3 => call_3(ptr, native_args[0], native_args[1], native_args[2], signature.ret),
         4 => call_4(ptr, native_args[0], native_args[1], native_args[2], native_args[3], signature.ret),
+        5 => call_5(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], signature.ret),
+        6 => call_6(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], signature.ret),
+        7 => call_7(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6], signature.ret),
+        8 => call_8(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6], native_args[7], signature.ret),
         n => return Err(RuntimeError::Execution(format!(
-            "Unsupported argument count: {}. Maximum is 4.", n
+            "Unsupported argument count: {}. Maximum is 8.", n
         ))),
     };
 
@@ -382,6 +387,126 @@ unsafe fn call_4(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, ret: Native
     }
 }
 
+unsafe fn call_5(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4);
+            0
+        }
+    }
+}
+
+unsafe fn call_6(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5);
+            0
+        }
+    }
+}
+
+unsafe fn call_7(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6);
+            0
+        }
+    }
+}
+
+unsafe fn call_8(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, a7: i64, ret: NativeType) -> i64 {
+    match ret {
+        NativeType::I32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6, a7) as i64
+        }
+        NativeType::I64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6, a7)
+        }
+        NativeType::F32 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6, a7).to_bits() as i64
+        }
+        NativeType::F64 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6, a7).to_bits() as i64
+        }
+        NativeType::Bool => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6, a7) as i64
+        }
+        NativeType::Void | NativeType::Ptr => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) = std::mem::transmute(ptr);
+            f(a0, a1, a2, a3, a4, a5, a6, a7);
+            0
+        }
+    }
+}
+
 /// Call a function with dynamic values using a signature
 ///
 /// This is the signature-based dispatch for async function calls.
@@ -427,8 +552,16 @@ unsafe fn call_with_signature(ptr: *const u8, args: &[DynamicValue], signature: 
             let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
             f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5])
         }
+        7 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6])
+        }
+        8 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6], native_args[7])
+        }
         _ => {
-            log::error!("Unsupported argument count: {}. Maximum is 6.", native_args.len());
+            log::error!("Unsupported argument count: {}. Maximum is 8.", native_args.len());
             std::ptr::null()
         }
     }
@@ -1895,6 +2028,8 @@ pub enum PromiseState {
     Ready(ZyntaxValue),
     /// The operation failed with an error
     Failed(String),
+    /// The operation was cancelled
+    Cancelled,
 }
 
 /// Global task ID counter for promise wakers
@@ -2017,9 +2152,9 @@ impl ZyntaxPromise {
     pub fn poll(&self) -> PromiseState {
         let mut inner = self.state.lock().unwrap();
 
-        // If already complete, return the state
+        // If already complete or cancelled, return the state
         match &inner.state {
-            PromiseState::Ready(_) | PromiseState::Failed(_) => {
+            PromiseState::Ready(_) | PromiseState::Failed(_) | PromiseState::Cancelled => {
                 return inner.state.clone();
             }
             PromiseState::Pending => {}
@@ -2167,6 +2302,9 @@ impl ZyntaxPromise {
                 PromiseState::Failed(err) => {
                     return Err(RuntimeError::Promise(err));
                 }
+                PromiseState::Cancelled => {
+                    return Err(RuntimeError::Promise("Promise was cancelled".to_string()));
+                }
             }
         }
     }
@@ -2184,6 +2322,9 @@ impl ZyntaxPromise {
                 PromiseState::Failed(err) => {
                     return Err(RuntimeError::Promise(err));
                 }
+                PromiseState::Cancelled => {
+                    return Err(RuntimeError::Promise("Promise was cancelled".to_string()));
+                }
             }
         }
     }
@@ -2198,6 +2339,45 @@ impl ZyntaxPromise {
     pub fn is_pending(&self) -> bool {
         let inner = self.state.lock().unwrap();
         matches!(inner.state, PromiseState::Pending)
+    }
+
+    /// Check if the promise was cancelled
+    pub fn is_cancelled(&self) -> bool {
+        let inner = self.state.lock().unwrap();
+        matches!(inner.state, PromiseState::Cancelled)
+    }
+
+    /// Cancel the promise
+    ///
+    /// Returns `true` if the promise was successfully cancelled (was pending),
+    /// `false` if the promise was already complete or cancelled.
+    ///
+    /// Once cancelled, any subsequent polls will return `PromiseState::Cancelled`.
+    /// Any code waiting on this promise will receive a cancellation error.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let promise = runtime.call_async("slow_task", &[])?;
+    ///
+    /// // Cancel if taking too long
+    /// std::thread::sleep(std::time::Duration::from_secs(1));
+    /// if promise.is_pending() {
+    ///     promise.cancel();
+    /// }
+    /// ```
+    pub fn cancel(&self) -> bool {
+        let mut inner = self.state.lock().unwrap();
+        if matches!(inner.state, PromiseState::Pending) {
+            inner.state = PromiseState::Cancelled;
+            // Wake any waiting futures
+            if let Some(waker) = inner.waker.take() {
+                waker.wake();
+            }
+            true
+        } else {
+            false
+        }
     }
 
     /// Get the current state without polling
@@ -2225,6 +2405,9 @@ impl ZyntaxPromise {
                 }
                 PromiseState::Failed(err) => {
                     return Err(RuntimeError::Promise(err));
+                }
+                PromiseState::Cancelled => {
+                    return Err(RuntimeError::Promise("Promise was cancelled".to_string()));
                 }
             }
         }
@@ -2274,6 +2457,10 @@ impl ZyntaxPromise {
                         target.lock().unwrap().state = PromiseState::Failed(err);
                         break;
                     }
+                    PromiseState::Cancelled => {
+                        target.lock().unwrap().state = PromiseState::Cancelled;
+                        break;
+                    }
                     PromiseState::Pending => {
                         std::thread::yield_now();
                     }
@@ -2318,6 +2505,12 @@ impl ZyntaxPromise {
                     }
                     PromiseState::Failed(err) => {
                         let result = f(err);
+                        target.lock().unwrap().state = PromiseState::Ready(result);
+                        break;
+                    }
+                    PromiseState::Cancelled => {
+                        // For catch, treat cancellation as an error to recover from
+                        let result = f("Promise was cancelled".to_string());
                         target.lock().unwrap().state = PromiseState::Ready(result);
                         break;
                     }
@@ -2420,6 +2613,10 @@ impl PromiseAll {
                 PromiseState::Failed(err) => {
                     // Fast-fail on first error
                     return PromiseAllState::Failed(err);
+                }
+                PromiseState::Cancelled => {
+                    // Fast-fail on cancellation
+                    return PromiseAllState::Failed("Promise was cancelled".to_string());
                 }
             }
         }
@@ -2564,6 +2761,9 @@ impl PromiseRace {
                 PromiseState::Failed(err) => {
                     return PromiseRaceState::Failed(index, err);
                 }
+                PromiseState::Cancelled => {
+                    return PromiseRaceState::Failed(index, "Promise was cancelled".to_string());
+                }
                 PromiseState::Pending => {
                     // Continue checking other promises
                 }
@@ -2706,6 +2906,9 @@ impl PromiseAllSettled {
                 PromiseState::Failed(err) => {
                     results.push(SettledResult::Rejected(err));
                 }
+                PromiseState::Cancelled => {
+                    results.push(SettledResult::Rejected("Promise was cancelled".to_string()));
+                }
             }
         }
 
@@ -2847,6 +3050,7 @@ impl std::future::Future for ZyntaxPromise {
         match ZyntaxPromise::poll(&self) {
             PromiseState::Ready(value) => std::task::Poll::Ready(Ok(value)),
             PromiseState::Failed(err) => std::task::Poll::Ready(Err(RuntimeError::Promise(err))),
+            PromiseState::Cancelled => std::task::Poll::Ready(Err(RuntimeError::Promise("Promise was cancelled".to_string()))),
             PromiseState::Pending => std::task::Poll::Pending,
         }
     }

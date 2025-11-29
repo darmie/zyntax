@@ -60,6 +60,7 @@ mod array;
 mod value;
 mod runtime;
 mod grammar;
+pub mod iterator;
 
 pub use convert::{FromZyntax, IntoZyntax, TryFromZyntax, TryIntoZyntax};
 pub use error::{ConversionError, ZyntaxError};
@@ -83,6 +84,13 @@ pub use runtime::{
     PromiseAllSettled, SettledResult,
 };
 pub use grammar::{LanguageGrammar, GrammarError, GrammarResult};
+pub use iterator::{
+    ZrtlIterable, ZrtlIterator,
+    ZyntaxArrayIterator, ZyntaxStringCharsIterator, ZyntaxStringBytesIterator,
+    ZyntaxValueIterator, ZrtlRangeIterator,
+    StdIteratorAdapter, ZrtlIteratorAdapter,
+    IntoZrtlIterator, ZrtlIteratorExt,
+};
 
 // Re-export zyn_peg types for custom AST builders and advanced grammar use
 pub use zyn_peg::runtime::{
