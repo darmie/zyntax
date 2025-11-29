@@ -2341,6 +2341,427 @@ impl Clone for ZyntaxPromise {
 }
 
 // ============================================================================
+// Promise Combinators (Promise.all, Promise.race, etc.)
+// ============================================================================
+
+/// Result of awaiting multiple promises in parallel
+///
+/// Similar to JavaScript's `Promise.all()`, this collects the results of
+/// multiple async operations that run concurrently.
+#[derive(Debug, Clone)]
+pub enum PromiseAllState {
+    /// All promises are still pending or some are in progress
+    Pending,
+    /// All promises completed successfully with their values (in order)
+    AllReady(Vec<ZyntaxValue>),
+    /// At least one promise failed (first failure encountered)
+    Failed(String),
+}
+
+/// Await multiple promises in parallel, similar to JavaScript's `Promise.all()`
+///
+/// This polls all promises concurrently and resolves when ALL promises complete.
+/// If any promise fails, the entire operation fails with the first error.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use zyntax_embed::{ZyntaxRuntime, ZyntaxValue, PromiseAll};
+///
+/// // Create multiple async calls
+/// let promises = vec![
+///     runtime.call_async("compute", &[ZyntaxValue::Int(1)])?,
+///     runtime.call_async("compute", &[ZyntaxValue::Int(2)])?,
+///     runtime.call_async("compute", &[ZyntaxValue::Int(3)])?,
+/// ];
+///
+/// // Wait for all to complete
+/// let mut all = PromiseAll::new(promises);
+/// let results = all.await_all()?;
+/// // results = [result1, result2, result3]
+/// ```
+pub struct PromiseAll {
+    promises: Vec<ZyntaxPromise>,
+    poll_count: usize,
+}
+
+impl PromiseAll {
+    /// Create a new PromiseAll from a vector of promises
+    pub fn new(promises: Vec<ZyntaxPromise>) -> Self {
+        Self {
+            promises,
+            poll_count: 0,
+        }
+    }
+
+    /// Create a PromiseAll from an iterator of promises
+    pub fn from_iter<I: IntoIterator<Item = ZyntaxPromise>>(iter: I) -> Self {
+        Self::new(iter.into_iter().collect())
+    }
+
+    /// Poll all promises once, advancing each state machine
+    ///
+    /// Returns the combined state of all promises.
+    pub fn poll(&mut self) -> PromiseAllState {
+        self.poll_count += 1;
+
+        let mut all_ready = true;
+        let mut results = Vec::with_capacity(self.promises.len());
+
+        for promise in &self.promises {
+            match promise.poll() {
+                PromiseState::Pending => {
+                    all_ready = false;
+                    results.push(ZyntaxValue::Void); // Placeholder
+                }
+                PromiseState::Ready(value) => {
+                    results.push(value);
+                }
+                PromiseState::Failed(err) => {
+                    // Fast-fail on first error
+                    return PromiseAllState::Failed(err);
+                }
+            }
+        }
+
+        if all_ready {
+            PromiseAllState::AllReady(results)
+        } else {
+            PromiseAllState::Pending
+        }
+    }
+
+    /// Poll with a maximum number of iterations per promise
+    pub fn poll_with_limit(&mut self, max_polls: usize) -> PromiseAllState {
+        if self.poll_count >= max_polls {
+            return PromiseAllState::Failed(format!(
+                "PromiseAll timed out after {} polls", max_polls
+            ));
+        }
+        self.poll()
+    }
+
+    /// Block until all promises complete
+    ///
+    /// Returns all results in order, or the first error encountered.
+    pub fn await_all(&mut self) -> RuntimeResult<Vec<ZyntaxValue>> {
+        loop {
+            match self.poll() {
+                PromiseAllState::Pending => {
+                    std::thread::yield_now();
+                }
+                PromiseAllState::AllReady(values) => {
+                    return Ok(values);
+                }
+                PromiseAllState::Failed(err) => {
+                    return Err(RuntimeError::Promise(err));
+                }
+            }
+        }
+    }
+
+    /// Block until all promises complete with a timeout
+    pub fn await_all_with_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> RuntimeResult<Vec<ZyntaxValue>> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                return Err(RuntimeError::Promise(format!(
+                    "PromiseAll timed out after {:?}", timeout
+                )));
+            }
+            match self.poll() {
+                PromiseAllState::Pending => {
+                    std::thread::yield_now();
+                }
+                PromiseAllState::AllReady(values) => {
+                    return Ok(values);
+                }
+                PromiseAllState::Failed(err) => {
+                    return Err(RuntimeError::Promise(err));
+                }
+            }
+        }
+    }
+
+    /// Get the number of promises in this group
+    pub fn len(&self) -> usize {
+        self.promises.len()
+    }
+
+    /// Check if this group is empty
+    pub fn is_empty(&self) -> bool {
+        self.promises.is_empty()
+    }
+
+    /// Get the total poll count
+    pub fn poll_count(&self) -> usize {
+        self.poll_count
+    }
+
+    /// Check if all promises are complete (without polling)
+    pub fn is_complete(&self) -> bool {
+        self.promises.iter().all(|p| p.is_complete())
+    }
+}
+
+/// Await the first promise to complete, similar to JavaScript's `Promise.race()`
+///
+/// This polls all promises concurrently and resolves as soon as ANY promise completes
+/// (either successfully or with an error).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use zyntax_embed::{ZyntaxRuntime, ZyntaxValue, PromiseRace};
+///
+/// let promises = vec![
+///     runtime.call_async("slow_task", &[])?,
+///     runtime.call_async("fast_task", &[])?,
+/// ];
+///
+/// let mut race = PromiseRace::new(promises);
+/// let (index, result) = race.await_first()?;
+/// // index = index of the first promise to complete
+/// // result = the value from that promise
+/// ```
+pub struct PromiseRace {
+    promises: Vec<ZyntaxPromise>,
+    poll_count: usize,
+}
+
+/// Result of a promise race
+#[derive(Debug, Clone)]
+pub enum PromiseRaceState {
+    /// No promise has completed yet
+    Pending,
+    /// A promise completed successfully (index, value)
+    Winner(usize, ZyntaxValue),
+    /// A promise failed (index, error)
+    Failed(usize, String),
+}
+
+impl PromiseRace {
+    /// Create a new PromiseRace from a vector of promises
+    pub fn new(promises: Vec<ZyntaxPromise>) -> Self {
+        Self {
+            promises,
+            poll_count: 0,
+        }
+    }
+
+    /// Poll all promises once, checking for the first completion
+    pub fn poll(&mut self) -> PromiseRaceState {
+        self.poll_count += 1;
+
+        for (index, promise) in self.promises.iter().enumerate() {
+            match promise.poll() {
+                PromiseState::Ready(value) => {
+                    return PromiseRaceState::Winner(index, value);
+                }
+                PromiseState::Failed(err) => {
+                    return PromiseRaceState::Failed(index, err);
+                }
+                PromiseState::Pending => {
+                    // Continue checking other promises
+                }
+            }
+        }
+
+        PromiseRaceState::Pending
+    }
+
+    /// Block until any promise completes
+    ///
+    /// Returns the index and value of the first promise to complete.
+    pub fn await_first(&mut self) -> RuntimeResult<(usize, ZyntaxValue)> {
+        loop {
+            match self.poll() {
+                PromiseRaceState::Pending => {
+                    std::thread::yield_now();
+                }
+                PromiseRaceState::Winner(index, value) => {
+                    return Ok((index, value));
+                }
+                PromiseRaceState::Failed(index, err) => {
+                    return Err(RuntimeError::Promise(format!(
+                        "Promise {} failed: {}", index, err
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Block until any promise completes with a timeout
+    pub fn await_first_with_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> RuntimeResult<(usize, ZyntaxValue)> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                return Err(RuntimeError::Promise(format!(
+                    "PromiseRace timed out after {:?}", timeout
+                )));
+            }
+            match self.poll() {
+                PromiseRaceState::Pending => {
+                    std::thread::yield_now();
+                }
+                PromiseRaceState::Winner(index, value) => {
+                    return Ok((index, value));
+                }
+                PromiseRaceState::Failed(index, err) => {
+                    return Err(RuntimeError::Promise(format!(
+                        "Promise {} failed: {}", index, err
+                    )));
+                }
+            }
+        }
+    }
+
+    /// Get the number of promises in the race
+    pub fn len(&self) -> usize {
+        self.promises.len()
+    }
+
+    /// Check if the race is empty
+    pub fn is_empty(&self) -> bool {
+        self.promises.is_empty()
+    }
+
+    /// Get the total poll count
+    pub fn poll_count(&self) -> usize {
+        self.poll_count
+    }
+}
+
+/// Await all promises, collecting both successes and failures
+///
+/// Similar to JavaScript's `Promise.allSettled()`, this waits for ALL promises
+/// to complete regardless of success or failure.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use zyntax_embed::{ZyntaxRuntime, ZyntaxValue, PromiseAllSettled, SettledResult};
+///
+/// let promises = vec![
+///     runtime.call_async("might_fail", &[ZyntaxValue::Int(1)])?,
+///     runtime.call_async("might_fail", &[ZyntaxValue::Int(2)])?,
+/// ];
+///
+/// let mut settled = PromiseAllSettled::new(promises);
+/// let results = settled.await_all();
+/// for result in results {
+///     match result {
+///         SettledResult::Fulfilled(value) => println!("Success: {:?}", value),
+///         SettledResult::Rejected(err) => println!("Failed: {}", err),
+///     }
+/// }
+/// ```
+pub struct PromiseAllSettled {
+    promises: Vec<ZyntaxPromise>,
+    poll_count: usize,
+}
+
+/// Result for a single promise in allSettled
+#[derive(Debug, Clone)]
+pub enum SettledResult {
+    /// Promise completed successfully
+    Fulfilled(ZyntaxValue),
+    /// Promise failed with an error
+    Rejected(String),
+}
+
+impl PromiseAllSettled {
+    /// Create a new PromiseAllSettled from a vector of promises
+    pub fn new(promises: Vec<ZyntaxPromise>) -> Self {
+        Self {
+            promises,
+            poll_count: 0,
+        }
+    }
+
+    /// Poll all promises once
+    ///
+    /// Returns None if any promise is still pending, or Some with all results.
+    pub fn poll(&mut self) -> Option<Vec<SettledResult>> {
+        self.poll_count += 1;
+
+        let mut all_settled = true;
+        let mut results = Vec::with_capacity(self.promises.len());
+
+        for promise in &self.promises {
+            match promise.poll() {
+                PromiseState::Pending => {
+                    all_settled = false;
+                    results.push(SettledResult::Rejected("pending".to_string())); // Placeholder
+                }
+                PromiseState::Ready(value) => {
+                    results.push(SettledResult::Fulfilled(value));
+                }
+                PromiseState::Failed(err) => {
+                    results.push(SettledResult::Rejected(err));
+                }
+            }
+        }
+
+        if all_settled {
+            Some(results)
+        } else {
+            None
+        }
+    }
+
+    /// Block until all promises settle (complete or fail)
+    pub fn await_all(&mut self) -> Vec<SettledResult> {
+        loop {
+            if let Some(results) = self.poll() {
+                return results;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    /// Block until all promises settle with a timeout
+    pub fn await_all_with_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> RuntimeResult<Vec<SettledResult>> {
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed() > timeout {
+                return Err(RuntimeError::Promise(format!(
+                    "PromiseAllSettled timed out after {:?}", timeout
+                )));
+            }
+            if let Some(results) = self.poll() {
+                return Ok(results);
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    /// Get the number of promises
+    pub fn len(&self) -> usize {
+        self.promises.len()
+    }
+
+    /// Check if empty
+    pub fn is_empty(&self) -> bool {
+        self.promises.is_empty()
+    }
+
+    /// Get the total poll count
+    pub fn poll_count(&self) -> usize {
+        self.poll_count
+    }
+}
+
+// ============================================================================
 // Variadic Function Calling Support
 // ============================================================================
 

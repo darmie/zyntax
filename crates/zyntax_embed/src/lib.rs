@@ -77,6 +77,10 @@ pub use runtime::{
     NativeType, NativeSignature,
     // Async ABI types
     AsyncPollResult,
+    // Promise combinators (Promise.all, Promise.race, etc.)
+    PromiseAll, PromiseAllState,
+    PromiseRace, PromiseRaceState,
+    PromiseAllSettled, SettledResult,
 };
 pub use grammar::{LanguageGrammar, GrammarError, GrammarResult};
 

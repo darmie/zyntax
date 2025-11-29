@@ -478,6 +478,160 @@ while promise.is_pending() {
 assert_eq!(promise.state(), PromiseState::Ready(ZyntaxValue::Int(30)));
 ```
 
+## Promise Combinators (Parallel Execution)
+
+Zyntax provides JavaScript-style Promise combinators for running multiple async operations in parallel.
+
+### PromiseAll - Wait for All
+
+`PromiseAll` waits for all promises to complete, similar to JavaScript's `Promise.all()`:
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, ZyntaxValue, PromiseAll};
+
+// Define multiple async functions
+runtime.load_module("zig", r#"
+async fn compute(x: i32) i32 {
+    return x * 2;
+}
+
+async fn sum_range(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+"#)?;
+
+// Create multiple promises
+let promises = vec![
+    runtime.call_async("compute", &[ZyntaxValue::Int(5)])?,     // 10
+    runtime.call_async("compute", &[ZyntaxValue::Int(10)])?,    // 20
+    runtime.call_async("sum_range", &[ZyntaxValue::Int(100)])?, // 5050
+];
+
+// Wait for all to complete
+let mut all = PromiseAll::new(promises);
+let results = all.await_all()?;
+
+// results = [Int(10), Int(20), Int(5050)]
+println!("All completed after {} polls", all.poll_count());
+```
+
+If any promise fails, `PromiseAll` returns the first error immediately (fast-fail).
+
+### PromiseRace - First to Complete
+
+`PromiseRace` resolves as soon as any promise completes, similar to `Promise.race()`:
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, ZyntaxValue, PromiseRace};
+
+runtime.load_module("zig", r#"
+async fn quick(x: i32) i32 {
+    return x * 2;
+}
+
+async fn slow(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+"#)?;
+
+let promises = vec![
+    runtime.call_async("slow", &[ZyntaxValue::Int(1000)])?,  // Takes many polls
+    runtime.call_async("quick", &[ZyntaxValue::Int(21)])?,   // Completes quickly
+];
+
+let mut race = PromiseRace::new(promises);
+let (winner_index, value) = race.await_first()?;
+
+// winner_index = index of first promise to complete
+// value = result from that promise
+println!("Promise {} won with {:?}", winner_index, value);
+```
+
+### PromiseAllSettled - Collect All Results
+
+`PromiseAllSettled` waits for all promises regardless of success or failure:
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, ZyntaxValue, PromiseAllSettled, SettledResult};
+
+let promises = vec![
+    runtime.call_async("compute", &[ZyntaxValue::Int(1)])?,
+    runtime.call_async("compute", &[ZyntaxValue::Int(2)])?,
+    runtime.call_async("compute", &[ZyntaxValue::Int(3)])?,
+];
+
+let mut settled = PromiseAllSettled::new(promises);
+let results = settled.await_all();
+
+for (i, result) in results.iter().enumerate() {
+    match result {
+        SettledResult::Fulfilled(value) => println!("Promise {} succeeded: {:?}", i, value),
+        SettledResult::Rejected(error) => println!("Promise {} failed: {}", i, error),
+    }
+}
+```
+
+### Timeout Support
+
+All combinators support timeout-based waiting:
+
+```rust
+use std::time::Duration;
+
+// PromiseAll with timeout
+let mut all = PromiseAll::new(promises);
+match all.await_all_with_timeout(Duration::from_secs(5)) {
+    Ok(results) => println!("All completed: {:?}", results),
+    Err(e) => println!("Timeout or error: {}", e),
+}
+
+// PromiseRace with timeout
+let mut race = PromiseRace::new(promises);
+match race.await_first_with_timeout(Duration::from_secs(1)) {
+    Ok((index, value)) => println!("Winner: {} = {:?}", index, value),
+    Err(e) => println!("Timeout or error: {}", e),
+}
+```
+
+### Manual Polling for Combinators
+
+For non-blocking execution, poll the combinator manually:
+
+```rust
+use zyntax_embed::{PromiseAll, PromiseAllState};
+
+let mut all = PromiseAll::new(promises);
+
+loop {
+    match all.poll() {
+        PromiseAllState::Pending => {
+            // Do other work while waiting
+            process_other_events();
+        }
+        PromiseAllState::AllReady(values) => {
+            println!("All {} promises completed!", values.len());
+            break;
+        }
+        PromiseAllState::Failed(error) => {
+            println!("A promise failed: {}", error);
+            break;
+        }
+    }
+}
+```
+
 ## Async Computation Pipeline (Legacy Example)
 
 ```rust

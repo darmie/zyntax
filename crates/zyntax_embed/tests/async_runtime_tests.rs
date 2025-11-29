@@ -1184,7 +1184,7 @@ fn add(a: i32, b: i32) i32 {
 
         // Catch panics from Cranelift compilation issues
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1240,7 +1240,7 @@ async fn get_value() i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1294,7 +1294,7 @@ async fn compute(x: i32) i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1375,7 +1375,7 @@ async fn sum_to_ten() i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1422,7 +1422,7 @@ async fn sum_range(n: i32) i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1503,7 +1503,7 @@ async fn sum_doubled(n: i32) i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1585,7 +1585,7 @@ async fn step3(x: i32) i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1665,7 +1665,7 @@ async fn count_up(n: i32) i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1745,7 +1745,7 @@ async fn sum_with_multiplier(start: i32, end: i32, multiplier: i32) i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1837,7 +1837,7 @@ async fn add_to_sum(n: i32) i32 {
 
         // Catch panics from Cranelift
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            runtime.load_module("async_test", source)
+            runtime.load_module("zig", source)
         }));
 
         match result {
@@ -1950,6 +1950,460 @@ async fn add_to_sum(n: i32) i32 {
             Err(_panic) => {
                 eprintln!("Async compilation panicked - this is a backend issue, not grammar");
                 panic!("Async compilation should not panic");
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Promise Combinator Tests (Promise.all, Promise.race, etc.)
+// ============================================================================
+
+mod promise_combinator_tests {
+    use super::*;
+    use zyntax_embed::{
+        PromiseAll, PromiseAllState, PromiseRace, PromiseRaceState,
+        PromiseAllSettled, SettledResult,
+    };
+
+    fn setup_async_runtime() -> Option<ZyntaxRuntime> {
+        // Try multiple paths for the grammar file
+        let grammar_paths = [
+            "crates/zyn_peg/grammars/zig.zyn",
+            "../../crates/zyn_peg/grammars/zig.zyn",
+            "../zyn_peg/grammars/zig.zyn",
+        ];
+
+        let grammar_path = grammar_paths.iter()
+            .map(std::path::Path::new)
+            .find(|p| p.exists());
+
+        let grammar_path = match grammar_path {
+            Some(p) => p,
+            None => {
+                eprintln!("Grammar not found at any of: {:?}, skipping test", grammar_paths);
+                return None;
+            }
+        };
+
+        let grammar = match LanguageGrammar::compile_zyn_file(grammar_path) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("Failed to compile grammar: {}", e);
+                return None;
+            }
+        };
+
+        let mut runtime = match ZyntaxRuntime::new() {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("Failed to create runtime: {}", e);
+                return None;
+            }
+        };
+
+        runtime.register_grammar("zig", grammar);
+
+        Some(runtime)
+    }
+
+    #[test]
+    fn test_promise_all_multiple_async_functions() {
+        // Test PromiseAll with multiple independent async functions
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn compute(x: i32) i32 {
+    return x * 2;
+}
+"#;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("zig", source)
+        }));
+
+        match result {
+            Ok(Ok(_functions)) => {
+                // Create multiple promises for the same function with different args
+                let promises: Vec<ZyntaxPromise> = (1..=5)
+                    .map(|i| runtime.call_async("compute", &[ZyntaxValue::Int(i)]).unwrap())
+                    .collect();
+
+                println!("Created {} promises", promises.len());
+
+                // Use PromiseAll to await all
+                let mut all = PromiseAll::new(promises);
+                let results = all.await_all().expect("PromiseAll should succeed");
+
+                println!("PromiseAll completed with {} results after {} polls",
+                    results.len(), all.poll_count());
+
+                // Verify results: compute(i) = i * 2
+                assert_eq!(results.len(), 5);
+                for (i, result) in results.iter().enumerate() {
+                    let expected = ((i + 1) * 2) as i64;
+                    match result {
+                        ZyntaxValue::Int(v) => {
+                            assert_eq!(*v, expected, "compute({}) should be {}", i + 1, expected);
+                        }
+                        other => panic!("Expected Int, got {:?}", other),
+                    }
+                }
+
+                println!("SUCCESS: PromiseAll with 5 async computations");
+            }
+            Ok(Err(e)) => {
+                panic!("Module load failed: {}", e);
+            }
+            Err(_panic) => {
+                panic!("Async compilation panicked");
+            }
+        }
+    }
+
+    #[test]
+    fn test_promise_all_different_functions() {
+        // Test PromiseAll with different async functions
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn add_ten(x: i32) i32 {
+    return x + 10;
+}
+
+async fn multiply_two(x: i32) i32 {
+    return x * 2;
+}
+
+async fn sum_range(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+"#;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("zig", source)
+        }));
+
+        match result {
+            Ok(Ok(_functions)) => {
+                // Create promises for different functions
+                let promises = vec![
+                    runtime.call_async("add_ten", &[ZyntaxValue::Int(5)]).unwrap(),      // 15
+                    runtime.call_async("multiply_two", &[ZyntaxValue::Int(7)]).unwrap(), // 14
+                    runtime.call_async("sum_range", &[ZyntaxValue::Int(10)]).unwrap(),   // 55
+                ];
+
+                let mut all = PromiseAll::new(promises);
+                let results = all.await_all().expect("PromiseAll should succeed");
+
+                println!("Results: {:?}", results);
+
+                // Verify each result
+                assert_eq!(results.len(), 3);
+                assert_eq!(results[0], ZyntaxValue::Int(15)); // add_ten(5) = 15
+                assert_eq!(results[1], ZyntaxValue::Int(14)); // multiply_two(7) = 14
+                assert_eq!(results[2], ZyntaxValue::Int(55)); // sum_range(10) = 55
+
+                println!("SUCCESS: PromiseAll with different async functions");
+            }
+            Ok(Err(e)) => {
+                panic!("Module load failed: {}", e);
+            }
+            Err(_panic) => {
+                panic!("Async compilation panicked");
+            }
+        }
+    }
+
+    #[test]
+    fn test_promise_all_with_long_running_functions() {
+        // Test PromiseAll with functions that take many polls
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn sum_range(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+"#;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("zig", source)
+        }));
+
+        match result {
+            Ok(Ok(_functions)) => {
+                // Create promises with different iteration counts
+                let promises = vec![
+                    runtime.call_async("sum_range", &[ZyntaxValue::Int(10)]).unwrap(),  // 55
+                    runtime.call_async("sum_range", &[ZyntaxValue::Int(50)]).unwrap(),  // 1275
+                    runtime.call_async("sum_range", &[ZyntaxValue::Int(100)]).unwrap(), // 5050
+                ];
+
+                let mut all = PromiseAll::new(promises);
+                let results = all.await_all().expect("PromiseAll should succeed");
+
+                println!("Long-running results after {} polls: {:?}", all.poll_count(), results);
+
+                assert_eq!(results[0], ZyntaxValue::Int(55));
+                assert_eq!(results[1], ZyntaxValue::Int(1275));
+                assert_eq!(results[2], ZyntaxValue::Int(5050));
+
+                println!("SUCCESS: PromiseAll with long-running functions (poll_count={})", all.poll_count());
+            }
+            Ok(Err(e)) => {
+                panic!("Module load failed: {}", e);
+            }
+            Err(_panic) => {
+                panic!("Async compilation panicked");
+            }
+        }
+    }
+
+    #[test]
+    fn test_promise_race_first_wins() {
+        // Test PromiseRace - first function to complete wins
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+// Simple function - completes quickly
+async fn quick(x: i32) i32 {
+    return x * 2;
+}
+
+// Long-running function - takes many polls
+async fn slow(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+"#;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("zig", source)
+        }));
+
+        match result {
+            Ok(Ok(_functions)) => {
+                // Create promises - quick should win
+                let promises = vec![
+                    runtime.call_async("slow", &[ZyntaxValue::Int(100)]).unwrap(), // Takes many polls
+                    runtime.call_async("quick", &[ZyntaxValue::Int(21)]).unwrap(), // Completes quickly
+                ];
+
+                let mut race = PromiseRace::new(promises);
+                let (winner_index, value) = race.await_first().expect("PromiseRace should succeed");
+
+                println!("Race winner: index={}, value={:?} (after {} polls)",
+                    winner_index, value, race.poll_count());
+
+                // Either could win depending on polling order, but both are valid
+                match winner_index {
+                    0 => {
+                        // slow won
+                        assert_eq!(value, ZyntaxValue::Int(5050));
+                        println!("SUCCESS: PromiseRace - slow(100) won");
+                    }
+                    1 => {
+                        // quick won (expected)
+                        assert_eq!(value, ZyntaxValue::Int(42));
+                        println!("SUCCESS: PromiseRace - quick(21) won");
+                    }
+                    _ => panic!("Invalid winner index"),
+                }
+            }
+            Ok(Err(e)) => {
+                panic!("Module load failed: {}", e);
+            }
+            Err(_panic) => {
+                panic!("Async compilation panicked");
+            }
+        }
+    }
+
+    #[test]
+    fn test_promise_all_settled() {
+        // Test PromiseAllSettled - collects all results even if some fail
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn compute(x: i32) i32 {
+    return x * 3;
+}
+"#;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("zig", source)
+        }));
+
+        match result {
+            Ok(Ok(_functions)) => {
+                // All these should succeed
+                let promises = vec![
+                    runtime.call_async("compute", &[ZyntaxValue::Int(1)]).unwrap(),
+                    runtime.call_async("compute", &[ZyntaxValue::Int(2)]).unwrap(),
+                    runtime.call_async("compute", &[ZyntaxValue::Int(3)]).unwrap(),
+                ];
+
+                let mut settled = PromiseAllSettled::new(promises);
+                let results = settled.await_all();
+
+                println!("AllSettled results: {:?}", results);
+
+                assert_eq!(results.len(), 3);
+                for (i, result) in results.iter().enumerate() {
+                    match result {
+                        SettledResult::Fulfilled(ZyntaxValue::Int(v)) => {
+                            let expected = ((i + 1) * 3) as i64;
+                            assert_eq!(*v, expected);
+                        }
+                        other => panic!("Expected Fulfilled(Int), got {:?}", other),
+                    }
+                }
+
+                println!("SUCCESS: PromiseAllSettled with all successful");
+            }
+            Ok(Err(e)) => {
+                panic!("Module load failed: {}", e);
+            }
+            Err(_panic) => {
+                panic!("Async compilation panicked");
+            }
+        }
+    }
+
+    #[test]
+    fn test_promise_all_with_nested_await() {
+        // Test PromiseAll with functions that themselves await other functions
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn inner(x: i32) i32 {
+    return x + 10;
+}
+
+async fn outer(x: i32) i32 {
+    const result = await inner(x);
+    return result * 2;
+}
+"#;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("zig", source)
+        }));
+
+        match result {
+            Ok(Ok(_functions)) => {
+                // Create multiple outer promises - each awaits inner internally
+                let promises = vec![
+                    runtime.call_async("outer", &[ZyntaxValue::Int(5)]).unwrap(),  // (5+10)*2 = 30
+                    runtime.call_async("outer", &[ZyntaxValue::Int(10)]).unwrap(), // (10+10)*2 = 40
+                    runtime.call_async("outer", &[ZyntaxValue::Int(15)]).unwrap(), // (15+10)*2 = 50
+                ];
+
+                let mut all = PromiseAll::new(promises);
+                let results = all.await_all().expect("PromiseAll should succeed");
+
+                println!("Nested await results: {:?} (polls={})", results, all.poll_count());
+
+                assert_eq!(results[0], ZyntaxValue::Int(30));
+                assert_eq!(results[1], ZyntaxValue::Int(40));
+                assert_eq!(results[2], ZyntaxValue::Int(50));
+
+                println!("SUCCESS: PromiseAll with nested await functions");
+            }
+            Ok(Err(e)) => {
+                panic!("Module load failed: {}", e);
+            }
+            Err(_panic) => {
+                panic!("Async compilation panicked");
+            }
+        }
+    }
+
+    #[test]
+    fn test_promise_all_empty() {
+        // Test PromiseAll with no promises - should complete immediately
+        let promises: Vec<ZyntaxPromise> = vec![];
+        let mut all = PromiseAll::new(promises);
+
+        let results = all.await_all().expect("Empty PromiseAll should succeed");
+        assert!(results.is_empty());
+        assert_eq!(all.poll_count(), 1);
+
+        println!("SUCCESS: Empty PromiseAll completes immediately");
+    }
+
+    #[test]
+    fn test_promise_all_single() {
+        // Test PromiseAll with a single promise
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn compute(x: i32) i32 {
+    return x * 5;
+}
+"#;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("zig", source)
+        }));
+
+        match result {
+            Ok(Ok(_functions)) => {
+                let promises = vec![
+                    runtime.call_async("compute", &[ZyntaxValue::Int(7)]).unwrap(),
+                ];
+
+                let mut all = PromiseAll::new(promises);
+                let results = all.await_all().expect("Single PromiseAll should succeed");
+
+                assert_eq!(results.len(), 1);
+                assert_eq!(results[0], ZyntaxValue::Int(35)); // 7 * 5 = 35
+
+                println!("SUCCESS: Single-element PromiseAll");
+            }
+            Ok(Err(e)) => {
+                panic!("Module load failed: {}", e);
+            }
+            Err(_panic) => {
+                panic!("Async compilation panicked");
             }
         }
     }
