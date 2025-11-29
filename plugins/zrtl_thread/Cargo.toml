@@ -1,0 +1,12 @@
+[package]
+name = "zrtl_thread"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL Thread plugin - threads and atomics"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }
