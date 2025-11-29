@@ -2907,9 +2907,9 @@ mod tests {
         );
 
         // Verify constructor signature
-        assert_eq!(constructor.signature.params.len(), 1); // Original param
-        assert_eq!(constructor.signature.returns.len(), 1);
-        assert_eq!(constructor.signature.returns[0], struct_type);
+        // Constructor has: sret pointer (output) + original params
+        assert_eq!(constructor.signature.params.len(), 2); // sret + original x param
+        assert_eq!(constructor.signature.returns.len(), 0); // Uses sret, so void return
         assert!(!constructor.signature.is_async); // Constructor is not async
 
         // Verify it has an entry block
@@ -2919,10 +2919,10 @@ mod tests {
         let entry_block = &constructor.blocks[&constructor.entry_block];
         assert!(matches!(entry_block.terminator, HirTerminator::Return { .. }));
 
-        // Verify return values
+        // Verify return values (sret convention - void return)
         match &entry_block.terminator {
             HirTerminator::Return { values } => {
-                assert_eq!(values.len(), 1); // Should return struct instance
+                assert_eq!(values.len(), 0); // Void return - struct written via sret pointer
             }
             _ => panic!("Expected return terminator"),
         }
@@ -3065,27 +3065,21 @@ mod tests {
             _ => panic!("Expected struct type"),
         }
 
-        // Verify constructor has InsertValue instructions
+        // Verify constructor uses sret convention with Store instructions
         let entry_block = &constructor.blocks[&constructor.entry_block];
 
-        // Should have 4 InsertValue instructions (state + 3 params)
-        let insert_count = entry_block.instructions.iter()
-            .filter(|inst| matches!(inst, HirInstruction::InsertValue { .. }))
+        // Should have Store instructions for state + 3 params = 4 stores
+        // Plus Binary/GEP instructions for computing field pointers
+        let store_count = entry_block.instructions.iter()
+            .filter(|inst| matches!(inst, HirInstruction::Store { .. }))
             .count();
-        assert_eq!(insert_count, 4);
-
-        // Verify the InsertValue instructions have correct indices
-        for (idx, inst) in entry_block.instructions.iter().enumerate() {
-            if let HirInstruction::InsertValue { indices, .. } = inst {
-                assert_eq!(indices.len(), 1);
-                assert_eq!(indices[0], idx as u32); // Index matches instruction order
-            }
-        }
+        assert_eq!(store_count, 4); // state + x + y + msg
 
         // Verify parameters are properly referenced
+        // sret pointer + 3 original params = 4 parameter values
         let param_values: Vec<_> = constructor.values.values()
             .filter(|v| matches!(v.kind, HirValueKind::Parameter(_)))
             .collect();
-        assert_eq!(param_values.len(), 3); // 3 parameters
+        assert_eq!(param_values.len(), 4); // sret + 3 original params
     }
 }
