@@ -291,13 +291,28 @@ var_stmt = { "var" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
       ]
   }
 
-const_stmt = { "const" ~ identifier ~ (":" ~ type_expr)? ~ "=" ~ expr ~ ";" }
+const_stmt = { const_stmt_typed | const_stmt_untyped }
+  -> Statement {
+      "get_child": { "index": 0 }
+  }
+
+const_stmt_typed = { "const" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
   -> Statement {
       "commands": [
           { "define": "const_stmt", "args": {
               "name": "$1",
               "type": "$2",
               "init": "$3"
+          }}
+      ]
+  }
+
+const_stmt_untyped = { "const" ~ identifier ~ "=" ~ expr ~ ";" }
+  -> Statement {
+      "commands": [
+          { "define": "const_stmt", "args": {
+              "name": "$1",
+              "init": "$2"
           }}
       ]
   }
@@ -321,7 +336,7 @@ await_expr = { "await" ~ call_expr }
   -> Expression {
       "commands": [
           { "define": "await_expr", "args": {
-              "future": "$1"
+              "expr": "$1"
           }}
       ]
   }
@@ -435,10 +450,8 @@ bool_literal = { "true" | "false" }
   }
 
 identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
-  -> Identifier {
-      "get_text": true,
-      "define": "identifier",
-      "args": { "name": "$result" }
+  -> String {
+      "get_text": true
   }
 
 // ===== Lexical Rules =====

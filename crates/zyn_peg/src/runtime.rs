@@ -344,6 +344,9 @@ pub trait AstHostFunctions {
     /// Create a lambda expression
     fn create_lambda(&mut self, params: Vec<NodeHandle>, body: NodeHandle) -> NodeHandle;
 
+    /// Create an await expression (for async functions)
+    fn create_await(&mut self, expr: NodeHandle) -> NodeHandle;
+
     // ========== Statements ==========
 
     /// Create a variable declaration statement
@@ -1380,6 +1383,22 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_expr(expr)
     }
 
+    fn create_await(&mut self, expr_handle: NodeHandle) -> NodeHandle {
+        let span = self.default_span();
+
+        // Get the expression being awaited
+        let awaited_expr = self.get_expr(expr_handle)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
+
+        // The result type of await is the inner type of the Promise
+        // For simplicity, we assume i32 for now
+        let result_type = Type::Primitive(PrimitiveType::I32);
+
+        // Create the await expression node
+        let expr = self.inner.await_expr(awaited_expr, result_type, span);
+        self.store_expr(expr)
+    }
+
     fn create_int_literal(&mut self, value: i64) -> NodeHandle {
         let span = self.default_span();
         let expr = self.inner.int_literal(value as i128, span);
@@ -1507,17 +1526,17 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_assignment(&mut self, target: NodeHandle, value: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        eprintln!("[create_assignment] target={:?}, value={:?}", target, value);
+        log::trace!("[create_assignment] target={:?}, value={:?}", target, value);
 
         // Get target and value expressions
         let target_expr = self.get_expr(target)
             .unwrap_or_else(|| {
-                eprintln!("[create_assignment] FAILED to get target expression!");
+                log::trace!("[create_assignment] FAILED to get target expression!");
                 self.inner.variable("target", Type::Primitive(PrimitiveType::I32), span)
             });
         let value_expr = self.get_expr(value)
             .unwrap_or_else(|| {
-                eprintln!("[create_assignment] FAILED to get value expression!");
+                log::trace!("[create_assignment] FAILED to get value expression!");
                 self.inner.int_literal(0, span)
             });
 
@@ -1692,26 +1711,26 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_block(&mut self, statements: Vec<NodeHandle>) -> NodeHandle {
         let span = self.default_span();
 
-        eprintln!("[create_block] statements: {:?}", statements);
-        eprintln!("[create_block] statements keys: {:?}", self.statements.keys().collect::<Vec<_>>());
+        log::trace!("[create_block] statements: {:?}", statements);
+        log::trace!("[create_block] statements keys: {:?}", self.statements.keys().collect::<Vec<_>>());
 
         // First collect all the statements we can find
         let mut stmts: Vec<TypedNode<TypedStatement>> = Vec::new();
         for h in &statements {
-            eprintln!("[create_block] checking handle {:?}", h);
+            log::trace!("[create_block] checking handle {:?}", h);
             if let Some(stmt) = self.get_stmt(*h) {
-                eprintln!("[create_block]   -> found statement: {:?}", stmt.node);
+                log::trace!("[create_block]   -> found statement: {:?}", stmt.node);
                 stmts.push(stmt);
             } else if let Some(expr) = self.get_expr(*h) {
-                eprintln!("[create_block]   -> found expression, wrapping: {:?}", expr.node);
+                log::trace!("[create_block]   -> found expression, wrapping: {:?}", expr.node);
                 let expr_stmt = self.inner.expression_statement(expr, span);
                 stmts.push(expr_stmt);
             } else {
-                eprintln!("[create_block]   -> NOT FOUND in statements or expressions!");
+                log::trace!("[create_block]   -> NOT FOUND in statements or expressions!");
             }
         }
 
-        eprintln!("[create_block] collected {} statements", stmts.len());
+        log::trace!("[create_block] collected {} statements", stmts.len());
 
         // Store the entire block and return its handle
         let block = TypedBlock { statements: stmts, span };
@@ -2675,9 +2694,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
     /// Execute commands for a rule given its parse tree node
     pub fn execute_rule(&mut self, rule_name: &str, text: &str, children: Vec<RuntimeValue>) -> Result<RuntimeValue> {
-        if rule_name == "return_stmt" || rule_name == "expr" || rule_name == "comparison" || rule_name == "addition" || rule_name == "multiplication" || rule_name == "call_or_primary" || rule_name == "binary_op" || rule_name == "identifier" || rule_name == "primary" || rule_name == "call_expr" || rule_name == "unary" {
-            eprintln!("[EXECUTE_RULE DEBUG] {}: text='{}', children.len()={}, children={:?}", rule_name, text, children.len(), children);
-        }
+        log::trace!("[EXECUTE_RULE] {}: text='{}', children.len()={}, children={:?}", rule_name, text, children.len(), children);
         // Get commands for this rule
         let commands = match self.module.rule_commands(rule_name) {
             Some(cmds) => {
@@ -2718,7 +2735,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
         }
 
         // Return top of stack or null
-        Ok(self.value_stack.pop().unwrap_or(RuntimeValue::Null))
+        let result = self.value_stack.pop().unwrap_or(RuntimeValue::Null);
+        Ok(result)
     }
 
     /// Execute a single command
@@ -3178,18 +3196,18 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "return_stmt" => {
-                eprintln!("[RETURN_STMT DEBUG] args = {:?}", args);
+                log::trace!("[RETURN_STMT] args = {:?}", args);
                 let value = match args.get("value") {
                     Some(RuntimeValue::Node(h)) => {
-                        eprintln!("[RETURN_STMT DEBUG] value is Node: {:?}", h);
+                        log::trace!("[RETURN_STMT] value is Node: {:?}", h);
                         Some(*h)
                     },
                     Some(other) => {
-                        eprintln!("[RETURN_STMT DEBUG] value is not Node: {:?}", other);
+                        log::trace!("[RETURN_STMT] value is not Node: {:?}", other);
                         None
                     }
                     None => {
-                        eprintln!("[RETURN_STMT DEBUG] value is missing");
+                        log::trace!("[RETURN_STMT] value is missing");
                         None
                     }
                 };
@@ -3198,6 +3216,35 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "function" => {
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    Some(_) | None => "anonymous".to_string(),
+                };
+
+                let params: Vec<NodeHandle> = match args.get("params") {
+                    Some(RuntimeValue::List(list)) => {
+                        list.iter()
+                            .filter_map(|v| match v {
+                                RuntimeValue::Node(h) => Some(*h),
+                                _ => None,
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                };
+
+                let body = match args.get("body") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => self.host.create_block(vec![]),
+                };
+
+                let return_type = self.host.create_primitive_type("i32");
+                let handle = self.host.create_function(&name, params, return_type, body);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "async_function" => {
+                // Async function declaration - same as function but with is_async=true
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => "anonymous".to_string(),
@@ -3221,7 +3268,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let return_type = self.host.create_primitive_type("i32");
-                let handle = self.host.create_function(&name, params, return_type, body);
+                let handle = self.host.create_async_function(&name, params, return_type, body);
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -3750,8 +3797,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             // ===== ADDITIONAL STATEMENTS =====
 
-            "let_stmt" | "var_decl" | "var_stmt" => {
-                log::trace!("[define_node] var_stmt args: {:?}", args);
+            node_type @ ("let_stmt" | "var_decl" | "var_stmt" | "const_stmt") => {
+                log::trace!("[define_node] {}: args={:?}", node_type, args);
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => String::new(),
@@ -3778,8 +3825,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     }
                     _ => None,
                 };
-                log::trace!("[define_node] var_stmt name={}, ty={:?}, init={:?}", name, ty, init);
-                let is_const = match args.get("is_const").or(args.get("const")) {
+                log::trace!("[define_node] {} name={}, ty={:?}, init={:?}", node_type, name, ty, init);
+                // Determine is_const: true if node_type is const_stmt, or if is_const arg is true
+                let is_const = node_type == "const_stmt" || match args.get("is_const").or(args.get("const")) {
                     Some(RuntimeValue::Bool(b)) => *b,
                     _ => false,
                 };
@@ -3788,7 +3836,6 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "assignment" | "assign" => {
-                eprintln!("[define_node] assignment args: {:?}", args);
                 log::trace!("[define_node] assignment args: {:?}", args);
                 // Target can be either a Node (expression) or String (identifier)
                 let target = match args.get("target") {
@@ -3974,6 +4021,17 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 // For now, represent as unary with special op
                 let handle = self.host.create_unary_op("try", expr);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "await_expr" | "await" => {
+                // await expression awaits a Promise/Future
+                let expr = match args.get("expr").or(args.get("operand")) {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("await: missing expr".into())),
+                };
+                // Create await expression node
+                let handle = self.host.create_await(expr);
                 Ok(RuntimeValue::Node(handle))
             }
 

@@ -748,6 +748,22 @@ pub enum HirType {
         is_structural: bool,  // true for duck-typing, false for nominal
     },
 
+    /// Promise type for async functions
+    ///
+    /// An async function `async fn foo() -> T` returns `Promise<T>`.
+    /// The Promise contains:
+    /// - A pointer to the state machine struct
+    /// - A function pointer to the poll function
+    ///
+    /// At runtime, Promise is represented as a struct:
+    /// ```ignore
+    /// struct Promise<T> {
+    ///     state_machine: *mut StateMachine,
+    ///     poll_fn: fn(*mut StateMachine, *Context) -> PollResult<T>,
+    /// }
+    /// ```
+    Promise(Box<HirType>),
+
     /// Associated type projection
     /// Represents an associated type in a trait, e.g., `<T as Iterator>::Item`
     ///

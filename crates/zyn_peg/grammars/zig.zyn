@@ -117,9 +117,47 @@ extern_fn_decl_no_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_exp
       ]
   }
 
-fn_decl = { fn_decl_with_params | fn_decl_no_params }
+fn_decl = { async_fn_decl | sync_fn_decl }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
+  }
+
+// Synchronous function declarations
+sync_fn_decl = { fn_decl_with_params | fn_decl_no_params }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// Async function declarations
+async_fn_decl = { async_fn_decl_with_params | async_fn_decl_no_params }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// Async with params: async fn identifier(params) return_type { body }
+async_fn_decl_with_params = { "async" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "async_function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// Async no params: async fn identifier() return_type { body }
+async_fn_decl_no_params = { "async" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "async_function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "$2",
+              "body": "$3"
+          }}
+      ]
   }
 
 // With params: identifier, fn_params, type_expr, block
@@ -523,7 +561,7 @@ call_args = { expr ~ ("," ~ expr)* }
   }
 
 // Atom: the base of postfix expressions
-atom = { switch_expr | try_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | type_value | identifier_expr | paren_expr }
+atom = { switch_expr | try_expr | await_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | type_value | identifier_expr | paren_expr }
   -> TypedExpression {
       "get_child": { "index": 0 }
   }
@@ -751,6 +789,14 @@ try_expr = { "try" ~ primary }
       ]
   }
 
+// Await expression: await expr
+await_expr = { "await" ~ primary }
+  -> TypedExpression {
+      "commands": [
+          { "define": "await", "args": { "expr": "$1" } }
+      ]
+  }
+
 paren_expr = _{ "(" ~ expr ~ ")" }
 
 // Array literal: [a, b, c]
@@ -805,7 +851,7 @@ escape_seq = { "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "0") }
 
 keyword = @{
     ("struct" | "enum" | "fn" | "const" | "var" | "if" | "else" | "while" | "for" |
-     "return" | "break" | "continue" | "try" | "and" | "or" | "true" | "false" |
+     "return" | "break" | "continue" | "try" | "await" | "async" | "and" | "or" | "true" | "false" |
      "comptime" | "type" | "switch" |
      "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void")
     ~ !(ASCII_ALPHANUMERIC | "_")

@@ -1254,23 +1254,6 @@ impl SsaBuilder {
         
         match &expr.node {
             TypedExpression::Variable(name) => {
-                // Debug: show what variable we're looking up
-                let name_for_debug = name.resolve_global().unwrap_or_else(|| {
-                    let arena = self.arena.lock().unwrap();
-                    arena.resolve_string(*name).map(|s| s.to_string()).unwrap_or_default()
-                });
-                eprintln!("[SSA DEBUG] Looking up variable '{}' (name={:?}) in block {:?}", name_for_debug, name, block_id);
-                eprintln!("[SSA DEBUG]   entry_block = {:?}", self.function.entry_block);
-                if let Some(defs) = self.definitions.get(&block_id) {
-                    eprintln!("[SSA DEBUG]   definitions for this block ({} entries):", defs.len());
-                    for (var, val) in defs {
-                        let resolved = var.resolve_global().unwrap_or_else(|| "?".to_string());
-                        eprintln!("[SSA DEBUG]     {} ({:?}) -> {:?}", resolved, var, val);
-                    }
-                } else {
-                    eprintln!("[SSA DEBUG]   NO definitions for this block!");
-                }
-
                 // Check if this is an address-taken variable - need to load from stack
                 if let Some(&stack_slot) = self.stack_slots.get(name) {
                     let var_ty = self.var_types.get(name).cloned().unwrap_or(HirType::I64);
@@ -1283,7 +1266,6 @@ impl SsaBuilder {
                         volatile: false,
                     });
                     self.add_use(stack_slot, result);
-                    eprintln!("[SSA DEBUG]   Variable '{}' is address-taken, loaded from stack -> {:?}", name_for_debug, result);
                     log::debug!("[SSA] Load address-taken var {:?} from stack slot {:?} -> {:?}", name, stack_slot, result);
                     return Ok(result);
                 }
@@ -1291,11 +1273,11 @@ impl SsaBuilder {
                 // First try to read the variable - if it exists in scope, use it
                 // Only treat as enum constructor if it's not a defined variable
                 if let Some(value_id) = self.try_read_variable(*name, block_id) {
-                    eprintln!("[SSA DEBUG]   Variable '{}' found in scope -> {:?}", name_for_debug, value_id);
+                    log::trace!("[SSA] Variable {:?} found in scope -> {:?}", name, value_id);
                     return Ok(value_id);
                 }
 
-                eprintln!("[SSA DEBUG]   Variable '{}' NOT found by try_read_variable!", name_for_debug);
+                log::trace!("[SSA] Variable {:?} NOT found by try_read_variable!", name);
 
                 // Variable not in scope - check for enum constructors
                 // Use resolve_global() since the string may have been interned by a different arena (e.g., ZigBuilder)
@@ -1871,37 +1853,107 @@ impl SsaBuilder {
                 // into a state machine with states before/after each await.
                 //
                 // Translation: `await future_expr` becomes:
-                //   %future = <translate future_expr>
-                //   %result = call @intrinsic::await(%future)
+                //   %future = <translate future_expr>  -- this is a *Promise<T> pointer
+                //   %result = call @intrinsic::await(%future)  -- this returns T
                 //
                 // The async transformation phase will then convert this into proper
                 // state machine code that yields and resumes.
 
-                // First, translate the expression being awaited (the future/async call)
-                let future_val = self.translate_expression(block_id, async_expr)?;
+                eprintln!("[DEBUG] SSA: Matched TypedExpression::Await!");
 
-                // Determine the result type (the type of the await expression)
+                // The result type is what the await expression evaluates to (T, not *Promise<T>)
                 let result_ty = self.convert_type(&expr.ty);
 
-                // Create result value for the await
-                let result = self.create_value(result_ty.clone(), HirValueKind::Instruction);
+                // The future type is *Promise<T> - the async call returns a Promise pointer
+                let promise_ty = HirType::Ptr(Box::new(HirType::Opaque(InternedString::new_global("Promise"))));
 
-                // Emit the intrinsic await call
-                let await_inst = HirInstruction::Call {
-                    callee: crate::hir::HirCallable::Intrinsic(crate::hir::Intrinsic::Await),
-                    args: vec![future_val],
-                    result: Some(result),
-                    type_args: vec![],
-                    const_args: vec![],
-                    is_tail: false,
-                };
+                // Translate the expression being awaited (the future/async call)
+                // We need to ensure the Call result has Promise pointer type, not the final value type
+                // First check if it's a Call expression - if so, override its result type
+                if let TypedExpression::Call(call) = &async_expr.node {
+                    // Translate the call with Promise result type instead of the declared return type
+                    let callee = &call.callee;
+                    let args = &call.positional_args;
 
-                // Add instruction to the current block
-                if let Some(block) = self.function.blocks.get_mut(&block_id) {
-                    block.add_instruction(await_inst);
+                    // Resolve the callable
+                    let (hir_callable, _) = if let TypedExpression::Variable(func_name) = &callee.node {
+                        let name_str = func_name.resolve_global().unwrap_or_else(|| {
+                            let arena = self.arena.lock().unwrap();
+                            arena.resolve_string(*func_name).map(|s| s.to_string()).unwrap_or_default()
+                        });
+
+                        if let Some(&func_id) = self.function_symbols.get(func_name) {
+                            (crate::hir::HirCallable::Function(func_id), None)
+                        } else {
+                            let callee_val = self.translate_expression(block_id, callee)?;
+                            (crate::hir::HirCallable::Indirect(callee_val), Some(callee_val))
+                        }
+                    } else {
+                        let callee_val = self.translate_expression(block_id, callee)?;
+                        (crate::hir::HirCallable::Indirect(callee_val), Some(callee_val))
+                    };
+
+                    // Translate arguments
+                    let mut arg_vals = Vec::new();
+                    for arg in args {
+                        let arg_val = self.translate_expression(block_id, arg)?;
+                        arg_vals.push(arg_val);
+                    }
+
+                    // Create the Call result with Promise pointer type (not the function's return type)
+                    let future_val = self.create_value(promise_ty.clone(), HirValueKind::Instruction);
+
+                    let call_inst = HirInstruction::Call {
+                        result: Some(future_val),
+                        callee: hir_callable,
+                        args: arg_vals,
+                        type_args: vec![],
+                        const_args: vec![],
+                        is_tail: false,
+                    };
+
+                    self.add_instruction(block_id, call_inst);
+                    eprintln!("[DEBUG] SSA: Created async Call with Promise result type, future_val={:?}", future_val);
+
+                    // Create result value for the await (with actual T type)
+                    let result = self.create_value(result_ty.clone(), HirValueKind::Instruction);
+
+                    // Emit the intrinsic await call
+                    let await_inst = HirInstruction::Call {
+                        callee: crate::hir::HirCallable::Intrinsic(crate::hir::Intrinsic::Await),
+                        args: vec![future_val],
+                        result: Some(result),
+                        type_args: vec![],
+                        const_args: vec![],
+                        is_tail: false,
+                    };
+
+                    self.add_instruction(block_id, await_inst);
+                    Ok(result)
+                } else {
+                    // For non-call await expressions (e.g., await some_promise_variable)
+                    let future_val = self.translate_expression(block_id, async_expr)?;
+                    log::trace!("[SSA] Await non-call: future_val = {:?}", future_val);
+
+                    // Create result value for the await
+                    let result = self.create_value(result_ty.clone(), HirValueKind::Instruction);
+
+                    // Emit the intrinsic await call
+                    let await_inst = HirInstruction::Call {
+                        callee: crate::hir::HirCallable::Intrinsic(crate::hir::Intrinsic::Await),
+                        args: vec![future_val],
+                        result: Some(result),
+                        type_args: vec![],
+                        const_args: vec![],
+                        is_tail: false,
+                    };
+
+                    if let Some(block) = self.function.blocks.get_mut(&block_id) {
+                        block.add_instruction(await_inst);
+                    }
+
+                    Ok(result)
                 }
-
-                Ok(result)
             }
 
             TypedExpression::Try(try_expr) => {
@@ -2007,23 +2059,10 @@ impl SsaBuilder {
     }
 
     fn read_variable(&mut self, var: InternedString, block: HirId) -> HirId {
-        let var_name = var.resolve_global().unwrap_or_default();
-        eprintln!("[SSA DEBUG] read_variable('{}', {:?})", var_name, block);
-        if let Some(defs) = self.definitions.get(&block) {
-            eprintln!("[SSA DEBUG]   block has {} definitions", defs.len());
-            for (v, val) in defs {
-                let v_name = v.resolve_global().unwrap_or_default();
-                eprintln!("[SSA DEBUG]     '{}' -> {:?}", v_name, val);
-            }
-        } else {
-            eprintln!("[SSA DEBUG]   NO definitions for this block!");
-        }
         if let Some(&value) = self.definitions.get(&block).and_then(|defs| defs.get(&var)) {
-            eprintln!("[SSA DEBUG]   FOUND in definitions: {:?}", value);
             log::debug!("[SSA] read_variable({:?}, {:?}) = {:?} (found in definitions)", var, block, value);
             return value;
         }
-        eprintln!("[SSA DEBUG]   NOT found in definitions, calling read_variable_recursive");
 
         log::debug!("[SSA] read_variable({:?}, {:?}) - not in definitions, recursing", var, block);
         // Not defined in this block - need phi or recursive lookup
@@ -2033,15 +2072,11 @@ impl SsaBuilder {
     /// Recursively read variable, inserting phis as needed (before IDF)
     /// After IDF placement, this won't create new phis - it will only traverse existing ones
     fn read_variable_recursive(&mut self, var: InternedString, block: HirId) -> HirId {
-        let var_name_debug = var.resolve_global().unwrap_or_else(|| {
-            let arena = self.arena.lock().unwrap();
-            arena.resolve_string(var).map(|s| s.to_string()).unwrap_or_default()
-        });
         let (predecessors, is_sealed) = {
             let block_info = self.function.blocks.get(&block).unwrap();
             (block_info.predecessors.clone(), self.sealed_blocks.contains(&block))
         };
-        eprintln!("[SSA DEBUG] read_variable_recursive('{}', {:?}): sealed={}, predecessors={:?}", var_name_debug, block, is_sealed, predecessors);
+        log::trace!("[SSA] read_variable_recursive({:?}, {:?}): sealed={}, predecessors={:?}", var, block, is_sealed, predecessors);
 
         if !is_sealed {
             // Block not sealed - create incomplete phi (ONLY if IDF not done yet)

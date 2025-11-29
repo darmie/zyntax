@@ -1797,4 +1797,156 @@ async fn sum_with_multiplier(start: i32, end: i32, multiplier: i32) i32 {
             }
         }
     }
+
+    #[test]
+    fn test_execute_async_await_long_running_process() {
+        // Test an async function that awaits another async function which is
+        // a long-running process (computes a large sum iteratively)
+        //
+        // This tests:
+        // 1. Awaiting a function that takes many polls to complete
+        // 2. Proper nested state machine coordination
+        // 3. The outer function correctly resuming after inner completes
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+// A long-running async process that sums 1 to n
+async fn long_sum(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+// Awaits a long-running process and adds a constant
+async fn add_to_sum(n: i32) i32 {
+    const sum = await long_sum(n);
+    return sum + 100;
+}
+"#;
+
+        // Catch panics from Cranelift
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("async_test", source)
+        }));
+
+        match result {
+            Ok(Ok(functions)) => {
+                println!("Compiled async long-running process functions: {:?}", functions);
+                assert!(functions.contains(&"long_sum".to_string()), "long_sum should be generated");
+                assert!(functions.contains(&"add_to_sum".to_string()), "add_to_sum should be generated");
+                assert!(functions.contains(&"__long_sum_poll".to_string()), "__long_sum_poll should be generated");
+                assert!(functions.contains(&"__add_to_sum_poll".to_string()), "__add_to_sum_poll should be generated");
+
+                // Test 1: long_sum(100) = 1+2+...+100 = 5050
+                println!("\n=== Test 1: long_sum(100) ===");
+                let promise = runtime.call_async("long_sum", &[ZyntaxValue::Int(100)]);
+                match promise {
+                    Ok(promise) => {
+                        let mut polls = 0;
+                        while promise.is_pending() && polls < 10000 {
+                            promise.poll();
+                            polls += 1;
+                        }
+
+                        match promise.state() {
+                            PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                assert_eq!(result, 5050, "long_sum(100) should return 5050");
+                                println!("SUCCESS: long_sum(100) = {} (after {} polls)", result, polls);
+                            }
+                            PromiseState::Failed(msg) => {
+                                panic!("long_sum(100) failed: {}", msg);
+                            }
+                            other => {
+                                panic!("long_sum(100) unexpected state: {:?}", other);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        panic!("call_async for long_sum(100) failed: {}", e);
+                    }
+                }
+
+                // Test 2: add_to_sum(50)
+                // = long_sum(50) + 100
+                // = 1275 + 100 = 1375
+                println!("\n=== Test 2: add_to_sum(50) ===");
+                let promise = runtime.call_async("add_to_sum", &[ZyntaxValue::Int(50)]);
+                match promise {
+                    Ok(promise) => {
+                        let mut polls = 0;
+                        while promise.is_pending() && polls < 10000 {
+                            promise.poll();
+                            polls += 1;
+                        }
+
+                        match promise.state() {
+                            PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                // sum(1..50) = 50*51/2 = 1275, so 1275 + 100 = 1375
+                                assert_eq!(result, 1375, "add_to_sum(50) should return 1375");
+                                println!("SUCCESS: add_to_sum(50) = {} (after {} polls)", result, polls);
+                            }
+                            PromiseState::Failed(msg) => {
+                                panic!("add_to_sum(50) failed: {}", msg);
+                            }
+                            other => {
+                                panic!("add_to_sum(50) unexpected state: {:?}", other);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        panic!("call_async for add_to_sum(50) failed: {}", e);
+                    }
+                }
+
+                // Test 3: add_to_sum(10)
+                // = long_sum(10) + 100
+                // = 55 + 100 = 155
+                println!("\n=== Test 3: add_to_sum(10) ===");
+                let promise = runtime.call_async("add_to_sum", &[ZyntaxValue::Int(10)]);
+                match promise {
+                    Ok(promise) => {
+                        let mut polls = 0;
+                        while promise.is_pending() && polls < 10000 {
+                            promise.poll();
+                            polls += 1;
+                        }
+
+                        match promise.state() {
+                            PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                // sum(1..10) = 55, so 55 + 100 = 155
+                                assert_eq!(result, 155, "add_to_sum(10) should return 155");
+                                println!("SUCCESS: add_to_sum(10) = {} (after {} polls)", result, polls);
+                            }
+                            PromiseState::Failed(msg) => {
+                                panic!("add_to_sum(10) failed: {}", msg);
+                            }
+                            other => {
+                                panic!("add_to_sum(10) unexpected state: {:?}", other);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        panic!("call_async for add_to_sum(10) failed: {}", e);
+                    }
+                }
+
+                println!("\nAll long-running async process tests passed!");
+            }
+            Ok(Err(e)) => {
+                eprintln!("Module load failed: {}", e);
+                panic!("Async module compilation should succeed");
+            }
+            Err(_panic) => {
+                eprintln!("Async compilation panicked - this is a backend issue, not grammar");
+                panic!("Async compilation should not panic");
+            }
+        }
+    }
 }

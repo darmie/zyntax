@@ -226,15 +226,26 @@ pub fn compile_to_hir(
                 // Compile to state machine
                 let state_machine = async_compiler.compile_async_function(&original_func)?;
 
-                // Generate wrapper function (replaces original)
-                let wrapper_func = async_compiler.generate_async_wrapper_with_arena(
+                // Generate poll function (internal implementation)
+                let poll_func = async_compiler.generate_poll_function(
                     &state_machine,
                     &mut *lowering_ctx.arena.lock().unwrap(),
                     &original_func,
                 )?;
 
-                // Replace the original async function with the state machine wrapper
-                hir_module.functions.insert(func_id, wrapper_func);
+                // Generate async entry function that returns Promise
+                let entry_func = async_compiler.generate_async_entry_function(
+                    &state_machine,
+                    &poll_func,
+                    &original_func,
+                    &mut *lowering_ctx.arena.lock().unwrap(),
+                )?;
+
+                // Add poll function to module (internal implementation detail)
+                hir_module.functions.insert(poll_func.id, poll_func);
+
+                // Replace the original async function with the entry function that returns Promise
+                hir_module.functions.insert(func_id, entry_func);
             }
         }
     }

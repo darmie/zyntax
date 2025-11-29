@@ -1026,6 +1026,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Next Steps
 
+- See [Async Runtime](./13-async-runtime.md) for detailed async/Promise documentation
 - See [Grammar Syntax](./04-grammar-syntax.md) for writing `.zyn` grammars
 - See [TypedAST](./06-typed-ast.md) for understanding the intermediate representation
 - See [ZRTL Plugins](./10-packaging-distribution.md) for creating native runtime libraries

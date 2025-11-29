@@ -794,7 +794,13 @@ impl CraneliftBackend {
 
                         HirInstruction::Call { result, callee, args, is_tail, .. } => {
                             let arg_values: Vec<Value> = args.iter()
-                                .map(|arg_id| self.value_map[arg_id])
+                                .map(|arg_id| {
+                                    match self.value_map.get(arg_id) {
+                                        Some(v) => *v,
+                                        None => panic!("Call instruction: arg {:?} not in value_map. Available: {:?}",
+                                            arg_id, self.value_map.keys().collect::<Vec<_>>()),
+                                    }
+                                })
                                 .collect();
 
                             match callee {
@@ -956,8 +962,13 @@ impl CraneliftBackend {
 
                         HirInstruction::IndirectCall { result, func_ptr, args, return_ty } => {
                             // Indirect call through function pointer (for trait dispatch)
-                            let func_ptr_val = self.value_map.get(func_ptr).copied()
-                                .unwrap_or_else(|| builder.ins().iconst(types::I64, 0));
+                            let func_ptr_val = match self.value_map.get(func_ptr).copied() {
+                                Some(v) => v,
+                                None => {
+                                    eprintln!("[WARN] IndirectCall: func_ptr {:?} not found in value_map! Using 0.", func_ptr);
+                                    builder.ins().iconst(types::I64, 0)
+                                }
+                            };
 
                             let arg_values: Vec<Value> = args.iter()
                                 .filter_map(|arg_id| self.value_map.get(arg_id).copied())
@@ -1044,7 +1055,10 @@ impl CraneliftBackend {
 
                         HirInstruction::Load { result, ty, ptr, align, volatile } => {
                             // Load value from memory
-                            let ptr_val = self.value_map[ptr];
+                            let ptr_val = match self.value_map.get(ptr) {
+                                Some(v) => *v,
+                                None => panic!("Load instruction: ptr {:?} not in value_map. Available: {:?}", ptr, self.value_map.keys().collect::<Vec<_>>()),
+                            };
                             let cranelift_ty = type_cache.get(ty).copied().unwrap_or(types::I64);
 
                             // TODO: Properly handle volatile flag
@@ -2178,6 +2192,11 @@ impl CraneliftBackend {
                     "Unresolved associated type: <{:?} as {:?}>::{}",
                     self_ty, trait_id, name
                 )))
+            }
+            HirType::Promise(_) => {
+                // Promise is a struct containing {state_machine_ptr, poll_fn_ptr}
+                // Treated as a pointer to the Promise struct
+                Ok(self.module.target_config().pointer_type())
             }
         }
     }

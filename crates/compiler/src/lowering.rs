@@ -640,21 +640,8 @@ impl LoweringContext {
         let typed_cfg = typed_cfg_builder.build_from_block(body, hir_func.entry_block)?;
 
         // Debug: check TypedCFG
-        eprintln!("[LOWERING DEBUG] TypedCFG for function {:?} (is_async={}):", func.name, func.is_async);
-        eprintln!("[LOWERING DEBUG]   Entry block: {:?}", hir_func.entry_block);
-        eprintln!("[LOWERING DEBUG]   CFG nodes: {}", typed_cfg.graph.node_count());
-        eprintln!("[LOWERING DEBUG]   CFG edges: {}", typed_cfg.graph.edge_count());
-        for node in typed_cfg.graph.node_indices() {
-            let block = &typed_cfg.graph[node];
-            let pred_count = typed_cfg.graph.edges_directed(node, petgraph::Direction::Incoming).count();
-            eprintln!("[LOWERING DEBUG]   CFG Block {:?}: {} statements, {} predecessors", block.id, block.statements.len(), pred_count);
-        }
-        if func.is_async {
-            eprintln!("[LOWERING DEBUG]   Body statements: {:?}", body.statements.len());
-            for stmt in &body.statements {
-                eprintln!("[LOWERING DEBUG]   Statement: {:?}", stmt);
-            }
-        }
+        log::trace!("[LOWERING] TypedCFG for function {:?} (is_async={}): entry={:?}, nodes={}, edges={}",
+            func.name, func.is_async, hir_func.entry_block, typed_cfg.graph.node_count(), typed_cfg.graph.edge_count());
 
         // Convert to SSA form, processing TypedStatements to emit HIR instructions
         let ssa_builder = SsaBuilder::new(
@@ -667,11 +654,7 @@ impl LoweringContext {
 
         // Debug: check SSA result
         if func.is_async {
-            eprintln!("[LOWERING DEBUG] After SSA build for async function {:?}:", func.name);
-            eprintln!("[LOWERING DEBUG]   SSA blocks: {}", ssa.function.blocks.len());
-            for (bid, block) in &ssa.function.blocks {
-                eprintln!("[LOWERING DEBUG]   SSA Block {:?}: {} instructions", bid, block.instructions.len());
-            }
+            log::trace!("[LOWERING] After SSA build for async function {:?}: {} blocks", func.name, ssa.function.blocks.len());
         }
 
         // Verify SSA properties
@@ -708,20 +691,8 @@ impl LoweringContext {
 
         // Gap 6 Phase 2: Transform async functions to state machines
         if func.is_async {
-            eprintln!("[LOWERING DEBUG] Before transform_async_function:");
-            eprintln!("[LOWERING DEBUG]   Function: {:?}", hir_func.name);
-            eprintln!("[LOWERING DEBUG]   Values: {} entries", hir_func.values.len());
-            for (vid, val) in &hir_func.values {
-                eprintln!("[LOWERING DEBUG]     {:?} -> {:?}", vid, val.kind);
-            }
-            eprintln!("[LOWERING DEBUG]   Blocks: {}", hir_func.blocks.len());
-            for (bid, block) in &hir_func.blocks {
-                eprintln!("[LOWERING DEBUG]   Block {:?}: {} instructions, terminator = {:?}",
-                    bid, block.instructions.len(), block.terminator);
-                for (i, inst) in block.instructions.iter().enumerate() {
-                    eprintln!("[LOWERING DEBUG]     inst[{}]: {:?}", i, inst);
-                }
-            }
+            log::trace!("[LOWERING] Before transform_async_function: {:?} with {} values, {} blocks",
+                hir_func.name, hir_func.values.len(), hir_func.blocks.len());
             hir_func = self.transform_async_function(hir_func)?;
         }
 
@@ -731,7 +702,13 @@ impl LoweringContext {
         Ok(())
     }
 
-    /// Transform async function into state machine with poll() wrapper
+    /// Transform async function into Promise-returning function
+    ///
+    /// The new design:
+    /// - `async fn foo(x: i32) -> i32` becomes `fn foo(x: i32) -> Promise<i32>`
+    /// - Promise contains `{state_machine: *mut u8, poll_fn: fn(*mut u8) -> i64}`
+    /// - The poll function is generated internally (not exposed as `_poll`)
+    /// - When you call foo(x), you get a Promise that holds the state machine and poll fn
     fn transform_async_function(&mut self, original_func: HirFunction) -> CompilerResult<HirFunction> {
         // Create async compiler
         let mut async_compiler = crate::async_support::AsyncCompiler::new();
@@ -739,54 +716,42 @@ impl LoweringContext {
         // Compile the async function into a state machine
         let state_machine = async_compiler.compile_async_function(&original_func)?;
 
-        // Generate the poll() wrapper function
-        // This transforms:
-        //   async fn foo() -> T { ... }
-        // Into:
-        //   struct FooStateMachine { state: u32, ... }
-        //   impl Future for FooStateMachine {
-        //       fn poll(&mut self, cx: &mut Context) -> Poll<T> { ... }
-        //   }
-
         // Generate state machine infrastructure
-        // Lock the arena to get mutable access
-        let (struct_type, poll_wrapper, constructor) = {
+        let (poll_wrapper, async_entry_func) = {
             let mut arena = self.arena.lock().unwrap();
 
-            // 1. Generate the state machine struct type
-            let struct_type = async_compiler.generate_state_machine_struct(
+            // 1. Generate the state machine struct type (needed for size calculation)
+            let _struct_type = async_compiler.generate_state_machine_struct(
                 &state_machine,
                 &mut *arena
             );
 
-            // 2. Generate the poll() wrapper that implements Future::poll
-            let poll_wrapper = async_compiler.generate_async_wrapper_with_arena(
+            // 2. Generate the poll() function (internal, prefixed with __)
+            let poll_wrapper = async_compiler.generate_poll_function(
                 &state_machine,
                 &mut *arena,
                 &original_func,
             )?;
 
-            // 3. Generate the constructor function
-            let constructor = async_compiler.generate_state_machine_constructor(
+            // 3. Generate the async entry function that returns Promise<T>
+            // This keeps the ORIGINAL function name and returns Promise
+            let async_entry_func = async_compiler.generate_async_entry_function(
                 &state_machine,
-                struct_type.clone(),
+                &poll_wrapper,
                 &original_func,
                 &mut *arena
-            );
+            )?;
 
-            (struct_type, poll_wrapper, constructor)
+            (poll_wrapper, async_entry_func)
         };
 
-        // Add the poll() wrapper and constructor to the module
-        // poll() will be named "foo_poll"
-        // constructor will be named "foo_new"
+        // Add the poll() function to the module (internal implementation detail)
         self.module.add_function(poll_wrapper);
-        self.module.add_function(constructor.clone());
 
-        // Return the constructor as the replacement for the original async function
-        // When users call async fn foo(), they get the constructor that returns
-        // the state machine struct
-        Ok(constructor)
+        // Return the async entry function as the replacement
+        // This function has the SAME NAME as the original async function
+        // and returns Promise<T>
+        Ok(async_entry_func)
     }
 
     /// Convert function signature

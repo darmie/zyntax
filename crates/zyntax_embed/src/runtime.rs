@@ -76,6 +76,26 @@ pub enum NativeType {
     Ptr,
 }
 
+impl NativeType {
+    /// Convert from HIR type to native type
+    pub fn from_hir_type(ty: &zyntax_compiler::hir::HirType) -> Self {
+        use zyntax_compiler::hir::HirType;
+        match ty {
+            HirType::I8 | HirType::I16 | HirType::I32 => NativeType::I32,
+            HirType::I64 | HirType::I128 => NativeType::I64,
+            HirType::U8 | HirType::U16 | HirType::U32 => NativeType::I32,
+            HirType::U64 | HirType::U128 => NativeType::I64,
+            HirType::F32 => NativeType::F32,
+            HirType::F64 => NativeType::F64,
+            HirType::Bool => NativeType::Bool,
+            HirType::Void => NativeType::Void,
+            HirType::Ptr(_) | HirType::Ref { .. } | HirType::Function(_) => NativeType::Ptr,
+            HirType::Promise(_) => NativeType::Ptr,
+            _ => NativeType::I64, // Default to i64 for unknown types
+        }
+    }
+}
+
 /// Function signature for native calling convention
 ///
 /// Describes the parameter types and return type for a JIT-compiled function.
@@ -94,6 +114,19 @@ impl NativeSignature {
             params: params.to_vec(),
             ret,
         }
+    }
+
+    /// Create a signature from an HIR function signature
+    pub fn from_hir_signature(sig: &zyntax_compiler::hir::HirFunctionSignature) -> Self {
+        let params: Vec<NativeType> = sig.params.iter()
+            .map(|p| NativeType::from_hir_type(&p.ty))
+            .collect();
+
+        let ret = sig.returns.first()
+            .map(|ty| NativeType::from_hir_type(ty))
+            .unwrap_or(NativeType::Void);
+
+        Self { params, ret }
     }
 
     /// Create a signature from a string like "(i32, i32) -> i32"
@@ -349,8 +382,82 @@ unsafe fn call_4(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, ret: Native
     }
 }
 
+/// Call a function with dynamic values using a signature
+///
+/// This is the signature-based dispatch for async function calls.
+/// Returns the raw pointer result (for Promise-returning async functions).
+///
+/// # Safety
+/// The caller must ensure the function pointer has the correct signature.
+unsafe fn call_with_signature(ptr: *const u8, args: &[DynamicValue], signature: &NativeSignature) -> *const u8 {
+    // Convert DynamicValue to i64 for the native call
+    let native_args: Vec<i64> = args.iter()
+        .zip(&signature.params)
+        .map(|(arg, _ty)| dynamic_to_i64(arg))
+        .collect();
 
+    // For async functions, the return type is always a pointer (*Promise<T>)
+    // We dispatch based on argument count
+    match native_args.len() {
+        0 => {
+            let f: extern "C" fn() -> *const u8 = std::mem::transmute(ptr);
+            f()
+        }
+        1 => {
+            let f: extern "C" fn(i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0])
+        }
+        2 => {
+            let f: extern "C" fn(i64, i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0], native_args[1])
+        }
+        3 => {
+            let f: extern "C" fn(i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0], native_args[1], native_args[2])
+        }
+        4 => {
+            let f: extern "C" fn(i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0], native_args[1], native_args[2], native_args[3])
+        }
+        5 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4])
+        }
+        6 => {
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
+            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5])
+        }
+        _ => {
+            log::error!("Unsupported argument count: {}. Maximum is 6.", native_args.len());
+            std::ptr::null()
+        }
+    }
+}
 
+/// Convert a DynamicValue to i64 for native calls
+fn dynamic_to_i64(value: &DynamicValue) -> i64 {
+    // Try each primitive type accessor
+    if let Some(i) = value.get_i32() {
+        return i as i64;
+    }
+    if let Some(i) = value.get_i64() {
+        return i;
+    }
+    if let Some(f) = value.get_f32() {
+        return f.to_bits() as i64;
+    }
+    if let Some(f) = value.get_f64() {
+        return f.to_bits() as i64;
+    }
+    if let Some(b) = value.get_bool() {
+        return if b { 1 } else { 0 };
+    }
+    // For pointer types, just use the raw pointer value
+    if !value.value_ptr.is_null() {
+        return value.value_ptr as i64;
+    }
+    0
+}
 
 
 
@@ -399,6 +506,8 @@ pub struct ZyntaxRuntime {
     backend: CraneliftBackend,
     /// Mapping from function names to HIR IDs
     function_ids: HashMap<String, HirId>,
+    /// Mapping from function names to their native signatures
+    function_signatures: HashMap<String, NativeSignature>,
     /// Compilation configuration
     config: CompilationConfig,
     /// Registered external functions
@@ -441,6 +550,7 @@ impl ZyntaxRuntime {
         Ok(Self {
             backend,
             function_ids: HashMap::new(),
+            function_signatures: HashMap::new(),
             config,
             external_functions: HashMap::new(),
             import_resolvers: Vec::new(),
@@ -459,6 +569,7 @@ impl ZyntaxRuntime {
         Ok(Self {
             backend,
             function_ids: HashMap::new(),
+            function_signatures: HashMap::new(),
             config: CompilationConfig::default(),
             external_functions: HashMap::new(),
             import_resolvers: Vec::new(),
@@ -482,10 +593,14 @@ impl ZyntaxRuntime {
         }
 
         // Store function name -> ID mapping (resolve InternedString to actual string)
-        // Also track which functions are async
+        // Also track which functions are async and store their signatures
         for (id, func) in &module.functions {
             if let Some(name) = func.name.resolve_global() {
                 self.function_ids.insert(name.clone(), *id);
+
+                // Store the function signature for later use in call/call_async
+                let native_sig = NativeSignature::from_hir_signature(&func.signature);
+                self.function_signatures.insert(name.clone(), native_sig);
 
                 // Track async functions by their original name
                 // Async functions are transformed into {name}_new (constructor) and {name}_poll (poll)
@@ -555,6 +670,8 @@ impl ZyntaxRuntime {
     /// This performs the lowering pass to convert the TypedAST to HIR,
     /// which can then be compiled to machine code.
     fn lower_typed_program(&self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
+        eprintln!("[DEBUG] lower_typed_program: {:?}", serde_json::to_string_pretty(&program).unwrap_or_else(|_| "error".to_string()));
+
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
         use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry};
 
@@ -687,11 +804,38 @@ impl ZyntaxRuntime {
     /// let result: String = promise.await_result()?;
     /// ```
     pub fn call_async(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxPromise> {
-        // Check if this is an async function compiled with state machine ABI
+        // First, try the new Promise-based ABI:
+        // The async function directly returns *Promise<T>
+        if let Some(func_ptr) = self.get_function_ptr(name) {
+            // Look up the stored signature for this function
+            let signature = self.function_signatures.get(name)
+                .cloned()
+                .unwrap_or_else(|| {
+                    // Fallback: infer signature from args (legacy behavior)
+                    let params: Vec<NativeType> = args.iter()
+                        .map(|arg| match arg {
+                            ZyntaxValue::Int(_) => NativeType::I64,
+                            ZyntaxValue::Float(_) => NativeType::F64,
+                            ZyntaxValue::Bool(_) => NativeType::Bool,
+                            ZyntaxValue::String(_) => NativeType::Ptr,
+                            ZyntaxValue::Null => NativeType::Ptr,
+                            ZyntaxValue::Pointer(_) => NativeType::Ptr,
+                            _ => NativeType::Ptr, // All other types (Array, Struct, Map, etc.)
+                        })
+                        .collect();
+                    NativeSignature { params, ret: NativeType::Ptr }
+                });
+
+            let dynamic_args: Vec<DynamicValue> = args.iter()
+                .cloned()
+                .map(|v| v.into_dynamic())
+                .collect();
+
+            return Ok(ZyntaxPromise::from_async_call(func_ptr, dynamic_args, &signature));
+        }
+
+        // Fall back to legacy _new/_poll naming convention
         if self.async_functions.contains(name) {
-            // Use the state machine pattern:
-            // 1. Look up {fn}_new as the constructor
-            // 2. Look up {fn}_poll as the poll function
             let constructor_name = format!("{}_new", name);
             let poll_name = format!("{}_poll", name);
 
@@ -707,26 +851,17 @@ impl ZyntaxRuntime {
                     poll_name, name
                 )))?;
 
-            // Convert arguments
             let dynamic_args: Vec<DynamicValue> = args.iter()
                 .cloned()
                 .map(|v| v.into_dynamic())
                 .collect();
 
-            Ok(ZyntaxPromise::with_poll_fn(init_ptr, poll_ptr, dynamic_args))
-        } else {
-            // Fall back to simple function pointer for non-async or external functions
-            let ptr = self.get_function_ptr(name)
-                .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
-
-            // Convert arguments
-            let dynamic_args: Vec<DynamicValue> = args.iter()
-                .cloned()
-                .map(|v| v.into_dynamic())
-                .collect();
-
-            Ok(ZyntaxPromise::new(ptr, dynamic_args))
+            return Ok(ZyntaxPromise::with_poll_fn(init_ptr, poll_ptr, dynamic_args));
         }
+
+        Err(RuntimeError::FunctionNotFound(format!(
+            "Async function '{}' not found (tried both new Promise ABI and legacy _new/_poll)", name
+        )))
     }
 
     /// Register an external function that can be called from Zyntax code
@@ -1237,6 +1372,8 @@ pub struct TieredRuntime {
     backend: TieredBackend,
     /// Mapping from function names to HIR IDs
     function_ids: HashMap<String, HirId>,
+    /// Function signatures for native calling
+    function_signatures: HashMap<String, NativeSignature>,
     /// Tiered configuration
     config: TieredConfig,
     /// Registered language grammars (language name -> grammar)
@@ -1253,6 +1390,7 @@ impl TieredRuntime {
         Ok(Self {
             backend,
             function_ids: HashMap::new(),
+            function_signatures: HashMap::new(),
             config,
             grammars: HashMap::new(),
             extension_map: HashMap::new(),
@@ -1289,10 +1427,14 @@ impl TieredRuntime {
 
     /// Compile a HIR module into the tiered runtime
     pub fn compile_module(&mut self, module: HirModule) -> RuntimeResult<()> {
-        // Store function name -> ID mapping (resolve InternedString to actual string)
+        // Store function name -> ID mapping and signatures (resolve InternedString to actual string)
         for (id, func) in &module.functions {
             if let Some(name) = func.name.resolve_global() {
-                self.function_ids.insert(name, *id);
+                self.function_ids.insert(name.clone(), *id);
+
+                // Store the function signature for later use in call/call_async
+                let native_sig = NativeSignature::from_hir_signature(&func.signature);
+                self.function_signatures.insert(name, native_sig);
             }
         }
 
@@ -1345,20 +1487,54 @@ impl TieredRuntime {
     }
 
     /// Call an async function, returning a Promise
+    ///
+    /// With the new Promise-based async ABI:
+    /// - Calling `double(21)` returns a Promise struct `{state_machine_ptr, poll_fn_ptr}`
+    /// - The Promise contains everything needed to poll for completion
+    /// - No `_new`/`_poll` naming convention needed
     pub fn call_async(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxPromise> {
-        // Async functions in Zyntax generate two functions:
-        // - {name}_new: constructor that returns the state machine
-        // - {name}_poll: poll function that advances the state machine
-        //
-        // Try to find both. If the user passed "double", look for "double_new" and "double_poll"
+        // First, try the new Promise-returning API
+        // The async function directly returns Promise<T> = {state_machine_ptr, poll_fn_ptr}
+        if let Some(func_id) = self.function_ids.get(name) {
+            self.backend.record_call(*func_id);
+            let func_ptr = self.backend.get_function_pointer(*func_id)
+                .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+
+            // Look up the stored signature for this function
+            let signature = self.function_signatures.get(name)
+                .cloned()
+                .unwrap_or_else(|| {
+                    // Fallback: infer signature from args (legacy behavior)
+                    let params: Vec<NativeType> = args.iter()
+                        .map(|arg| match arg {
+                            ZyntaxValue::Int(_) => NativeType::I64,
+                            ZyntaxValue::Float(_) => NativeType::F64,
+                            ZyntaxValue::Bool(_) => NativeType::Bool,
+                            ZyntaxValue::String(_) => NativeType::Ptr,
+                            ZyntaxValue::Null => NativeType::Ptr,
+                            ZyntaxValue::Pointer(_) => NativeType::Ptr,
+                            _ => NativeType::Ptr, // All other types (Array, Struct, Map, etc.)
+                        })
+                        .collect();
+                    NativeSignature { params, ret: NativeType::Ptr }
+                });
+
+            let dynamic_args: Vec<DynamicValue> = args.iter()
+                .cloned()
+                .map(|v| v.into_dynamic())
+                .collect();
+
+            // Call the function - it returns a Promise struct
+            return Ok(ZyntaxPromise::from_async_call(func_ptr, dynamic_args, &signature));
+        }
+
+        // Fall back to legacy _new/_poll naming convention for backwards compatibility
         let new_name = format!("{}_new", name);
         let poll_name = format!("{}_poll", name);
 
-        // Try the async naming convention first
-        let (init_ptr, poll_ptr) = if let (Some(new_id), Some(poll_id)) =
+        if let (Some(new_id), Some(poll_id)) =
             (self.function_ids.get(&new_name), self.function_ids.get(&poll_name))
         {
-            // Record calls
             self.backend.record_call(*new_id);
             self.backend.record_call(*poll_id);
 
@@ -1367,29 +1543,17 @@ impl TieredRuntime {
             let poll_ptr = self.backend.get_function_pointer(*poll_id)
                 .ok_or_else(|| RuntimeError::FunctionNotFound(poll_name.clone()))?;
 
-            (new_ptr, Some(poll_ptr))
-        } else if let Some(func_id) = self.function_ids.get(name) {
-            // Fall back to direct function call (for sync functions used as async)
-            self.backend.record_call(*func_id);
-            let ptr = self.backend.get_function_pointer(*func_id)
-                .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
-            (ptr, None)
-        } else {
-            return Err(RuntimeError::FunctionNotFound(format!(
-                "Neither '{}' nor '{}_new'/'{}_poll' found", name, name, name
-            )));
-        };
+            let dynamic_args: Vec<DynamicValue> = args.iter()
+                .cloned()
+                .map(|v| v.into_dynamic())
+                .collect();
 
-        let dynamic_args: Vec<DynamicValue> = args.iter()
-            .cloned()
-            .map(|v| v.into_dynamic())
-            .collect();
-
-        if let Some(poll_ptr) = poll_ptr {
-            Ok(ZyntaxPromise::with_poll_fn(init_ptr, poll_ptr, dynamic_args))
-        } else {
-            Ok(ZyntaxPromise::new(init_ptr, dynamic_args))
+            return Ok(ZyntaxPromise::with_poll_fn(new_ptr, poll_ptr, dynamic_args));
         }
+
+        Err(RuntimeError::FunctionNotFound(format!(
+            "Async function '{}' not found (tried both Promise-returning and legacy _new/_poll APIs)", name
+        )))
     }
 
     /// Manually optimize a function to a specific tier
@@ -1755,9 +1919,61 @@ impl ZyntaxPromise {
         }
     }
 
+    /// Create a promise from a function that returns *Promise<T>
+    ///
+    /// The new Promise-based async ABI:
+    /// - `async fn foo(x: i32) -> i32` compiles to `fn foo(x: i32) -> *Promise<i32>`
+    /// - Promise is a struct on the stack: `{state_machine: *mut u8, poll_fn: fn(*mut u8) -> i64}`
+    /// - Calling the function allocates state machine and returns pointer to Promise
+    ///
+    /// Uses the provided signature to properly invoke the function with the correct
+    /// number and types of arguments.
+    pub fn from_async_call(func_ptr: *const u8, args: Vec<DynamicValue>, signature: &NativeSignature) -> Self {
+        let task_id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+        eprintln!("[DEBUG] from_async_call: func_ptr={:?}, args.len()={}, signature.params={:?}, signature.ret={:?}",
+            func_ptr, args.len(), signature.params, signature.ret);
+
+        // Call the function to get the Promise pointer using signature-based dynamic dispatch
+        // Promise layout at pointer: offset 0 = state_machine (8 bytes), offset 8 = poll_fn (8 bytes)
+        let (state_machine, poll_fn) = unsafe {
+            eprintln!("[DEBUG] from_async_call: about to call_with_signature");
+            let promise_ptr: *const u8 = call_with_signature(func_ptr, &args, signature);
+            eprintln!("[DEBUG] from_async_call: promise_ptr={:?}", promise_ptr);
+
+            if promise_ptr.is_null() {
+                (std::ptr::null_mut(), std::ptr::null())
+            } else {
+                // Read the Promise struct from the pointer
+                // Promise layout: {state_machine: *mut u8, poll_fn: fn(*mut u8) -> i64}
+                eprintln!("[DEBUG] from_async_call: reading state_machine at offset 0");
+                let state_machine = *(promise_ptr as *const *mut u8);
+                eprintln!("[DEBUG] from_async_call: state_machine={:?}", state_machine);
+                eprintln!("[DEBUG] from_async_call: reading poll_fn at offset 8");
+                let poll_fn = *((promise_ptr as *const u8).offset(8) as *const *const u8);
+                eprintln!("[DEBUG] from_async_call: poll_fn={:?}", poll_fn);
+                (state_machine, poll_fn)
+            }
+        };
+
+        Self {
+            state: Arc::new(Mutex::new(PromiseInner {
+                init_fn: func_ptr, // Keep for reference
+                poll_fn: if poll_fn.is_null() { None } else { Some(poll_fn) },
+                args,
+                state: PromiseState::Pending,
+                state_machine: if state_machine.is_null() { None } else { Some(state_machine) },
+                ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+                task_id,
+                poll_count: 0,
+                waker: None,
+            })),
+        }
+    }
+
     /// Create a new promise with separate constructor and poll functions
     ///
-    /// This follows the Zyntax async ABI where:
+    /// This follows the legacy Zyntax async ABI where:
     /// - `init_fn`: `{fn}_new(params...) -> *mut StateMachine` - constructor
     /// - `poll_fn`: `async_wrapper(self: *StateMachine, cx: *Context) -> Poll` - poll function
     ///
@@ -1815,20 +2031,26 @@ impl ZyntaxPromise {
         if let Some(state_machine) = inner.state_machine {
             if let Some(poll_fn) = inner.poll_fn {
                 unsafe {
-                    // Create a waker for this task (used for the Context parameter)
-                    let waker = RuntimeWaker::new(inner.task_id, inner.ready_queue.clone());
-                    let std_waker = waker.into_std_waker();
-                    let waker_ptr = &std_waker as *const std::task::Waker as *const u8;
-
                     // Call the poll function on the state machine
-                    // Simplified ABI: poll(state_machine: *mut u8, context: *const u8) -> i64
+                    // New ABI: poll(state_machine: *mut u8) -> i64
                     // Return value: 0 = Pending, positive = Ready(value), negative = Failed
-                    eprintln!("[Promise Poll] Calling poll_fn={:?} with state_machine={:?}", poll_fn, state_machine);
-                    let f: extern "C" fn(*mut u8, *const u8) -> i64 =
-                        std::mem::transmute(poll_fn);
 
-                    let result = f(state_machine, waker_ptr);
-                    eprintln!("[Promise Poll] Result = {}", result);
+                    // Debug: read state field (u32 at offset 0)
+                    let state_field = *(state_machine as *const u32);
+                    // Also read a few more fields to understand state machine layout
+                    let field_4 = *((state_machine as *const u8).add(4) as *const i32); // n
+                    let field_8 = *((state_machine as *const u8).add(8) as *const i32); // i
+                    let field_12 = *((state_machine as *const u8).add(12) as *const i32); // total
+                    let field_16 = *((state_machine as *const u8).add(16) as *const u64); // future ptr
+                    eprintln!("[DEBUG] poll: state={}, n={}, i={}, total={}, future_ptr=0x{:x}",
+                        state_field, field_4, field_8, field_12, field_16);
+
+                    let f: extern "C" fn(*mut u8) -> i64 = std::mem::transmute(poll_fn);
+                    let result = f(state_machine);
+
+                    // Debug: read state field again after poll
+                    let state_field_after = *(state_machine as *const u32);
+                    eprintln!("[DEBUG] poll: result={}, state_field_after={}", result, state_field_after);
 
                     if result == 0 {
                         // Pending - state remains unchanged
@@ -1848,8 +2070,7 @@ impl ZyntaxPromise {
             }
         } else {
             // Initialize the state machine on first poll
-            eprintln!("[Promise Poll] First poll - initializing state machine with init_fn={:?}", inner.init_fn);
-            eprintln!("[Promise Poll] poll_fn={:?}", inner.poll_fn);
+            // Initialize state machine on first poll (legacy path)
             unsafe {
                 // The init function creates the state machine and returns a pointer to it.
                 // ABI: init_fn(args...) -> *mut StateMachine
