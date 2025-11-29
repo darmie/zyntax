@@ -6,7 +6,7 @@ description = "ZRTL Environment plugin - env vars, args, process"
 license = "Apache-2.0"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 zrtl = { path = "../../sdk/zrtl" }
