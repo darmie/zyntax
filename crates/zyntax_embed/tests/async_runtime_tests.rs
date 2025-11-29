@@ -1302,11 +1302,13 @@ async fn compute(x: i32) i32 {
                 println!("Compiled module: {:?}", functions);
                 println!("Available functions: {:?}", runtime.functions());
 
-                // Verify that async functions are properly compiled with correct names
-                assert!(functions.contains(&"double_poll".to_string()), "double_poll should be generated");
-                assert!(functions.contains(&"double_new".to_string()), "double_new should be generated");
-                assert!(functions.contains(&"compute_poll".to_string()), "compute_poll should be generated");
-                assert!(functions.contains(&"compute_new".to_string()), "compute_new should be generated");
+                // Verify async functions with new Promise-based ABI:
+                // - `double` and `compute` are entry functions returning Promise<T>
+                // - `__double_poll` and `__compute_poll` are internal poll functions
+                assert!(functions.contains(&"double".to_string()), "double (entry function) should be generated");
+                assert!(functions.contains(&"__double_poll".to_string()), "__double_poll (internal poll) should be generated");
+                assert!(functions.contains(&"compute".to_string()), "compute (entry function) should be generated");
+                assert!(functions.contains(&"__compute_poll".to_string()), "__compute_poll (internal poll) should be generated");
 
                 // Now actually EXECUTE the async function via call_async
                 // This tests the full async state machine execution path
@@ -1379,11 +1381,411 @@ async fn sum_to_ten() i32 {
         match result {
             Ok(Ok(functions)) => {
                 println!("Compiled async sum function: {:?}", functions);
-                // Verify the async functions were generated correctly
-                assert!(functions.contains(&"sum_to_ten_poll".to_string()), "sum_to_ten_poll should be generated");
-                assert!(functions.contains(&"sum_to_ten_new".to_string()), "sum_to_ten_new should be generated");
+                // With the new Promise-based async ABI:
+                // - `sum_to_ten` is the entry function that returns Promise<i32>
+                // - `__sum_to_ten_poll` is the internal poll function
+                assert!(functions.contains(&"sum_to_ten".to_string()), "sum_to_ten (entry function) should be generated");
+                assert!(functions.contains(&"__sum_to_ten_poll".to_string()), "__sum_to_ten_poll (internal poll) should be generated");
                 println!("Async function compilation successful!");
-                // TODO: Actual execution pending ABI fixes
+            }
+            Ok(Err(e)) => {
+                eprintln!("Module load failed: {}", e);
+                panic!("Async module compilation should succeed");
+            }
+            Err(_panic) => {
+                eprintln!("Async compilation panicked - this is a backend issue, not grammar");
+                panic!("Async compilation should not panic");
+            }
+        }
+    }
+
+    #[test]
+    fn test_execute_long_running_async_loop() {
+        // Test async function with a long-running loop (sum 1 to 100)
+        // This tests that the async state machine can handle iterative computations
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn sum_range(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+"#;
+
+        // Catch panics from Cranelift
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("async_test", source)
+        }));
+
+        match result {
+            Ok(Ok(functions)) => {
+                println!("Compiled async sum_range function: {:?}", functions);
+                assert!(functions.contains(&"sum_range".to_string()), "sum_range (entry function) should be generated");
+                assert!(functions.contains(&"__sum_range_poll".to_string()), "__sum_range_poll (internal poll) should be generated");
+
+                // Execute: sum_range(100) should return 1+2+3+...+100 = 5050
+                let promise = runtime.call_async("sum_range", &[ZyntaxValue::Int(100)]);
+                match promise {
+                    Ok(promise) => {
+                        // Poll until completion
+                        let mut polls = 0;
+                        while promise.is_pending() && polls < 1000 {
+                            promise.poll();
+                            polls += 1;
+                        }
+
+                        println!("Completed after {} polls", polls);
+
+                        match promise.state() {
+                            PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                // sum(1..100) = 100 * 101 / 2 = 5050
+                                assert_eq!(result, 5050, "sum_range(100) should return 5050");
+                                println!("SUCCESS: Async loop sum_range(100) returned {}", result);
+                            }
+                            PromiseState::Failed(msg) => {
+                                panic!("Async execution failed: {}", msg);
+                            }
+                            other => {
+                                panic!("Unexpected state after polling: {:?}", other);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        panic!("call_async failed: {}", e);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Module load failed: {}", e);
+                panic!("Async module compilation should succeed");
+            }
+            Err(_panic) => {
+                eprintln!("Async compilation panicked - this is a backend issue, not grammar");
+                panic!("Async compilation should not panic");
+            }
+        }
+    }
+
+    #[test]
+    // #[ignore = "Multi-state async with await in loops requires poll function to properly dispatch nested futures"]
+    fn test_execute_async_with_await_in_loop() {
+        // Test async function that awaits another async function inside a loop
+        // This is a key test for multi-state async state machines
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn double(x: i32) i32 {
+    return x * 2;
+}
+
+async fn sum_doubled(n: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        const doubled = await double(i);
+        total = total + doubled;
+        i = i + 1;
+    }
+    return total;
+}
+"#;
+
+        // Catch panics from Cranelift
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("async_test", source)
+        }));
+
+        match result {
+            Ok(Ok(functions)) => {
+                println!("Compiled async functions with await in loop: {:?}", functions);
+                assert!(functions.contains(&"double".to_string()), "double should be generated");
+                assert!(functions.contains(&"sum_doubled".to_string()), "sum_doubled should be generated");
+                assert!(functions.contains(&"__double_poll".to_string()), "__double_poll should be generated");
+                assert!(functions.contains(&"__sum_doubled_poll".to_string()), "__sum_doubled_poll should be generated");
+
+                // Execute: sum_doubled(5) should compute:
+                // double(1) + double(2) + double(3) + double(4) + double(5)
+                // = 2 + 4 + 6 + 8 + 10 = 30
+                let promise = runtime.call_async("sum_doubled", &[ZyntaxValue::Int(5)]);
+                match promise {
+                    Ok(promise) => {
+                        let mut polls = 0;
+                        while promise.is_pending() && polls < 1000 {
+                            promise.poll();
+                            polls += 1;
+                        }
+
+                        println!("sum_doubled(5) completed after {} polls", polls);
+
+                        match promise.state() {
+                            PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                // sum of doubled values 1..5 = 2+4+6+8+10 = 30
+                                assert_eq!(result, 30, "sum_doubled(5) should return 30");
+                                println!("SUCCESS: sum_doubled(5) = {} (after {} polls)", result, polls);
+                            }
+                            PromiseState::Failed(msg) => {
+                                panic!("Async execution failed: {}", msg);
+                            }
+                            other => {
+                                panic!("Unexpected state after polling: {:?}", other);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        panic!("call_async failed: {}", e);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Module load failed: {}", e);
+                panic!("Async module compilation should succeed");
+            }
+            Err(_panic) => {
+                eprintln!("Async compilation panicked - this is a backend issue, not grammar");
+                panic!("Async compilation should not panic");
+            }
+        }
+    }
+
+    #[test]
+    fn test_execute_async_chain_with_await() {
+        // Test multiple async functions that await each other in a chain
+        // step1 -> step2 -> step3 with processing at each step
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn step1(x: i32) i32 {
+    return x + 10;
+}
+
+async fn step2(x: i32) i32 {
+    const result = await step1(x);
+    return result * 2;
+}
+
+async fn step3(x: i32) i32 {
+    const result = await step2(x);
+    return result + 5;
+}
+"#;
+
+        // Catch panics from Cranelift
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("async_test", source)
+        }));
+
+        match result {
+            Ok(Ok(functions)) => {
+                println!("Compiled async chain functions: {:?}", functions);
+                assert!(functions.contains(&"step1".to_string()));
+                assert!(functions.contains(&"step2".to_string()));
+                assert!(functions.contains(&"step3".to_string()));
+
+                // Execute: step3(5)
+                // step1(5) = 5 + 10 = 15
+                // step2(5) = step1(5) * 2 = 15 * 2 = 30
+                // step3(5) = step2(5) + 5 = 30 + 5 = 35
+                let promise = runtime.call_async("step3", &[ZyntaxValue::Int(5)]);
+                match promise {
+                    Ok(promise) => {
+                        let mut polls = 0;
+                        while promise.is_pending() && polls < 1000 {
+                            promise.poll();
+                            polls += 1;
+                        }
+
+                        println!("step3(5) completed after {} polls", polls);
+
+                        match promise.state() {
+                            PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                assert_eq!(result, 35, "step3(5) should return 35");
+                                println!("SUCCESS: step3(5) = {} (after {} polls)", result, polls);
+                            }
+                            PromiseState::Failed(msg) => {
+                                panic!("Async execution failed: {}", msg);
+                            }
+                            other => {
+                                panic!("Unexpected state after polling: {:?}", other);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        panic!("call_async failed: {}", e);
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Module load failed: {}", e);
+                panic!("Async module compilation should succeed");
+            }
+            Err(_panic) => {
+                eprintln!("Async compilation panicked - this is a backend issue, not grammar");
+                panic!("Async compilation should not panic");
+            }
+        }
+    }
+
+    #[test]
+    fn test_execute_async_count_up() {
+        // Test async function with a counting loop
+        // This tests loop logic with counter variable
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Note: We use a simple loop-only version without early returns
+        // to avoid complex control flow in the async state machine
+        // Use addition-based approach to test loop logic
+        let source = r#"
+async fn count_up(n: i32) i32 {
+    var result: i32 = 0;
+    var i: i32 = 1;
+    while (i <= n) {
+        result = result + 1;
+        i = i + 1;
+    }
+    return result;
+}
+"#;
+
+        // Catch panics from Cranelift
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("async_test", source)
+        }));
+
+        match result {
+            Ok(Ok(functions)) => {
+                println!("Compiled async count_up function: {:?}", functions);
+                assert!(functions.contains(&"count_up".to_string()), "count_up (entry function) should be generated");
+                assert!(functions.contains(&"__count_up_poll".to_string()), "__count_up_poll (internal poll) should be generated");
+
+                // Test count_up: count_up(n) returns n
+                let test_cases = vec![
+                    (1, 1),
+                    (5, 5),
+                    (10, 10),
+                    (20, 20),
+                ];
+
+                for (input, expected) in test_cases {
+                    let promise = runtime.call_async("count_up", &[ZyntaxValue::Int(input)]);
+                    match promise {
+                        Ok(promise) => {
+                            let mut polls = 0;
+                            while promise.is_pending() && polls < 1000 {
+                                promise.poll();
+                                polls += 1;
+                            }
+
+                            match promise.state() {
+                                PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                    assert_eq!(result, expected, "count_up({}) should return {}, got {}", input, expected, result);
+                                    println!("SUCCESS: count_up({}) = {} (after {} polls)", input, result, polls);
+                                }
+                                PromiseState::Failed(msg) => {
+                                    panic!("count_up({}) failed: {}", input, msg);
+                                }
+                                other => {
+                                    panic!("count_up({}) unexpected state: {:?}", input, other);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            panic!("call_async for count_up({}) failed: {}", input, e);
+                        }
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Module load failed: {}", e);
+                panic!("Async module compilation should succeed");
+            }
+            Err(_panic) => {
+                eprintln!("Async compilation panicked - this is a backend issue, not grammar");
+                panic!("Async compilation should not panic");
+            }
+        }
+    }
+
+    #[test]
+    fn test_execute_async_with_multiple_args() {
+        // Test async function with multiple arguments and a loop
+        // This verifies that all function parameters are properly captured
+        let mut runtime = match setup_async_runtime() {
+            Some(r) => r,
+            None => return,
+        };
+
+        let source = r#"
+async fn sum_with_multiplier(start: i32, end: i32, multiplier: i32) i32 {
+    var total: i32 = 0;
+    var i: i32 = start;
+    while (i <= end) {
+        total = total + (i * multiplier);
+        i = i + 1;
+    }
+    return total;
+}
+"#;
+
+        // Catch panics from Cranelift
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.load_module("async_test", source)
+        }));
+
+        match result {
+            Ok(Ok(functions)) => {
+                println!("Compiled async sum_with_multiplier function: {:?}", functions);
+                assert!(functions.contains(&"sum_with_multiplier".to_string()));
+                assert!(functions.contains(&"__sum_with_multiplier_poll".to_string()));
+
+                // sum_with_multiplier(1, 5, 2) = (1*2) + (2*2) + (3*2) + (4*2) + (5*2) = 2+4+6+8+10 = 30
+                let promise = runtime.call_async("sum_with_multiplier", &[
+                    ZyntaxValue::Int(1),
+                    ZyntaxValue::Int(5),
+                    ZyntaxValue::Int(2),
+                ]);
+
+                match promise {
+                    Ok(promise) => {
+                        let mut polls = 0;
+                        while promise.is_pending() && polls < 1000 {
+                            promise.poll();
+                            polls += 1;
+                        }
+
+                        match promise.state() {
+                            PromiseState::Ready(ZyntaxValue::Int(result)) => {
+                                assert_eq!(result, 30, "sum_with_multiplier(1, 5, 2) should return 30");
+                                println!("SUCCESS: sum_with_multiplier(1, 5, 2) = {} (after {} polls)", result, polls);
+                            }
+                            PromiseState::Failed(msg) => {
+                                panic!("Async execution failed: {}", msg);
+                            }
+                            other => {
+                                panic!("Unexpected state after polling: {:?}", other);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        panic!("call_async failed: {}", e);
+                    }
+                }
             }
             Ok(Err(e)) => {
                 eprintln!("Module load failed: {}", e);
