@@ -544,57 +544,36 @@ The key insight: `zrtl_plugin!` **defines** what symbols a plugin exports. The r
 
 ## Advanced Patterns
 
-### Domain-Specific Type Systems
+### Domain-Specific Types
 
-Your DSL can parse custom type names and map them to TypedAST primitive types. The grammar handles parsing while semantic actions build the AST:
+Your DSL can define custom type names. Like the Zig grammar, use `"define": "primitive_type"` to create type nodes:
 
 ```zyn
-// Parse type annotations - dispatch to the matched child
-type_annotation = { ":" ~ type_expr }
-  -> Type {
-      "get_child": { "index": 0 }
-  }
-
-// Type expression - each alternative produces a type
-type_expr = { primitive_type | custom_type }
-  -> Type {
-      "get_child": { "index": 0 }
-  }
-
-// Standard primitive types
+// Standard primitive types (same pattern as zig.zyn)
 primitive_type = { "i32" | "i64" | "f32" | "f64" | "bool" | "void" }
   -> Type {
-      "get_text": true
+      "get_text": true,
+      "define": "primitive_type",
+      "args": { "name": "$result" }
   }
 
-// DSL-specific type names that compile to primitives
-// Currency/Percentage → f64, Date/Duration → i64
-custom_type = { "Currency" | "Percentage" | "Date" | "Duration" }
+// DSL-specific type aliases - parsed the same way
+// The compiler treats these as their underlying types
+dsl_type = { "Currency" | "Percentage" | "Date" | "Duration" }
   -> Type {
-      "get_text": true
+      "get_text": true,
+      "define": "primitive_type",
+      "args": { "name": "$result" }
   }
 
-// Variable declaration using type annotation
-var_decl = { "let" ~ identifier ~ type_annotation ~ "=" ~ expr }
-  -> TypedStatement {
-      "commands": [
-          { "define": "var_decl", "args": {
-              "name": "$1",
-              "type": "$2",
-              "value": "$3"
-          }}
-      ]
+// Combined type expression
+type_expr = { primitive_type | dsl_type | identifier }
+  -> Type {
+      "get_child": { "index": 0 }
   }
 ```
 
-The type mapping (Currency → f64, Date → i64) happens during compilation. Your DSL plugin can validate and transform types as needed. This allows DSL code like:
-
-```text
-let price: Currency = 99.99
-let discount: Percentage = 15
-let created: Date = now()
-let timeout: Duration = 5000
-```
+Note: The grammar only parses type names as strings. Type semantics (e.g., treating `Currency` as `f64`) must be handled in your compiler or runtime, not in the grammar.
 
 ### Compile-Time Validation
 
