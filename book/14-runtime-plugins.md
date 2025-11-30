@@ -291,6 +291,166 @@ Process spawning and management.
 | `$Process$current_pid` | `() -> u32` | Get current PID |
 | `$Process$command_exists` | `(StringPtr) -> i32` | Check if command exists |
 
+## Graphics & Media Plugins
+
+### zrtl_window - Cross-Platform Windowing
+
+High-level windowing API built on SDL2. Auto-initializes when creating windows.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Window$create` | `(StringPtr, i32, i32) -> u64` | Create centered window |
+| `$Window$create_at` | `(StringPtr, i32, i32, i32, i32) -> u64` | Create at position |
+| `$Window$destroy` | `(u64) -> void` | Destroy window |
+| `$Window$is_open` | `(u64) -> i32` | Check if window open |
+| `$Window$close` | `(u64) -> void` | Mark window for closing |
+| `$Window$set_title` | `(u64, StringPtr) -> i32` | Set window title |
+| `$Window$get_size` | `(u64) -> WindowSize` | Get window dimensions |
+| `$Window$clear` | `(u64, u32) -> void` | Clear with RGBA color |
+| `$Window$present` | `(u64) -> void` | Present frame |
+| `$Window$draw_pixel` | `(u64, i32, i32) -> i32` | Draw single pixel |
+| `$Window$draw_line` | `(u64, i32, i32, i32, i32) -> i32` | Draw line |
+| `$Window$draw_rect` | `(u64, i32, i32, i32, i32) -> i32` | Draw rectangle outline |
+| `$Window$fill_rect` | `(u64, i32, i32, i32, i32) -> i32` | Fill rectangle |
+| `$Window$fill_rect_color` | `(u64, i32, i32, i32, i32, u32) -> i32` | Fill with color |
+| `$Window$blit` | `(u64, *u8, i32, i32, i32, i32, i32) -> i32` | Blit pixel buffer |
+| `$Window$blit_scaled` | `(...) -> i32` | Blit with scaling |
+| `$Window$poll_event` | `() -> WindowEvent` | Poll events (non-blocking) |
+| `$Window$wait_event` | `() -> WindowEvent` | Wait for event |
+| `$Window$delay` | `(u32) -> void` | Sleep milliseconds |
+
+**Color format**: RGBA as `0xRRGGBBAA` (e.g., `0xFF0000FF` = red)
+
+**Event types**: `EVENT_QUIT`, `EVENT_KEY_DOWN`, `EVENT_KEY_UP`, `EVENT_MOUSE_MOVE`, `EVENT_MOUSE_DOWN`, `EVENT_MOUSE_UP`, `EVENT_RESIZE`
+
+### zrtl_sdl - Low-Level SDL2 Bindings
+
+Direct SDL2 access for advanced use cases. Requires explicit initialization.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Sdl$init` | `() -> i32` | Initialize SDL |
+| `$Sdl$quit` | `() -> void` | Quit SDL |
+| `$Sdl$window_create` | `(StringPtr, i32, i32, u32, u32) -> u64` | Create window |
+| `$Sdl$window_create_centered` | `(StringPtr, u32, u32) -> u64` | Create centered |
+| `$Sdl$set_draw_color` | `(u64, u8, u8, u8, u8) -> void` | Set RGBA color |
+| `$Sdl$clear` | `(u64) -> void` | Clear canvas |
+| `$Sdl$present` | `(u64) -> void` | Present frame |
+| `$Sdl$draw_point` | `(u64, i32, i32) -> i32` | Draw point |
+| `$Sdl$draw_line` | `(u64, i32, i32, i32, i32) -> i32` | Draw line |
+| `$Sdl$draw_rect` | `(u64, i32, i32, u32, u32) -> i32` | Draw rect outline |
+| `$Sdl$fill_rect` | `(u64, i32, i32, u32, u32) -> i32` | Fill rect |
+| `$Sdl$blit_rgba` | `(u64, *u8, u32, u32, u32, i32, i32) -> i32` | Blit RGBA buffer |
+| `$Sdl$poll_event` | `() -> SdlEvent` | Poll events |
+| `$Sdl$wait_event` | `() -> SdlEvent` | Wait for event |
+| `$Sdl$get_ticks` | `() -> u32` | Milliseconds since init |
+| `$Sdl$delay` | `(u32) -> void` | Sleep milliseconds |
+
+### zrtl_paint - 2D Software Rasterization
+
+High-quality 2D rendering with anti-aliased shapes, paths, and transforms.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Paint$canvas_create` | `(u32, u32) -> u64` | Create canvas |
+| `$Paint$canvas_free` | `(u64) -> void` | Free canvas |
+| `$Paint$canvas_clear` | `(u64, Color) -> void` | Clear with color |
+| `$Paint$canvas_get_buffer` | `(u64) -> CanvasBuffer` | Get pixel buffer info |
+| `$Paint$canvas_data_ptr` | `(u64) -> *u8` | Get raw pixel pointer |
+| `$Paint$canvas_save_png` | `(u64, StringPtr) -> i32` | Save to PNG file |
+| `$Paint$rgb` | `(u8, u8, u8) -> Color` | Create RGB color |
+| `$Paint$rgba` | `(u8, u8, u8, u8) -> Color` | Create RGBA color |
+| `$Paint$hex` | `(u32) -> Color` | Color from hex |
+| `$Paint$fill_rect` | `(u64, f32, f32, f32, f32, Color)` | Fill rectangle |
+| `$Paint$stroke_rect` | `(...)` | Stroke rectangle |
+| `$Paint$fill_circle` | `(u64, f32, f32, f32, Color)` | Fill circle |
+| `$Paint$stroke_circle` | `(...)` | Stroke circle |
+| `$Paint$fill_ellipse` | `(u64, f32, f32, f32, f32, Color)` | Fill ellipse |
+| `$Paint$fill_rounded_rect` | `(..., f32, Color)` | Fill rounded rect |
+| `$Paint$draw_line` | `(u64, f32, f32, f32, f32, Color)` | Draw line |
+| `$Paint$path_create` | `() -> u64` | Create path builder |
+| `$Paint$path_move_to` | `(u64, f32, f32)` | Move to point |
+| `$Paint$path_line_to` | `(u64, f32, f32)` | Line to point |
+| `$Paint$path_quad_to` | `(u64, f32, f32, f32, f32)` | Quadratic bezier |
+| `$Paint$path_cubic_to` | `(...)` | Cubic bezier |
+| `$Paint$path_fill` | `(u64, u64, Color)` | Fill path |
+| `$Paint$path_stroke` | `(u64, u64, Color)` | Stroke path |
+| `$Paint$transform_translate` | `(u64, f32, f32)` | Apply translation |
+| `$Paint$transform_rotate` | `(u64, f32)` | Apply rotation (radians) |
+| `$Paint$transform_scale` | `(u64, f32, f32)` | Apply scale |
+| `$Paint$set_stroke_width` | `(u64, f32)` | Set stroke width |
+
+**Rendering to Window**: Use `canvas_get_buffer()` to get pixel data, then `$Window$blit()`:
+
+```
+let canvas = $Paint$canvas_create(800, 600);
+$Paint$fill_circle(canvas, 400, 300, 100, $Paint$rgb(255, 0, 0));
+
+let buffer = $Paint$canvas_get_buffer(canvas);
+$Window$blit(win, buffer.data, buffer.width, buffer.height, buffer.pitch, 0, 0);
+$Window$present(win);
+```
+
+### zrtl_svg - SVG Parsing & Rendering
+
+Parse and render SVG files using resvg/usvg.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Svg$parse` | `(StringPtr) -> u64` | Parse SVG from string |
+| `$Svg$parse_file` | `(StringPtr) -> u64` | Parse SVG from file |
+| `$Svg$free` | `(u64) -> void` | Free SVG handle |
+| `$Svg$get_width` | `(u64) -> f32` | Get SVG width |
+| `$Svg$get_height` | `(u64) -> f32` | Get SVG height |
+| `$Svg$render` | `(u64) -> RenderResult` | Render at natural size |
+| `$Svg$render_scaled` | `(u64, f32) -> RenderResult` | Render with scale |
+| `$Svg$pixmap_data` | `(u64) -> *u8` | Get rendered pixel data |
+| `$Svg$pixmap_save_png` | `(u64, StringPtr) -> i32` | Save pixmap to PNG |
+| `$Svg$pixmap_free` | `(u64) -> void` | Free rendered pixmap |
+
+### zrtl_image - Image Encoding/Decoding
+
+Load and save images in common formats (PNG, JPEG, GIF, WebP, BMP, ICO, TIFF).
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Image$load` | `(StringPtr) -> u64` | Load image from file |
+| `$Image$load_from_memory` | `(ArrayPtr) -> u64` | Load from bytes |
+| `$Image$free` | `(u64) -> void` | Free image |
+| `$Image$width` | `(u64) -> u32` | Get width |
+| `$Image$height` | `(u64) -> u32` | Get height |
+| `$Image$get_pixel` | `(u64, u32, u32) -> u32` | Get RGBA pixel |
+| `$Image$set_pixel` | `(u64, u32, u32, u32) -> void` | Set RGBA pixel |
+| `$Image$save_png` | `(u64, StringPtr) -> i32` | Save as PNG |
+| `$Image$save_jpeg` | `(u64, StringPtr, u8) -> i32` | Save as JPEG (quality) |
+| `$Image$resize` | `(u64, u32, u32) -> u64` | Resize image |
+| `$Image$crop` | `(u64, u32, u32, u32, u32) -> u64` | Crop region |
+| `$Image$flip_horizontal` | `(u64) -> void` | Flip horizontally |
+| `$Image$flip_vertical` | `(u64) -> void` | Flip vertically |
+| `$Image$rotate90` | `(u64) -> u64` | Rotate 90 degrees |
+| `$Image$to_grayscale` | `(u64) -> u64` | Convert to grayscale |
+| `$Image$get_data` | `(u64) -> *u8` | Get raw RGBA data |
+
+### zrtl_xml - XML Parsing & Generation
+
+XML document manipulation with quick-xml.
+
+| Symbol | Signature | Description |
+|--------|-----------|-------------|
+| `$Xml$parse` | `(StringPtr) -> u64` | Parse XML string |
+| `$Xml$parse_file` | `(StringPtr) -> u64` | Parse XML file |
+| `$Xml$free` | `(u64) -> void` | Free document |
+| `$Xml$stringify` | `(u64) -> StringPtr` | Convert to string |
+| `$Xml$root` | `(u64) -> u64` | Get root element |
+| `$Xml$tag_name` | `(u64) -> StringPtr` | Get element tag name |
+| `$Xml$text_content` | `(u64) -> StringPtr` | Get text content |
+| `$Xml$get_attribute` | `(u64, StringPtr) -> StringPtr` | Get attribute |
+| `$Xml$set_attribute` | `(u64, StringPtr, StringPtr) -> void` | Set attribute |
+| `$Xml$children` | `(u64) -> ArrayPtr` | Get child elements |
+| `$Xml$find_by_tag` | `(u64, StringPtr) -> ArrayPtr` | Find by tag name |
+| `$Xml$create_element` | `(StringPtr) -> u64` | Create element |
+| `$Xml$append_child` | `(u64, u64) -> void` | Append child |
+
 ## Building Plugins
 
 ### Dynamic Libraries (.zrtl)

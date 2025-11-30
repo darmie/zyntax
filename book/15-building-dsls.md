@@ -1,0 +1,587 @@
+# Building Domain-Specific Languages
+
+Zyntax's combination of a flexible grammar system (ZynPEG), rich runtime plugins (ZRTL), and native compilation makes it an ideal platform for creating domain-specific languages (DSLs). This chapter explores how to leverage the full stack to build powerful, specialized languages.
+
+## Why Build DSLs with Zyntax?
+
+Traditional DSL approaches have trade-offs:
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| Embedded DSLs (macros) | Easy to implement | Limited syntax, host language constraints |
+| Interpreter-based | Full syntax control | Slow execution, no native integration |
+| Custom compilers | Full control | Massive implementation effort |
+
+**Zyntax offers the best of all worlds:**
+
+- **Full syntax control** via ZynPEG grammars
+- **Native performance** via Cranelift/LLVM compilation
+- **Rich runtime** via ZRTL plugins (I/O, graphics, networking, etc.)
+- **Minimal boilerplate** - just write a `.zyn` grammar file
+
+## DSL Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────────┐
+│                      Your DSL Source                            │
+│                    (custom syntax)                              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    ZynPEG Grammar                               │
+│              (.zyn file with semantic actions)                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       TypedAST                                  │
+│            (universal typed representation)                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Zyntax Compiler                              │
+│                (HIR → SSA → Native Code)                        │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    ZRTL Plugins                                 │
+│    ┌─────┐ ┌─────┐ ┌──────┐ ┌───────┐ ┌─────┐ ┌─────┐        │
+│    │ I/O │ │ FS  │ │Window│ │ Paint │ │ SVG │ │ Net │  ...    │
+│    └─────┘ └─────┘ └──────┘ └───────┘ └─────┘ └─────┘        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+## Example DSLs
+
+### 1. Graphics/Visualization DSL
+
+Leverage `zrtl_paint` and `zrtl_window` to create a Processing/p5.js-style creative coding language:
+
+```
+// sketch.art - Creative coding DSL
+
+canvas 800 600
+
+background #1a1a2e
+
+fill #e94560
+circle 400 300 100
+
+fill #16213e
+for i in 0..10 {
+    rect 50 + i * 70, 500, 60, 20
+}
+
+stroke #0f3460 width 3
+line 0 550 800 550
+```
+
+**Grammar highlights:**
+
+```zyn
+@language {
+    name: "ArtLang",
+    version: "1.0",
+    file_extensions: [".art"],
+    entry_point: "sketch_main"
+}
+
+canvas_stmt = { "canvas" ~ integer ~ integer }
+  -> TypedStatement {
+      "call_runtime": "$Paint$canvas_create",
+      "args": ["$1", "$2"],
+      "store_result": "canvas"
+  }
+
+fill_stmt = { "fill" ~ color }
+  -> TypedStatement {
+      "call_runtime": "$Paint$set_fill_color",
+      "args": ["canvas", "$color"]
+  }
+
+circle_stmt = { "circle" ~ expr ~ expr ~ expr }
+  -> TypedStatement {
+      "call_runtime": "$Paint$fill_circle",
+      "args": ["canvas", "$1", "$2", "$3", "fill_color"]
+  }
+```
+
+**Runtime integration:**
+
+```rust
+// Your DSL's runtime wrapping ZRTL plugins
+zrtl_plugin! {
+    name: "artlang_runtime",
+    symbols: [
+        // Wrapper that creates canvas + window together
+        ("$Art$setup", art_setup),
+        // Main loop that blits canvas to window
+        ("$Art$render_loop", art_render_loop),
+    ]
+}
+```
+
+### 2. Data Pipeline DSL
+
+Create a language for ETL and data transformation:
+
+```
+// pipeline.flow - Data transformation DSL
+
+source "data/sales.csv" as sales
+source "data/products.json" as products
+
+transform sales {
+    filter revenue > 1000
+    map {
+        product_id,
+        total: revenue * quantity,
+        date: parse_date(sale_date)
+    }
+}
+
+join sales with products on product_id
+
+aggregate by category {
+    total_revenue: sum(total),
+    count: count()
+}
+
+output "reports/summary.json"
+```
+
+**Leveraging ZRTL plugins:**
+- `zrtl_fs` for file I/O
+- `zrtl_json` for JSON parsing/generation
+- `zrtl_string` for text manipulation
+- `zrtl_sql` for embedded database operations
+
+### 3. Hardware Description DSL
+
+A simplified HDL for education or prototyping:
+
+```
+// counter.hdl - Hardware description
+
+module counter(clk: clock, reset: bit, out: bits[8]) {
+    reg count: bits[8] = 0
+
+    on rising(clk) {
+        if reset {
+            count <- 0
+        } else {
+            count <- count + 1
+        }
+    }
+
+    out <- count
+}
+```
+
+### 4. Game Scripting DSL
+
+A language for game logic with built-in entity/component concepts:
+
+```
+// player.game - Game entity script
+
+entity Player {
+    component Position { x: 0, y: 0 }
+    component Velocity { dx: 0, dy: 0 }
+    component Sprite { image: "player.png" }
+
+    on update(dt) {
+        if key_pressed(KEY_RIGHT) {
+            Velocity.dx = 200
+        }
+        Position.x += Velocity.dx * dt
+    }
+
+    on collision(other: Enemy) {
+        emit DamageEvent { amount: 10 }
+    }
+}
+```
+
+**Runtime using ZRTL:**
+- `zrtl_window` for windowing/input
+- `zrtl_paint` for 2D rendering
+- `zrtl_image` for sprite loading
+- `zrtl_thread` for game loop timing
+
+### 5. Configuration DSL
+
+A type-safe configuration language:
+
+```
+// app.config - Typed configuration
+
+database {
+    host: "localhost"
+    port: 5432
+    pool_size: 10
+    timeout: 30s
+
+    ssl {
+        enabled: true
+        cert_path: "/etc/ssl/cert.pem"
+    }
+}
+
+server {
+    listen: 8080
+    workers: cpu_count() * 2
+
+    routes {
+        "/api/*" -> api_handler
+        "/static/*" -> static_files("./public")
+    }
+}
+```
+
+## Building a Complete DSL: Step by Step
+
+Let's build a simple **charting DSL** that generates visualizations:
+
+### Step 1: Define the Grammar
+
+```zyn
+// chart.zyn - Charting DSL grammar
+
+@language {
+    name: "ChartLang",
+    version: "1.0",
+    file_extensions: [".chart"],
+    entry_point: "render_chart"
+}
+
+// Entry point
+program = { SOI ~ chart_definition ~ EOI }
+  -> TypedModule {
+      "create_main": "render_chart",
+      "body": "$chart_definition"
+  }
+
+chart_definition = { chart_type ~ title? ~ data_section ~ style_section? }
+  -> TypedFunction {
+      "name": "render_chart",
+      "body": ["$chart_type", "$title", "$data_section", "$style_section"]
+  }
+
+chart_type = { ("bar" | "line" | "pie") ~ "chart" }
+  -> TypedStatement {
+      "call_runtime": "$Chart$set_type",
+      "args": ["$1"]
+  }
+
+title = { "title" ~ string_literal }
+  -> TypedStatement {
+      "call_runtime": "$Chart$set_title",
+      "args": ["$string_literal"]
+  }
+
+data_section = { "data" ~ "{" ~ data_point* ~ "}" }
+  -> TypedBlock {
+      "statements": "$data_point"
+  }
+
+data_point = { string_literal ~ ":" ~ number }
+  -> TypedStatement {
+      "call_runtime": "$Chart$add_data",
+      "args": ["$string_literal", "$number"]
+  }
+
+style_section = { "style" ~ "{" ~ style_prop* ~ "}" }
+  -> TypedBlock {
+      "statements": "$style_prop"
+  }
+
+style_prop = { identifier ~ ":" ~ (color | number | string_literal) }
+  -> TypedStatement {
+      "call_runtime": "$Chart$set_style",
+      "args": ["$identifier", "$2"]
+  }
+
+// Terminals
+string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+  -> String { "get_text": true, "trim_quotes": true }
+
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+  -> Number { "get_text": true, "parse_float": true }
+
+color = @{ "#" ~ ASCII_HEX_DIGIT{6} }
+  -> Color { "get_text": true }
+
+identifier = @{ ASCII_ALPHA ~ ASCII_ALPHANUMERIC* }
+  -> Identifier { "get_text": true }
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }
+```
+
+### Step 2: Create the Runtime Plugin
+
+```rust
+// plugins/zrtl_chart/src/lib.rs
+
+use std::cell::RefCell;
+use zrtl::{zrtl_plugin, StringPtr, string_as_str};
+
+thread_local! {
+    static CHART: RefCell<ChartState> = RefCell::new(ChartState::default());
+}
+
+#[derive(Default)]
+struct ChartState {
+    chart_type: String,
+    title: String,
+    data: Vec<(String, f64)>,
+    styles: std::collections::HashMap<String, String>,
+}
+
+#[no_mangle]
+pub extern "C" fn chart_set_type(type_ptr: StringPtr) {
+    let type_str = unsafe { string_as_str(type_ptr) }.unwrap_or("bar");
+    CHART.with(|c| c.borrow_mut().chart_type = type_str.to_string());
+}
+
+#[no_mangle]
+pub extern "C" fn chart_set_title(title_ptr: StringPtr) {
+    let title = unsafe { string_as_str(title_ptr) }.unwrap_or("");
+    CHART.with(|c| c.borrow_mut().title = title.to_string());
+}
+
+#[no_mangle]
+pub extern "C" fn chart_add_data(label_ptr: StringPtr, value: f64) {
+    let label = unsafe { string_as_str(label_ptr) }.unwrap_or("");
+    CHART.with(|c| c.borrow_mut().data.push((label.to_string(), value)));
+}
+
+#[no_mangle]
+pub extern "C" fn chart_render(width: u32, height: u32) -> u64 {
+    CHART.with(|c| {
+        let state = c.borrow();
+
+        // Create a paint canvas
+        let canvas = zrtl_paint::canvas_create(width, height);
+
+        // Clear with white background
+        let white = zrtl_paint::paint_rgb(255, 255, 255);
+        zrtl_paint::canvas_clear(canvas, white);
+
+        // Render based on chart type
+        match state.chart_type.as_str() {
+            "bar" => render_bar_chart(canvas, &state),
+            "line" => render_line_chart(canvas, &state),
+            "pie" => render_pie_chart(canvas, &state),
+            _ => {}
+        }
+
+        canvas
+    })
+}
+
+fn render_bar_chart(canvas: u64, state: &ChartState) {
+    let bar_width = 50.0;
+    let gap = 20.0;
+    let max_value = state.data.iter().map(|(_, v)| *v).fold(0.0_f64, f64::max);
+    let scale = 400.0 / max_value;
+
+    for (i, (label, value)) in state.data.iter().enumerate() {
+        let x = 50.0 + (i as f32) * (bar_width + gap);
+        let height = (*value as f32) * scale as f32;
+        let y = 450.0 - height;
+
+        // Draw bar
+        let color = zrtl_paint::paint_hex(0x4A90D9);
+        zrtl_paint::fill_rect(canvas, x, y, bar_width, height, color);
+    }
+}
+
+zrtl_plugin! {
+    name: "zrtl_chart",
+    symbols: [
+        ("$Chart$set_type", chart_set_type),
+        ("$Chart$set_title", chart_set_title),
+        ("$Chart$add_data", chart_add_data),
+        ("$Chart$set_style", chart_set_style),
+        ("$Chart$render", chart_render),
+    ]
+}
+```
+
+### Step 3: Write DSL Programs
+
+```
+// sales_report.chart
+
+bar chart
+title "Q4 Sales by Region"
+
+data {
+    "North": 45000
+    "South": 32000
+    "East": 51000
+    "West": 28000
+}
+
+style {
+    bar_color: #4A90D9
+    background: #F5F5F5
+    font_size: 14
+}
+```
+
+### Step 4: Compile and Run
+
+```bash
+# Compile the grammar
+zyntax compile-grammar chart.zyn -o chart.zpeg
+
+# Run a chart program
+zyntax compile --grammar chart.zpeg \
+               --source sales_report.chart \
+               --plugins zrtl_chart,zrtl_paint,zrtl_window \
+               --run
+```
+
+## Advanced Patterns
+
+### Domain-Specific Type Systems
+
+Your DSL can have its own type system that maps to Zyntax's TypedAST:
+
+```zyn
+// Define custom types in your grammar
+type_annotation = { ":" ~ custom_type }
+
+custom_type = {
+    "Currency" |    // Maps to f64 with formatting
+    "Percentage" |  // Maps to f64 with 0-100 range
+    "Date" |        // Maps to i64 timestamp
+    "Duration"      // Maps to i64 milliseconds
+}
+```
+
+### Compile-Time Validation
+
+Use grammar predicates for domain validation:
+
+```zyn
+// Only allow valid CSS colors
+css_color = @{
+    "#" ~ ASCII_HEX_DIGIT{3,8} |
+    color_name
+}
+
+color_name = {
+    "red" | "blue" | "green" | "white" | "black" |
+    "transparent" | "inherit"
+}
+```
+
+### Interop with Host Language
+
+DSLs can call back into a host language:
+
+```rust
+// Register host functions that DSL code can call
+zrtl_plugin! {
+    name: "my_app_runtime",
+    symbols: [
+        ("$App$get_user", get_current_user),
+        ("$App$send_email", send_email),
+        ("$App$log", app_logger),
+    ]
+}
+```
+
+```
+// In your DSL
+user = App.get_user()
+if user.is_admin {
+    App.send_email(user.email, "Admin Report", report_data)
+}
+```
+
+## Best Practices
+
+### 1. Start Simple
+
+Begin with a minimal grammar and expand:
+
+```zyn
+// Start with just the core concepts
+program = { statement* }
+statement = { assignment | expression }
+```
+
+### 2. Leverage Existing ZRTL Plugins
+
+Don't reinvent the wheel. ZRTL provides:
+
+| Domain | Plugins |
+|--------|---------|
+| Graphics | `zrtl_window`, `zrtl_paint`, `zrtl_svg`, `zrtl_image` |
+| I/O | `zrtl_io`, `zrtl_fs` |
+| Data | `zrtl_json`, `zrtl_xml`, `zrtl_sql` |
+| Network | `zrtl_net`, `zrtl_http`, `zrtl_websocket` |
+| System | `zrtl_process`, `zrtl_thread`, `zrtl_time` |
+| Text | `zrtl_string`, `zrtl_regex` |
+| Security | `zrtl_crypto`, `zrtl_compress` |
+
+### 3. Design for Readability
+
+Your DSL syntax should be intuitive for domain experts:
+
+```
+// Good: Reads like natural language
+send email to "user@example.com" with subject "Hello"
+
+// Avoid: Too programmer-focused
+Email.send({to: "user@example.com", subject: "Hello"})
+```
+
+### 4. Provide Good Error Messages
+
+Use grammar rules to catch common mistakes:
+
+```zyn
+// Catch missing semicolons with helpful error
+statement = {
+    valid_statement ~ ";" |
+    valid_statement ~ &(statement | EOI) ~ PUSH_ERROR("missing semicolon")
+}
+```
+
+### 5. Document Runtime Symbols
+
+Create clear documentation for available runtime functions:
+
+```markdown
+## Available Functions
+
+### Drawing
+- `circle(x, y, radius)` - Draw a filled circle
+- `rect(x, y, width, height)` - Draw a filled rectangle
+- `line(x1, y1, x2, y2)` - Draw a line
+
+### Colors
+- `fill(color)` - Set fill color for shapes
+- `stroke(color)` - Set stroke color for outlines
+```
+
+## Summary
+
+Building DSLs with Zyntax gives you:
+
+1. **Full syntax control** - ZynPEG lets you design the perfect syntax for your domain
+2. **Native performance** - Compiles to optimized machine code
+3. **Rich ecosystem** - 20+ ZRTL plugins for common functionality
+4. **Easy integration** - Custom runtime plugins in Rust
+5. **Cross-platform** - Works anywhere Zyntax runs
+
+Whether you're building a configuration language, a data transformation tool, a game scripting system, or a visualization DSL, Zyntax provides the foundation to create powerful, domain-specific languages with minimal effort.

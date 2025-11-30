@@ -18,6 +18,7 @@ A comprehensive guide to building language frontends with ZynPEG.
 12. [Embedding SDK](./12-embedding-sdk.md) - Embedding Zyntax in Rust applications with native calling
 13. [Async Runtime](./13-async-runtime.md) - Promise-based async native runtime
 14. [Runtime Plugins](./14-runtime-plugins.md) - ZRTL standard library plugins (I/O, FS, Net, Thread, etc.)
+15. [Building DSLs](./15-building-dsls.md) - Creating domain-specific languages with Zyntax
 
 ## Quick Start
 
