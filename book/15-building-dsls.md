@@ -506,10 +506,11 @@ style {
 #### Option A: Via CLI
 
 ```bash
-# Run a chart program with required plugins
+# Run a chart program - only need the chart plugin
+# (it uses zrtl_paint internally via Rust imports)
 zyntax compile --grammar chart.zyn \
                --source sales_report.chart \
-               --plugins zrtl_chart,zrtl_paint,zrtl_window \
+               --plugins zrtl_chart \
                --run
 ```
 
@@ -521,10 +522,8 @@ use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut runtime = ZyntaxRuntime::new()?;
 
-    // Load the chart plugin and its dependencies
+    // Load only the chart plugin - it handles paint/window internally
     runtime.load_plugin("plugins/target/zrtl/zrtl_chart.zrtl")?;
-    runtime.load_plugin("plugins/target/zrtl/zrtl_paint.zrtl")?;
-    runtime.load_plugin("plugins/target/zrtl/zrtl_window.zrtl")?;
 
     // Load ChartLang grammar
     let grammar = LanguageGrammar::compile_zyn(include_str!("chart.zyn"))?;
@@ -538,6 +537,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+Note: The `zrtl_chart` plugin uses `zrtl_paint` internally via Rust crate dependencies (not runtime symbol lookup). This is the recommended pattern for DSL plugins - they encapsulate their dependencies and expose only domain-specific symbols like `$Chart$set_type`.
 
 The key insight: `zrtl_plugin!` **defines** what symbols a plugin exports. The runtime **loads** plugins at startup using `load_plugin()` or via the CLI `--plugins` flag. Your DSL grammar then calls those symbols (e.g., `$Chart$set_type`).
 
