@@ -109,18 +109,28 @@ circle_stmt = { "circle" ~ expr ~ expr ~ expr }
   }
 ```
 
-**Runtime integration:**
+**Running the DSL:**
 
 ```rust
-// Your DSL's runtime wrapping ZRTL plugins
-zrtl_plugin! {
-    name: "artlang_runtime",
-    symbols: [
-        // Wrapper that creates canvas + window together
-        ("$Art$setup", art_setup),
-        // Main loop that blits canvas to window
-        ("$Art$render_loop", art_render_loop),
-    ]
+use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = ZyntaxRuntime::new()?;
+
+    // Load required ZRTL plugins for graphics
+    runtime.load_plugin("plugins/target/zrtl/zrtl_paint.zrtl")?;
+    runtime.load_plugin("plugins/target/zrtl/zrtl_window.zrtl")?;
+
+    // Load the ArtLang grammar
+    let grammar = LanguageGrammar::compile_zyn(include_str!("art.zyn"))?;
+    runtime.register_grammar("artlang", grammar.clone())?;
+
+    // Compile and run
+    let source = std::fs::read_to_string("sketch.art")?;
+    runtime.compile_source(&grammar, &source)?;
+    runtime.call::<()>("sketch_main", &[])?;
+
+    Ok(())
 }
 ```
 
@@ -435,18 +445,45 @@ style {
 }
 ```
 
-### Step 4: Compile and Run
+### Step 4: Run the DSL
+
+#### Option A: Via CLI
 
 ```bash
-# Compile the grammar
-zyntax compile-grammar chart.zyn -o chart.zpeg
-
-# Run a chart program
-zyntax compile --grammar chart.zpeg \
+# Run a chart program with required plugins
+zyntax compile --grammar chart.zyn \
                --source sales_report.chart \
                --plugins zrtl_chart,zrtl_paint,zrtl_window \
                --run
 ```
+
+#### Option B: Embedded in Rust Application
+
+```rust
+use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = ZyntaxRuntime::new()?;
+
+    // Load the chart plugin and its dependencies
+    runtime.load_plugin("plugins/target/zrtl/zrtl_chart.zrtl")?;
+    runtime.load_plugin("plugins/target/zrtl/zrtl_paint.zrtl")?;
+    runtime.load_plugin("plugins/target/zrtl/zrtl_window.zrtl")?;
+
+    // Load ChartLang grammar
+    let grammar = LanguageGrammar::compile_zyn(include_str!("chart.zyn"))?;
+    runtime.register_grammar("chartlang", grammar.clone())?;
+
+    // Compile and run the chart
+    let source = std::fs::read_to_string("sales_report.chart")?;
+    runtime.compile_source(&grammar, &source)?;
+    runtime.call::<()>("render_chart", &[])?;
+
+    Ok(())
+}
+```
+
+The key insight: `zrtl_plugin!` **defines** what symbols a plugin exports. The runtime **loads** plugins at startup using `load_plugin()` or via the CLI `--plugins` flag. Your DSL grammar then calls those symbols (e.g., `$Chart$set_type`).
 
 ## Advanced Patterns
 
