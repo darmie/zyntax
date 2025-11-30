@@ -12,6 +12,11 @@ members = [
     "zrtl_json",
     "zrtl_regex",
     "zrtl_process",
+    "zrtl_crypto",
+    "zrtl_http",
+    "zrtl_compress",
+    "zrtl_sql",
+    "zrtl_websocket",
 ]
 
 [workspace.dependencies]

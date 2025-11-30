@@ -1,0 +1,18 @@
+[package]
+name = "zrtl_crypto"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL Crypto plugin - hashing, encoding, UUID generation"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }
+sha2 = "0.10"
+md-5 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+uuid = { version = "1.11", features = ["v4", "v7"] }
+getrandom = "0.2"

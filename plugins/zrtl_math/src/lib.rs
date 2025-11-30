@@ -34,26 +34,42 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use zrtl::zrtl_plugin;
 
 // ============================================================================
-// Random Number Generator (xorshift64)
+// Random Number Generator (xorshift64* with proper seeding)
 // ============================================================================
 
-static RNG_STATE: AtomicU64 = AtomicU64::new(0x853c49e6748fea9b);
+static RNG_STATE: AtomicU64 = AtomicU64::new(0);
+static RNG_INITIALIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Initialize RNG state from OS entropy
+fn init_rng() {
+    if RNG_INITIALIZED.load(Ordering::Acquire) {
+        return;
+    }
+
+    let mut seed_bytes = [0u8; 8];
+    if getrandom::getrandom(&mut seed_bytes).is_ok() {
+        let seed = u64::from_ne_bytes(seed_bytes);
+        // Ensure non-zero state
+        RNG_STATE.store(if seed != 0 { seed } else { 0x853c49e6748fea9b }, Ordering::Release);
+    } else {
+        RNG_STATE.store(0x853c49e6748fea9b, Ordering::Release);
+    }
+    RNG_INITIALIZED.store(true, Ordering::Release);
+}
 
 fn next_u64() -> u64 {
+    init_rng();
+
     let mut state = RNG_STATE.load(Ordering::Relaxed);
     if state == 0 {
-        // Seed from time if not initialized
-        state = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
-            .unwrap_or(0x853c49e6748fea9b);
+        state = 0x853c49e6748fea9b;
     }
-    // xorshift64
-    state ^= state << 13;
-    state ^= state >> 7;
-    state ^= state << 17;
+    // xorshift64*
+    state ^= state >> 12;
+    state ^= state << 25;
+    state ^= state >> 27;
     RNG_STATE.store(state, Ordering::Relaxed);
-    state
+    state.wrapping_mul(0x2545F4914F6CDD1D)
 }
 
 // ============================================================================

@@ -1,8 +1,8 @@
 [package]
-name = "zrtl_net"
+name = "zrtl_sql"
 version = "0.1.0"
 edition = "2021"
-description = "ZRTL Network plugin - TCP/UDP networking"
+description = "ZRTL SQL plugin - SQLite database operations"
 license = "Apache-2.0"
 
 [lib]
@@ -10,4 +10,5 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 zrtl = { path = "../../sdk/zrtl" }
+rusqlite = { version = "0.32", features = ["bundled"] }
 lazy_static = "1.5"

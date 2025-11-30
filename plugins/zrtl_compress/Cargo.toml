@@ -1,8 +1,8 @@
 [package]
-name = "zrtl_net"
+name = "zrtl_compress"
 version = "0.1.0"
 edition = "2021"
-description = "ZRTL Network plugin - TCP/UDP networking"
+description = "ZRTL Compress plugin - gzip, zlib, and deflate compression"
 license = "Apache-2.0"
 
 [lib]
@@ -10,4 +10,4 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 zrtl = { path = "../../sdk/zrtl" }
-lazy_static = "1.5"
+flate2 = "1.0"
