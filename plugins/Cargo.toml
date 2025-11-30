@@ -17,6 +17,12 @@ members = [
     "zrtl_compress",
     "zrtl_sql",
     "zrtl_websocket",
+    "zrtl_window",
+    "zrtl_image",
+    "zrtl_xml",
+    "zrtl_paint",
+    "zrtl_svg",
+    "zrtl_sdl",
 ]
 
 [workspace.dependencies]

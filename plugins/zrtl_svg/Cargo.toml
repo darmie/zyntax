@@ -1,0 +1,15 @@
+[package]
+name = "zrtl_svg"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL SVG plugin - SVG parsing and rendering"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }
+resvg = "0.37"
+usvg = "0.37"
+tiny-skia = "0.11"

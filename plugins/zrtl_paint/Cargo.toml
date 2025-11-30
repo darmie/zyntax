@@ -1,0 +1,13 @@
+[package]
+name = "zrtl_paint"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL Paint plugin - 2D hardware-accelerated rasterization"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }
+tiny-skia = "0.11"

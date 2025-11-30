@@ -1,0 +1,13 @@
+[package]
+name = "zrtl_xml"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL XML plugin - XML parsing and generation"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }
+quick-xml = { version = "0.31", features = ["serialize"] }
