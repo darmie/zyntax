@@ -23,6 +23,7 @@ members = [
     "zrtl_paint",
     "zrtl_svg",
     "zrtl_sdl",
+    "zrtl_simd",
 ]
 
 [workspace.dependencies]

@@ -1,0 +1,24 @@
+// basic.imgpipe - Basic image enhancement pipeline
+//
+// This example demonstrates fundamental ImagePipe operations:
+// - Loading images
+// - Applying transformations
+// - Saving results
+
+// Load the source image
+load "input.jpg" as photo
+
+// Resize for web
+resize photo to 1200x800
+
+// Enhance the image
+brighten photo by 15
+contrast photo by 1
+
+// Light blur for noise reduction
+blur photo by 0
+
+// Save the result
+save photo as "output.png"
+
+print "Basic enhancement complete!"

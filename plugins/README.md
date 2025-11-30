@@ -28,6 +28,7 @@ ZRTL (Zyntax Runtime Library) plugins provide native functionality to Zyntax pro
 | **zrtl_image** | Image loading | `$Image$load`, `$Image$decode`, `$Image$to_canvas` |
 | **zrtl_svg** | SVG rendering | `$SVG$parse`, `$SVG$render`, `$SVG$to_canvas` |
 | **zrtl_xml** | XML parsing | `$XML$parse`, `$XML$query`, `$XML$serialize` |
+| **zrtl_simd** | SIMD-accelerated compute | `$SIMD$dot_product_f32`, `$SIMD$mat4_mul`, `$SIMD$blend_rgba` |
 
 ## Building Plugins
 
@@ -118,7 +119,7 @@ See [Chapter 14: Runtime Plugins](https://github.com/darmie/zyntax/wiki/14-Runti
 
 ## Plugin Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │                    Zyntax Runtime                        │
 ├─────────────────────────────────────────────────────────┤

@@ -124,9 +124,13 @@ macro_rules! zrtl_plugin {
             concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char
         );
 
-        // Symbol table export
+        // Symbol table export - use a static array with C ABI layout
+        // The loader expects *const ZrtlSymbol (a simple pointer to the first element)
         #[no_mangle]
-        pub static _zrtl_symbols: &[$crate::ZrtlSymbol] = &[
+        pub static _zrtl_symbols: [$crate::ZrtlSymbol; {
+            // Count symbols + 1 for sentinel
+            0 $(+ { let _ = stringify!($sym_name); 1 })* + 1
+        }] = [
             $(
                 $crate::zrtl_symbol!($sym_name, $func),
             )*

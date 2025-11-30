@@ -656,6 +656,7 @@ pub struct ZyntaxRuntime {
 }
 
 /// An external function that can be called from Zyntax code
+#[derive(Clone)]
 pub struct ExternalFunction {
     /// Function name
     pub name: String,
@@ -1004,6 +1005,8 @@ impl ZyntaxRuntime {
             ptr,
             arg_count,
         });
+        // Also register with the backend so Cranelift can resolve the symbol during JIT linking
+        self.backend.register_runtime_symbol(name, ptr);
     }
 
     /// Hot-reload a function with new code
@@ -1045,6 +1048,9 @@ impl ZyntaxRuntime {
             self.register_function(name, *ptr, 0); // Arity unknown without type info
         }
 
+        // Rebuild the JIT module to include the new symbols
+        self.backend.rebuild_with_accumulated_symbols()?;
+
         Ok(())
     }
 
@@ -1066,6 +1072,9 @@ impl ZyntaxRuntime {
         for (name, ptr) in registry.collect_symbols() {
             self.register_function(name, ptr, 0);
         }
+
+        // Rebuild the JIT module to include all the new symbols
+        self.backend.rebuild_with_accumulated_symbols()?;
 
         Ok(count)
     }
@@ -1185,6 +1194,20 @@ impl ZyntaxRuntime {
     /// runtime.load_module("zig", "pub fn add(a: i32, b: i32) i32 { return a + b; }")?;
     /// ```
     pub fn register_grammar(&mut self, language: &str, grammar: LanguageGrammar) {
+        // Register builtin aliases from the grammar
+        // This maps DSL-friendly names (e.g., "image_load") to plugin symbols (e.g., "$Image$load")
+        for (alias, target) in grammar.builtins() {
+            // If the target symbol is registered, create an alias for it
+            if let Some(ext_func) = self.external_functions.get(target).cloned() {
+                self.external_functions.insert(alias.clone(), ext_func);
+            } else {
+                log::debug!(
+                    "Grammar builtin '{}' -> '{}' not found in external functions (yet)",
+                    alias, target
+                );
+            }
+        }
+
         let grammar = Arc::new(grammar);
 
         // Register file extensions from grammar metadata
@@ -1776,6 +1799,10 @@ impl TieredRuntime {
     ///
     /// See `ZyntaxRuntime::register_grammar` for full documentation.
     pub fn register_grammar(&mut self, language: &str, grammar: LanguageGrammar) {
+        // Note: Builtin aliases are resolved during parsing via ZynPEG's builtin resolution.
+        // The @builtin section in the grammar maps DSL names (e.g., "image_load") to
+        // runtime symbols (e.g., "$Image$load"). This resolution happens in the parser,
+        // not here in the runtime.
         let grammar = Arc::new(grammar);
 
         // Register file extensions from grammar metadata

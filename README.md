@@ -575,6 +575,7 @@ cargo test --test end_to_end_simple
 13. [Async Runtime](https://github.com/darmie/zyntax/wiki/13-Async-Runtime) - Promise-based async native runtime
 14. [Runtime Plugins](https://github.com/darmie/zyntax/wiki/14-Runtime-Plugins) - ZRTL standard library plugins
 15. [Building DSLs](https://github.com/darmie/zyntax/wiki/15-Building-DSLs) - Creating domain-specific languages
+16. [Tutorial: Image Pipeline DSL](https://github.com/darmie/zyntax/wiki/16-Image-Pipeline-DSL) - Step-by-step DSL tutorial
 
 ### Technical Documentation
 

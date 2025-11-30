@@ -1,0 +1,359 @@
+// imagepipe.zyn - Image Processing Pipeline DSL Grammar
+//
+// A domain-specific language for declarative image processing pipelines.
+// Uses ZRTL plugins: zrtl_image
+
+@language {
+    name: "ImagePipe",
+    version: "1.0",
+    file_extensions: [".imgpipe", ".ip"],
+    entry_point: "run_pipeline"
+}
+
+// Map DSL operations to ZRTL plugin symbols
+@builtin {
+    // Image I/O (zrtl_image)
+    image_load: "$Image$load",
+    image_save: "$Image$save",
+
+    // Transformations (zrtl_image)
+    image_resize: "$Image$resize",
+    image_crop: "$Image$crop",
+    image_rotate90: "$Image$rotate90",
+    image_rotate180: "$Image$rotate180",
+    image_rotate270: "$Image$rotate270",
+    image_flip_h: "$Image$flip_horizontal",
+    image_flip_v: "$Image$flip_vertical",
+
+    // Filters (zrtl_image)
+    image_blur: "$Image$blur",
+    image_brighten: "$Image$brighten",
+    image_contrast: "$Image$contrast",
+    image_grayscale: "$Image$grayscale",
+    image_invert: "$Image$invert",
+
+    // Console output (zrtl_io)
+    println: "$IO$println",
+}
+
+// ============================================================================
+// Program Structure
+// ============================================================================
+
+// Entry point: collect statements, then wrap in run_pipeline function
+program = { SOI ~ statements ~ EOI }
+  -> TypedProgram {
+      "get_child": { "index": 0 }
+  }
+
+// Collect all statements into a program with a single function
+statements = { statement* }
+  -> TypedProgram {
+      "get_all_children": true,
+      "define": "program",
+      "args": {
+          "declarations": [
+              { "define": "function", "args": {
+                  "name": "run_pipeline",
+                  "params": [],
+                  "return_type": "void",
+                  "body": { "define": "block", "args": {
+                      "statements": "$result"
+                  }}
+              }}
+          ]
+      }
+  }
+
+// Statements in the DSL
+statement = {
+    load_stmt |
+    save_stmt |
+    resize_stmt |
+    crop_stmt |
+    rotate_stmt |
+    flip_stmt |
+    blur_stmt |
+    brightness_stmt |
+    contrast_stmt |
+    grayscale_stmt |
+    invert_stmt |
+    print_stmt
+}
+  -> TypedStatement {
+      "get_child": { "index": 0 }
+  }
+
+// ============================================================================
+// Load Statement
+// ============================================================================
+
+// load "image.jpg" as varname
+// $1 = string_literal (path), $2 = identifier (variable name as text)
+load_stmt = { "load" ~ string_literal ~ "as" ~ identifier }
+  -> TypedStatement {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$2",
+              "type": { "define": "primitive_type", "args": { "name": "u64" } },
+              "init": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_load" } },
+                  "args": ["$1"]
+              }},
+              "is_const": false
+          }}
+      ]
+  }
+
+// ============================================================================
+// Save Statement
+// ============================================================================
+
+// save varname as "output.png"
+// $1 = identifier (variable name as text), $2 = string_literal (path)
+save_stmt = { "save" ~ identifier ~ "as" ~ string_literal }
+  -> TypedStatement {
+      "commands": [
+          { "define": "expression_stmt", "args": {
+              "expr": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_save" } },
+                  "args": [
+                      { "define": "variable", "args": { "name": "$1" } },
+                      "$2"
+                  ]
+              }}
+          }}
+      ]
+  }
+
+// ============================================================================
+// Print Statement
+// ============================================================================
+
+// print "message"
+print_stmt = { "print" ~ string_literal }
+  -> TypedStatement {
+      "commands": [
+          { "define": "expression_stmt", "args": {
+              "expr": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "println" } },
+                  "args": ["$1"]
+              }}
+          }}
+      ]
+  }
+
+// ============================================================================
+// Transformation Operations
+// ============================================================================
+
+// resize varname to 800x600
+// $1 = identifier (image), $2 = integer (width), $3 = integer (height)
+resize_stmt = { "resize" ~ identifier ~ "to" ~ integer ~ "x" ~ integer }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_resize" } },
+                  "args": [
+                      { "define": "variable", "args": { "name": "$1" } },
+                      "$2",
+                      "$3"
+                  ]
+              }}
+          }}
+      ]
+  }
+
+// crop varname from 0,0 to 400,300
+// $1 = identifier, $2,$3 = start x,y, $4,$5 = end x,y
+crop_stmt = { "crop" ~ identifier ~ "from" ~ integer ~ "," ~ integer ~ "to" ~ integer ~ "," ~ integer }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_crop" } },
+                  "args": [
+                      { "define": "variable", "args": { "name": "$1" } },
+                      "$2",
+                      "$3",
+                      "$4",
+                      "$5"
+                  ]
+              }}
+          }}
+      ]
+  }
+
+// rotate varname 90
+// $1 = identifier, $2 = angle literal
+rotate_stmt = { "rotate" ~ identifier ~ ("90" | "180" | "270") }
+  -> TypedStatement {
+      "get_text": true,
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_rotate90" } },
+                  "args": [{ "define": "variable", "args": { "name": "$1" } }]
+              }}
+          }}
+      ]
+  }
+
+// flip varname horizontal
+// $1 = identifier, direction is captured in text
+flip_stmt = { "flip" ~ identifier ~ ("horizontal" | "vertical") }
+  -> TypedStatement {
+      "get_text": true,
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_flip_h" } },
+                  "args": [{ "define": "variable", "args": { "name": "$1" } }]
+              }}
+          }}
+      ]
+  }
+
+// ============================================================================
+// Filter Operations
+// ============================================================================
+
+// blur varname by 2.5
+// $1 = identifier, $2 = number (sigma)
+blur_stmt = { "blur" ~ identifier ~ "by" ~ number }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_blur" } },
+                  "args": [
+                      { "define": "variable", "args": { "name": "$1" } },
+                      "$2"
+                  ]
+              }}
+          }}
+      ]
+  }
+
+// brighten varname by 30
+// $1 = identifier, $2 = signed_integer (amount)
+brightness_stmt = { "brighten" ~ identifier ~ "by" ~ signed_integer }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_brighten" } },
+                  "args": [
+                      { "define": "variable", "args": { "name": "$1" } },
+                      "$2"
+                  ]
+              }}
+          }}
+      ]
+  }
+
+// contrast varname by 1.5
+// $1 = identifier, $2 = number (factor)
+contrast_stmt = { "contrast" ~ identifier ~ "by" ~ number }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_contrast" } },
+                  "args": [
+                      { "define": "variable", "args": { "name": "$1" } },
+                      "$2"
+                  ]
+              }}
+          }}
+      ]
+  }
+
+// grayscale varname
+// $1 = identifier
+grayscale_stmt = { "grayscale" ~ identifier }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_grayscale" } },
+                  "args": [{ "define": "variable", "args": { "name": "$1" } }]
+              }}
+          }}
+      ]
+  }
+
+// invert varname
+// $1 = identifier
+invert_stmt = { "invert" ~ identifier }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": { "define": "call", "args": {
+                  "callee": { "define": "variable", "args": { "name": "image_invert" } },
+                  "args": [{ "define": "variable", "args": { "name": "$1" } }]
+              }}
+          }}
+      ]
+  }
+
+// ============================================================================
+// Terminals
+// ============================================================================
+
+// String literal: "hello world"
+string_literal = @{ "\"" ~ string_inner* ~ "\"" }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "string_literal",
+      "args": { "value": "$result" }
+  }
+
+string_inner = { !("\"" | "\\") ~ ANY | "\\" ~ ANY }
+
+// Integer: 123
+integer = @{ ASCII_DIGIT+ }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_int": true,
+      "define": "int_literal",
+      "args": { "value": "$result" }
+  }
+
+// Signed integer: +30 or -20 or 15
+signed_integer = @{ ("+" | "-")? ~ ASCII_DIGIT+ }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_int": true,
+      "define": "int_literal",
+      "args": { "value": "$result" }
+  }
+
+// Floating point: 1.5 or 1 or 0.5
+number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_float": true,
+      "define": "float_literal",
+      "args": { "value": "$result" }
+  }
+
+// Identifier: my_image
+identifier = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+  -> String {
+      "get_text": true
+  }
+
+// Whitespace and comments (ignored)
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* }

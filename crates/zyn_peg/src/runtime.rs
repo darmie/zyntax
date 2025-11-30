@@ -2672,6 +2672,36 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
         }
     }
 
+    /// Unescape a string literal, processing escape sequences
+    fn unescape_string(s: &str) -> String {
+        let mut result = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => result.push('\n'),
+                    Some('r') => result.push('\r'),
+                    Some('t') => result.push('\t'),
+                    Some('\\') => result.push('\\'),
+                    Some('"') => result.push('"'),
+                    Some('\'') => result.push('\''),
+                    Some('0') => result.push('\0'),
+                    Some(other) => {
+                        // Unknown escape, keep as-is
+                        result.push('\\');
+                        result.push(other);
+                    }
+                    None => result.push('\\'),
+                }
+            } else {
+                result.push(c);
+            }
+        }
+
+        result
+    }
+
     /// Get the host functions (consuming the interpreter)
     pub fn into_host(self) -> H {
         self.host
@@ -3142,7 +3172,17 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => String::new(),
                 };
-                let handle = self.host.create_string_literal(&value);
+                // Strip surrounding quotes if present (from grammar capture)
+                let stripped = if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
+                    &value[1..value.len()-1]
+                } else if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2 {
+                    &value[1..value.len()-1]
+                } else {
+                    &value
+                };
+                // Process escape sequences
+                let unescaped = Self::unescape_string(stripped);
+                let handle = self.host.create_string_literal(&unescaped);
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -3516,7 +3556,12 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     None => vec![],
                     _ => vec![],
                 };
-                let handle = self.host.create_call(callee, call_args);
+                // Use builtin resolution to map function names to runtime symbols
+                let handle = self.host.create_call_with_builtin_resolution(
+                    callee,
+                    call_args,
+                    &self.module.metadata.builtins,
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 

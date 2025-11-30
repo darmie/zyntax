@@ -12,6 +12,7 @@ members = [
     "crates/zyntax_embed",
     "sdk/zrtl",
     "sdk/zrtl_macros",
+    "examples/imagepipe",
 ]
 
 

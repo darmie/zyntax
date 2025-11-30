@@ -1,0 +1,20 @@
+// vintage.imgpipe - Apply vintage/retro photo effect
+//
+// Creates a nostalgic look with:
+// - Reduced contrast for faded look
+// - Blur for soft focus
+// - Darker brightness
+
+load "PXL_20251101_145444778.jpg" as photo
+
+// Resize for consistent processing
+resize photo to 800x1200
+
+// Vintage effect chain - more dramatic settings
+contrast photo by -50
+brighten photo by -30
+blur photo by 3
+
+save photo as "vintage_rotunda.png"
+
+print "Vintage effect applied!"

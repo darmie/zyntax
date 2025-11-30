@@ -1,0 +1,27 @@
+// thumbnail.imgpipe - Generate multiple thumbnail sizes
+//
+// Creates thumbnails for different use cases:
+// - Small icon
+// - List thumbnail
+// - Preview image
+
+// Load the original high-res image
+load "original.png" as img
+
+// Create small icon (grayscale)
+resize img to 64x64
+grayscale img
+save img as "icon.png"
+
+// Reload for list thumbnail
+load "original.png" as thumb
+resize thumb to 150x150
+save thumb as "thumbnail.png"
+
+// Reload for preview
+load "original.png" as preview
+resize preview to 400x300
+brighten preview by 5
+save preview as "preview.png"
+
+print "Thumbnails generated!"

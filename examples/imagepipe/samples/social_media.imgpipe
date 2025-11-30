@@ -1,0 +1,30 @@
+// social_media.imgpipe - Export images for social media platforms
+//
+// Creates properly-sized images for:
+// - Instagram (square post)
+// - Twitter (header image)
+// - Facebook (cover photo)
+// - LinkedIn (banner)
+
+// Instagram square post (1080x1080)
+load "banner.png" as instagram
+resize instagram to 1080x1080
+contrast instagram by 1
+save instagram as "social/instagram.png"
+
+// Twitter header (1500x500)
+load "banner.png" as twitter
+resize twitter to 1500x500
+save twitter as "social/twitter.png"
+
+// Facebook cover (820x312)
+load "banner.png" as facebook
+resize facebook to 820x312
+save facebook as "social/facebook.png"
+
+// LinkedIn banner (1584x396)
+load "banner.png" as linkedin
+resize linkedin to 1584x396
+save linkedin as "social/linkedin.png"
+
+print "Social media exports complete!"

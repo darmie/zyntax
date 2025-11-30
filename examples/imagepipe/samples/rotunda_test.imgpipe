@@ -1,0 +1,35 @@
+// rotunda_test.imgpipe - Test pipeline with the Rotunda building image
+//
+// This test demonstrates various ImagePipe operations on a real photograph
+
+// Load the Rotunda building photo
+load "rotunda.jpg" as building
+
+// Resize for web display
+resize building to 800x1200
+
+// Enhance the image
+brighten building by 10
+contrast building by 1
+
+// Save enhanced version
+save building as "rotunda_enhanced.png"
+
+print "Enhanced version saved!"
+
+// Create a grayscale version
+load "rotunda.jpg" as bw
+resize bw to 800x1200
+grayscale bw
+save bw as "rotunda_grayscale.png"
+
+print "Grayscale version saved!"
+
+// Create a thumbnail
+load "rotunda.jpg" as thumb
+resize thumb to 200x300
+save thumb as "rotunda_thumb.jpg"
+
+print "Thumbnail saved!"
+
+print "All processing complete!"

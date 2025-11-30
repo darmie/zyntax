@@ -1,0 +1,34 @@
+// transform.imgpipe - Geometric transformations
+//
+// Demonstrates rotation, flipping, and cropping
+
+load "landscape.jpg" as img
+
+// Rotate 90 degrees clockwise
+rotate img 90
+save img as "rotated_90.png"
+
+// Reset and flip horizontally
+load "landscape.jpg" as img2
+flip img2 horizontal
+save img2 as "flipped_h.png"
+
+// Reset and flip vertically
+load "landscape.jpg" as img3
+flip img3 vertical
+save img3 as "flipped_v.png"
+
+// Crop a region (coordinates: from x,y to x,y)
+load "landscape.jpg" as img4
+crop img4 from 100,100 to 500,400
+save img4 as "cropped.png"
+
+// Combined transformations
+load "landscape.jpg" as combo
+resize combo to 800x600
+crop combo from 50,50 to 750,550
+rotate combo 180
+brighten combo by 20
+save combo as "combined.png"
+
+print "Transformations complete!"

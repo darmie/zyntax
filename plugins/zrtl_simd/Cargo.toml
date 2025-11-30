@@ -1,0 +1,15 @@
+[package]
+name = "zrtl_simd"
+version = "0.1.0"
+edition = "2021"
+description = "SIMD-accelerated compute kernels for Zyntax runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# ZRTL SDK for plugin macro
+zrtl = { path = "../../sdk/zrtl" }
+
+# SIMD support with runtime feature detection
+wide = "0.7"

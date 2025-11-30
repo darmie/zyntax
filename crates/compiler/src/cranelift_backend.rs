@@ -929,15 +929,40 @@ impl CraneliftBackend {
                                     }
                                 }
                                 HirCallable::Symbol(symbol_name) => {
-                                    // Call external runtime symbol by name (e.g., "$haxe$trace$int")
+                                    // Call external runtime symbol by name (e.g., "$Image$load")
                                     // Create signature based on argument types
                                     let mut sig = self.module.make_signature();
                                     for arg_val in &arg_values {
                                         let arg_ty = builder.func.dfg.value_type(*arg_val);
                                         sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
                                     }
-                                    // Assume void return for now (can be enhanced later)
-                                    // sig.returns.push(cranelift_codegen::ir::AbiParam::new(types::I32));
+
+                                    // Determine return type from the result value's HIR type
+                                    let return_cranelift_ty = if let Some(result_id) = result {
+                                        // Look up the HIR type for the result value
+                                        if let Some(value) = function.values.get(result_id) {
+                                            // Map HIR type to Cranelift type inline
+                                            let ty = match &value.ty {
+                                                HirType::I32 => types::I32,
+                                                HirType::I64 => types::I64,
+                                                HirType::F32 => types::F32,
+                                                HirType::F64 => types::F64,
+                                                HirType::Bool => types::I8,
+                                                HirType::Ptr(_) => types::I64,
+                                                _ => types::I64, // Default to i64 for handles/complex types
+                                            };
+                                            Some(ty)
+                                        } else {
+                                            // Default to i64 for unknown external call results
+                                            Some(types::I64)
+                                        }
+                                    } else {
+                                        None
+                                    };
+
+                                    if let Some(ret_ty) = return_cranelift_ty {
+                                        sig.returns.push(cranelift_codegen::ir::AbiParam::new(ret_ty));
+                                    }
 
                                     let func = self.module
                                         .declare_function(symbol_name, Linkage::Import, &sig)
@@ -952,8 +977,9 @@ impl CraneliftBackend {
                                         if let Some(&ret_val) = builder.inst_results(call).first() {
                                             self.value_map.insert(*result_id, ret_val);
                                         } else {
-                                            // No return value - store dummy
-                                            self.value_map.insert(*result_id, builder.ins().iconst(types::I32, 0));
+                                            // No return value - store dummy with correct type
+                                            let dummy_ty = return_cranelift_ty.unwrap_or(types::I32);
+                                            self.value_map.insert(*result_id, builder.ins().iconst(dummy_ty, 0));
                                         }
                                     }
                                 }
@@ -2050,7 +2076,7 @@ impl CraneliftBackend {
 
             info!("Vtable with {} methods emitted with function pointer relocations", vtable.methods.len());
         } else if let Some(HirConstant::String(s)) = &global.initializer {
-            // String constants - emit as Haxe String format: [length: i32][utf8_bytes...]
+            // String constants - emit as ZRTL String format: [length: i32][utf8_bytes...]
             let string_val = s.resolve_global()
                 .ok_or_else(|| CompilerError::CodeGen(format!("Failed to resolve string constant: {:?}", s)))?;
 
@@ -2058,11 +2084,13 @@ impl CraneliftBackend {
             let bytes = string_val.as_bytes();
             let length = bytes.len() as i32;
 
-            // Create Haxe String structure: length header (i32) + UTF-8 bytes
+            // Create ZRTL String structure: length header (i32) + UTF-8 bytes
             let mut data = Vec::with_capacity(4 + bytes.len());
             data.extend_from_slice(&length.to_le_bytes()); // Length as little-endian i32
             data.extend_from_slice(bytes);
 
+            // Set 4-byte alignment for the i32 length header
+            self.data_desc.set_align(4);
             self.data_desc.define(data.into_boxed_slice());
         } else if global.initializer.is_some() {
             // Other constants - emit as zeroinit placeholder for now
