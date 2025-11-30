@@ -60,7 +60,7 @@ Traditional DSL approaches have trade-offs:
 
 Leverage `zrtl_paint` and `zrtl_window` to create a Processing/p5.js-style creative coding language:
 
-```
+```text
 // sketch.art - Creative coding DSL
 
 canvas 800 600
@@ -89,25 +89,49 @@ line 0 550 800 550
     entry_point: "sketch_main"
 }
 
+// Map DSL builtins to ZRTL symbols
+@builtin {
+    canvas_create: "$Paint$canvas_create",
+    fill_circle: "$Paint$fill_circle",
+    fill_rect: "$Paint$fill_rect",
+    set_color: "$Paint$rgb",
+}
+
 canvas_stmt = { "canvas" ~ integer ~ integer }
   -> TypedStatement {
-      "call_runtime": "$Paint$canvas_create",
-      "args": ["$1", "$2"],
-      "store_result": "canvas"
+      "commands": [
+          { "define": "var_decl", "args": {
+              "name": "canvas",
+              "value": { "define": "call", "args": {
+                  "callee": "canvas_create",
+                  "args": ["$1", "$2"]
+              }}
+          }}
+      ]
   }
 
 fill_stmt = { "fill" ~ color }
   -> TypedStatement {
-      "call_runtime": "$Paint$set_fill_color",
-      "args": ["canvas", "$color"]
+      "commands": [
+          { "define": "var_decl", "args": {
+              "name": "fill_color",
+              "value": "$1"
+          }}
+      ]
   }
 
 circle_stmt = { "circle" ~ expr ~ expr ~ expr }
   -> TypedStatement {
-      "call_runtime": "$Paint$fill_circle",
-      "args": ["canvas", "$1", "$2", "$3", "fill_color"]
+      "commands": [
+          { "define": "call", "args": {
+              "callee": "fill_circle",
+              "args": ["canvas", "$1", "$2", "$3", "fill_color"]
+          }}
+      ]
   }
 ```
+
+The grammar builds TypedAST nodes (`var_decl`, `call`) that reference `@builtin` symbols. During compilation, these resolve to ZRTL plugin functions like `$Paint$fill_circle`.
 
 **Running the DSL:**
 
@@ -138,7 +162,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Create a language for ETL and data transformation:
 
-```
+```text
 // pipeline.flow - Data transformation DSL
 
 source "data/sales.csv" as sales
@@ -164,6 +188,7 @@ output "reports/summary.json"
 ```
 
 **Leveraging ZRTL plugins:**
+
 - `zrtl_fs` for file I/O
 - `zrtl_json` for JSON parsing/generation
 - `zrtl_string` for text manipulation
@@ -173,7 +198,7 @@ output "reports/summary.json"
 
 A simplified HDL for education or prototyping:
 
-```
+```text
 // counter.hdl - Hardware description
 
 module counter(clk: clock, reset: bit, out: bits[8]) {
@@ -195,7 +220,7 @@ module counter(clk: clock, reset: bit, out: bits[8]) {
 
 A language for game logic with built-in entity/component concepts:
 
-```
+```text
 // player.game - Game entity script
 
 entity Player {
@@ -217,6 +242,7 @@ entity Player {
 ```
 
 **Runtime using ZRTL:**
+
 - `zrtl_window` for windowing/input
 - `zrtl_paint` for 2D rendering
 - `zrtl_image` for sprite loading
@@ -226,7 +252,7 @@ entity Player {
 
 A type-safe configuration language:
 
-```
+```text
 // app.config - Typed configuration
 
 database {
@@ -268,59 +294,89 @@ Let's build a simple **charting DSL** that generates visualizations:
     entry_point: "render_chart"
 }
 
+// Map builtins to chart plugin symbols
+@builtin {
+    chart_set_type: "$Chart$set_type",
+    chart_set_title: "$Chart$set_title",
+    chart_add_data: "$Chart$add_data",
+    chart_set_style: "$Chart$set_style",
+    chart_render: "$Chart$render",
+}
+
 // Entry point
 program = { SOI ~ chart_definition ~ EOI }
-  -> TypedModule {
-      "create_main": "render_chart",
-      "body": "$chart_definition"
+  -> TypedProgram {
+      "get_child": { "index": 0 }
   }
 
 chart_definition = { chart_type ~ title? ~ data_section ~ style_section? }
-  -> TypedFunction {
-      "name": "render_chart",
-      "body": ["$chart_type", "$title", "$data_section", "$style_section"]
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "render_chart",
+              "params": [],
+              "return_type": "void",
+              "body": { "get_all_children": true }
+          }}
+      ]
   }
 
 chart_type = { ("bar" | "line" | "pie") ~ "chart" }
   -> TypedStatement {
-      "call_runtime": "$Chart$set_type",
-      "args": ["$1"]
+      "commands": [
+          { "define": "call", "args": {
+              "callee": "chart_set_type",
+              "args": [{ "get_text": true }]
+          }}
+      ]
   }
 
 title = { "title" ~ string_literal }
   -> TypedStatement {
-      "call_runtime": "$Chart$set_title",
-      "args": ["$string_literal"]
+      "commands": [
+          { "define": "call", "args": {
+              "callee": "chart_set_title",
+              "args": ["$1"]
+          }}
+      ]
   }
 
 data_section = { "data" ~ "{" ~ data_point* ~ "}" }
   -> TypedBlock {
-      "statements": "$data_point"
+      "get_all_children": true
   }
 
 data_point = { string_literal ~ ":" ~ number }
   -> TypedStatement {
-      "call_runtime": "$Chart$add_data",
-      "args": ["$string_literal", "$number"]
+      "commands": [
+          { "define": "call", "args": {
+              "callee": "chart_add_data",
+              "args": ["$1", "$2"]
+          }}
+      ]
   }
 
 style_section = { "style" ~ "{" ~ style_prop* ~ "}" }
   -> TypedBlock {
-      "statements": "$style_prop"
+      "get_all_children": true
   }
 
 style_prop = { identifier ~ ":" ~ (color | number | string_literal) }
   -> TypedStatement {
-      "call_runtime": "$Chart$set_style",
-      "args": ["$identifier", "$2"]
+      "commands": [
+          { "define": "call", "args": {
+              "callee": "chart_set_style",
+              "args": ["$1", "$2"]
+          }}
+      ]
   }
 
 // Terminals
 string_literal = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
-  -> String { "get_text": true, "trim_quotes": true }
+  -> String { "get_text": true }
 
 number = @{ "-"? ~ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
-  -> Number { "get_text": true, "parse_float": true }
+  -> Number { "parse_float": true }
 
 color = @{ "#" ~ ASCII_HEX_DIGIT{6} }
   -> Color { "get_text": true }
@@ -425,7 +481,7 @@ zrtl_plugin! {
 
 ### Step 3: Write DSL Programs
 
-```
+```text
 // sales_report.chart
 
 bar chart
@@ -536,7 +592,7 @@ zrtl_plugin! {
 }
 ```
 
-```
+```text
 // In your DSL
 user = App.get_user()
 if user.is_admin {
@@ -574,7 +630,7 @@ Don't reinvent the wheel. ZRTL provides:
 
 Your DSL syntax should be intuitive for domain experts:
 
-```
+```text
 // Good: Reads like natural language
 send email to "user@example.com" with subject "Hello"
 
