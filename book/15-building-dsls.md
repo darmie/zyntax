@@ -546,18 +546,53 @@ The key insight: `zrtl_plugin!` **defines** what symbols a plugin exports. The r
 
 ### Domain-Specific Type Systems
 
-Your DSL can have its own type system that maps to Zyntax's TypedAST:
+Your DSL can have its own type system that maps to Zyntax's TypedAST types:
 
 ```zyn
-// Define custom types in your grammar
+// Define custom types that map to underlying TypedAST types
 type_annotation = { ":" ~ custom_type }
+  -> Type {
+      "get_child": { "index": 0 }
+  }
 
-custom_type = {
-    "Currency" |    // Maps to f64 with formatting
-    "Percentage" |  // Maps to f64 with 0-100 range
-    "Date" |        // Maps to i64 timestamp
-    "Duration"      // Maps to i64 milliseconds
-}
+custom_type = { "Currency" | "Percentage" | "Date" | "Duration" }
+  -> Type {
+      "commands": [
+          { "define": "type_alias", "args": {
+              "name": { "get_text": true },
+              "underlying": {
+                  // Map DSL types to TypedAST primitive types
+                  "match": {
+                      "Currency": "f64",
+                      "Percentage": "f64",
+                      "Date": "i64",
+                      "Duration": "i64"
+                  }
+              }
+          }}
+      ]
+  }
+
+// Variable declaration with custom type
+var_decl = { "let" ~ identifier ~ type_annotation ~ "=" ~ expr }
+  -> TypedStatement {
+      "commands": [
+          { "define": "var_decl", "args": {
+              "name": "$1",
+              "type": "$2",
+              "value": "$3"
+          }}
+      ]
+  }
+```
+
+This allows DSL code like:
+
+```text
+let price: Currency = 99.99
+let discount: Percentage = 15
+let created: Date = now()
+let timeout: Duration = 5000
 ```
 
 ### Compile-Time Validation
