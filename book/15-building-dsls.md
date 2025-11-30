@@ -546,34 +546,35 @@ The key insight: `zrtl_plugin!` **defines** what symbols a plugin exports. The r
 
 ### Domain-Specific Type Systems
 
-Your DSL can have its own type system that maps to Zyntax's TypedAST types:
+Your DSL can parse custom type names and map them to TypedAST primitive types. The grammar handles parsing while semantic actions build the AST:
 
 ```zyn
-// Define custom types that map to underlying TypedAST types
-type_annotation = { ":" ~ custom_type }
+// Parse type annotations - dispatch to the matched child
+type_annotation = { ":" ~ type_expr }
   -> Type {
       "get_child": { "index": 0 }
   }
 
-custom_type = { "Currency" | "Percentage" | "Date" | "Duration" }
+// Type expression - each alternative produces a type
+type_expr = { primitive_type | custom_type }
   -> Type {
-      "commands": [
-          { "define": "type_alias", "args": {
-              "name": { "get_text": true },
-              "underlying": {
-                  // Map DSL types to TypedAST primitive types
-                  "match": {
-                      "Currency": "f64",
-                      "Percentage": "f64",
-                      "Date": "i64",
-                      "Duration": "i64"
-                  }
-              }
-          }}
-      ]
+      "get_child": { "index": 0 }
   }
 
-// Variable declaration with custom type
+// Standard primitive types
+primitive_type = { "i32" | "i64" | "f32" | "f64" | "bool" | "void" }
+  -> Type {
+      "get_text": true
+  }
+
+// DSL-specific type names that compile to primitives
+// Currency/Percentage → f64, Date/Duration → i64
+custom_type = { "Currency" | "Percentage" | "Date" | "Duration" }
+  -> Type {
+      "get_text": true
+  }
+
+// Variable declaration using type annotation
 var_decl = { "let" ~ identifier ~ type_annotation ~ "=" ~ expr }
   -> TypedStatement {
       "commands": [
@@ -586,7 +587,7 @@ var_decl = { "let" ~ identifier ~ type_annotation ~ "=" ~ expr }
   }
 ```
 
-This allows DSL code like:
+The type mapping (Currency → f64, Date → i64) happens during compilation. Your DSL plugin can validate and transform types as needed. This allows DSL code like:
 
 ```text
 let price: Currency = 99.99
