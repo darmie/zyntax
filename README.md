@@ -10,6 +10,26 @@
 
 ---
 
+## Quick Start
+
+New to Zyntax? **Read [The Zyn Book](https://github.com/darmie/zyntax/wiki)** - a comprehensive guide covering everything from basic grammar syntax to building complete DSLs with runtime plugins.
+
+```bash
+# Build zyntax
+cargo build --release
+
+# Compile and run a Zig file using the zig.zyn grammar
+./target/release/zyntax compile \
+    --grammar crates/zyn_peg/grammars/zig.zyn \
+    --source examples/hello.zig \
+    --run
+
+# Start an interactive REPL
+./target/release/zyntax repl --grammar crates/zyn_peg/grammars/zig.zyn
+```
+
+---
+
 ## 🎯 What is Zyntax?
 
 **Zyntax is a complete compiler infrastructure and runtime framework** designed for building high-performance, memory-safe programming languages. It provides:
@@ -403,12 +423,15 @@ See [Embedding SDK Documentation](./book/12-embedding-sdk.md) for complete guide
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Development Setup
 
 ```bash
 # Clone the repository
 git clone https://github.com/darmie/zyntax.git
 cd zyntax
+
+# Build the compiler
+cargo build --release
 
 # Run tests
 cargo test
@@ -416,9 +439,6 @@ cargo test
 # Run comprehensive end-to-end tests
 cargo test --test end_to_end_comprehensive
 cargo test --test end_to_end_simple
-
-# Build the compiler
-cargo build --release
 ```
 
 ---
@@ -535,6 +555,28 @@ cargo build --release
 ---
 
 ## 📚 Documentation
+
+### The Zyn Book
+
+**[The Zyn Book](https://github.com/darmie/zyntax/wiki)** is the comprehensive guide to Zyntax:
+
+1. [Introduction](https://github.com/darmie/zyntax/wiki/01-Introduction) - What is Zyn and why use it?
+2. [Getting Started](https://github.com/darmie/zyntax/wiki/02-Getting-Started) - Your first Zyn grammar
+3. [Using the CLI](https://github.com/darmie/zyntax/wiki/03-Using-the-CLI) - Compilation, execution, and REPL
+4. [Grammar Syntax](https://github.com/darmie/zyntax/wiki/04-Grammar-Syntax) - PEG-based grammar rules
+5. [Semantic Actions](https://github.com/darmie/zyntax/wiki/05-Semantic-Actions) - JSON command blocks
+6. [The TypedAST](https://github.com/darmie/zyntax/wiki/06-The-TypedAST) - Understanding the target representation
+7. [TypedAST Builder](https://github.com/darmie/zyntax/wiki/07-TypedAST-Builder) - Building AST nodes programmatically
+8. [Complete Example: Zig](https://github.com/darmie/zyntax/wiki/08-Zig-Example) - A real-world grammar walkthrough
+9. [Reference](https://github.com/darmie/zyntax/wiki/09-Reference) - Command reference and API
+10. [Packaging & Distribution](https://github.com/darmie/zyntax/wiki/10-Packaging-Distribution) - ZPack format, AOT linking
+11. [HIR Builder](https://github.com/darmie/zyntax/wiki/11-HIR-Builder) - Building HIR directly for custom backends
+12. [Embedding SDK](https://github.com/darmie/zyntax/wiki/12-Embedding-SDK) - Embedding Zyntax in Rust applications
+13. [Async Runtime](https://github.com/darmie/zyntax/wiki/13-Async-Runtime) - Promise-based async native runtime
+14. [Runtime Plugins](https://github.com/darmie/zyntax/wiki/14-Runtime-Plugins) - ZRTL standard library plugins
+15. [Building DSLs](https://github.com/darmie/zyntax/wiki/15-Building-DSLs) - Creating domain-specific languages
+
+### Technical Documentation
 
 - **[Architecture Guide](docs/ARCHITECTURE.md)** - Complete system architecture
 - **[HIR Builder Example](docs/HIR_BUILDER_EXAMPLE.md)** - How to construct HIR programmatically

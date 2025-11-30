@@ -37,6 +37,8 @@ jobs:
           cp book/11-hir-builder.md wiki/11-HIR-Builder.md
           cp book/12-embedding-sdk.md wiki/12-Embedding-SDK.md
           cp book/13-async-runtime.md wiki/13-Async-Runtime.md
+          cp book/14-runtime-plugins.md wiki/14-Runtime-Plugins.md
+          cp book/15-building-dsls.md wiki/15-Building-DSLs.md
 
           # Fix internal links for wiki format
           sed -i 's|\./01-introduction\.md|01-Introduction|g' wiki/*.md
@@ -52,6 +54,8 @@ jobs:
           sed -i 's|\./11-hir-builder\.md|11-HIR-Builder|g' wiki/*.md
           sed -i 's|\./12-embedding-sdk\.md|12-Embedding-SDK|g' wiki/*.md
           sed -i 's|\./13-async-runtime\.md|13-Async-Runtime|g' wiki/*.md
+          sed -i 's|\./14-runtime-plugins\.md|14-Runtime-Plugins|g' wiki/*.md
+          sed -i 's|\./15-building-dsls\.md|15-Building-DSLs|g' wiki/*.md
 
       - name: Upload wiki
         uses: Andrew-Chen-Wang/github-wiki-action@v4
