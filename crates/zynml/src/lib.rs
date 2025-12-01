@@ -375,4 +375,147 @@ mod tests {
         "#);
         assert!(result.is_ok(), "Should parse control flow: {:?}", result.err());
     }
+
+    #[test]
+    fn test_runtime_with_plugins() {
+        use std::path::Path;
+
+        // Find plugins directory relative to workspace root
+        let plugins_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()  // crates/
+            .unwrap()
+            .parent()  // workspace root
+            .unwrap()
+            .join("plugins/target/zrtl");
+
+        if !plugins_dir.exists() {
+            eprintln!("Skipping runtime test: plugins not built at {:?}", plugins_dir);
+            return;
+        }
+
+        let config = ZynMLConfig {
+            plugins_dir: plugins_dir.to_string_lossy().to_string(),
+            load_optional: false,
+            verbose: true,
+        };
+
+        // Create runtime (this loads plugins and registers grammar)
+        let runtime_result = ZynML::with_config(config);
+        assert!(runtime_result.is_ok(), "Should create runtime: {:?}", runtime_result.err());
+
+        let zynml = runtime_result.unwrap();
+
+        // Verify plugins are recognized
+        assert!(zynml.has_plugin("zrtl_tensor"), "Should have tensor plugin");
+        assert!(zynml.has_plugin("zrtl_audio"), "Should have audio plugin");
+        assert!(zynml.has_plugin("zrtl_vector"), "Should have vector plugin");
+    }
+
+    #[test]
+    fn test_parse_hello_example() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+
+        // Parse the hello.zynml example
+        let source = r#"
+            fn main() {
+                println("Hello from ZynML!")
+
+                let x = tensor([1.0, 2.0, 3.0, 4.0])
+                let y = tensor([5.0, 6.0, 7.0, 8.0])
+
+                let dot = vec_dot(x, y)
+                println("Dot product: ")
+
+                let matrix = tensor([[1.0, 2.0], [3.0, 4.0]])
+
+                let sum = tensor_sum(matrix)
+                let mean = tensor_mean(matrix)
+
+                println("Sum: ")
+                println("Mean: ")
+                println("Done!")
+            }
+        "#;
+
+        let result = grammar.parse_to_json(source);
+        assert!(result.is_ok(), "Should parse hello example: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_audio_pipeline_example() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+
+        // Parse the audio_pipeline.zynml example
+        let source = r#"
+            fn main() {
+                println("=== ZynML Audio Pipeline ===")
+
+                let audio = audio_load("test.wav")
+
+                let sr = audio_sample_rate(audio)
+                let duration = audio_duration(audio)
+
+                println("Sample rate: ")
+                println("Duration: ")
+
+                let resampled = audio |> resample(16000)
+                let mono = resampled |> to_mono()
+                let normalized = mono |> normalize()
+                let mel = normalized |> mel_spectrogram(80, 400, 160)
+
+                println("Mel spectrogram extracted")
+                println("Ready for ML model input")
+
+                audio_free(audio)
+            }
+        "#;
+
+        let result = grammar.parse_to_json(source);
+        assert!(result.is_ok(), "Should parse audio pipeline example: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_vector_search_example() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+
+        // Parse the vector_search.zynml example
+        let source = r#"
+            fn main() {
+                println("=== ZynML Vector Search ===")
+
+                let doc1 = tensor([0.1, 0.2, 0.3, 0.4])
+                let doc2 = tensor([0.5, 0.1, 0.2, 0.1])
+                let doc3 = tensor([0.2, 0.3, 0.4, 0.5])
+
+                doc1 |> vec_normalize()
+                doc2 |> vec_normalize()
+                doc3 |> vec_normalize()
+
+                let index = flat_create(4)
+
+                flat_add(index, 1, doc1)
+                flat_add(index, 2, doc2)
+                flat_add(index, 3, doc3)
+
+                println("Added 3 documents to index")
+
+                let query = tensor([0.15, 0.25, 0.35, 0.45])
+                query |> vec_normalize()
+
+                let sim1 = vec_cosine(query, doc1)
+                let sim2 = vec_cosine(query, doc2)
+                let sim3 = vec_cosine(query, doc3)
+
+                println("Cosine similarities:")
+                println("  Doc1: ")
+                println("  Doc2: ")
+                println("  Doc3: ")
+
+                println("Search complete!")
+            }
+        "#;
+
+        let result = grammar.parse_to_json(source);
+        assert!(result.is_ok(), "Should parse vector search example: {:?}", result.err());
+    }
 }
