@@ -1,0 +1,37 @@
+[package]
+name = "zynml"
+version = "0.1.0"
+edition = "2021"
+description = "ZynML - A unified DSL for Machine Learning built on Zyntax"
+keywords = ["ml", "dsl", "machine-learning", "tensor", "zyntax"]
+categories = ["science", "compilers"]
+
+[lib]
+name = "zynml"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zynml"
+path = "src/main.rs"
+
+[dependencies]
+# Zyntax embedding SDK for grammar and runtime
+zyntax_embed = { path = "../zyntax_embed" }
+
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# JSON for AST display and config
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+tempfile = "3.16"

@@ -1,0 +1,501 @@
+// ============================================================================
+// ZynML Grammar - Machine Learning DSL for Zyntax
+// ============================================================================
+//
+// ZynML is a domain-specific language for machine learning pipelines.
+// It provides Python-like ergonomics with systems-level performance.
+//
+// Features:
+//   - Tensor operations with shape inference
+//   - Pipe operator (|>) for data flow
+//   - ML-specific builtins (audio, text, vectors, models)
+//   - Clean, readable syntax
+//
+// Usage:
+//   zynml run script.ml
+//   zynml repl
+//
+// ============================================================================
+
+@language {
+    name: "ZynML",
+    version: "1.0",
+    file_extensions: [".ml", ".zynml"],
+    entry_point: "main"
+}
+
+// ============================================================================
+// ZRTL Plugin Symbol Mappings
+// ============================================================================
+
+@builtin {
+    // === Tensor Operations (zrtl_tensor) ===
+    tensor_zeros: "$Tensor$zeros",
+    tensor_ones: "$Tensor$ones",
+    tensor_full: "$Tensor$full_f32",
+    tensor_arange: "$Tensor$arange_f32",
+    tensor_linspace: "$Tensor$linspace_f32",
+    tensor_rand: "$Tensor$rand_f32",
+    tensor_randn: "$Tensor$randn_f32",
+    tensor_reshape: "$Tensor$reshape",
+    tensor_transpose: "$Tensor$transpose",
+    tensor_sum: "$Tensor$sum_f32",
+    tensor_mean: "$Tensor$mean_f32",
+    tensor_max: "$Tensor$max_f32",
+    tensor_min: "$Tensor$min_f32",
+    tensor_free: "$Tensor$free",
+
+    // === Audio Operations (zrtl_audio) ===
+    audio_load: "$Audio$load",
+    audio_free: "$Audio$free",
+    audio_resample: "$Audio$resample",
+    audio_to_mono: "$Audio$to_mono",
+    audio_normalize: "$Audio$normalize",
+    audio_trim_silence: "$Audio$trim_silence",
+    audio_stft: "$Audio$stft",
+    audio_mel_spectrogram: "$Audio$mel_spectrogram",
+    audio_sample_rate: "$Audio$sample_rate",
+    audio_duration: "$Audio$duration_seconds",
+
+    // === Text Operations (zrtl_text) ===
+    bpe_create: "$Text$bpe_create",
+    bpe_encode: "$Text$bpe_encode",
+    bpe_decode: "$Text$bpe_decode",
+    text_lowercase: "$Text$lowercase",
+    text_normalize: "$Text$normalize_whitespace",
+    text_chunk: "$Text$chunk_by_sentences",
+
+    // === Vector Operations (zrtl_vector) ===
+    vec_cosine: "$Vector$cosine_similarity",
+    vec_dot: "$Vector$dot_product",
+    vec_euclidean: "$Vector$euclidean_distance",
+    vec_normalize: "$Vector$l2_normalize",
+    vec_topk: "$Vector$topk_cosine",
+    flat_create: "$Vector$flat_create",
+    flat_add: "$Vector$flat_add",
+    flat_search: "$Vector$flat_search_cosine",
+    hnsw_create: "$Vector$hnsw_create",
+    hnsw_add: "$Vector$hnsw_add",
+    hnsw_search: "$Vector$hnsw_search",
+
+    // === Model Operations (zrtl_model) ===
+    model_load: "$Model$load",
+    model_free: "$Model$free",
+    model_get_tensor: "$Model$get_tensor_f32",
+    model_num_tensors: "$Model$num_tensors",
+
+    // === SIMD Operations (zrtl_simd) ===
+    simd_relu: "$SIMD$relu_f32",
+    simd_sigmoid: "$SIMD$sigmoid_f32",
+    simd_softmax: "$SIMD$softmax_f32",
+    simd_tanh: "$SIMD$tanh_f32",
+    simd_gemm: "$SIMD$gemm_f32",
+    simd_layer_norm: "$SIMD$layer_norm_f32",
+
+    // === I/O Operations (zrtl_io) ===
+    print: "$IO$print",
+    println: "$IO$println",
+
+    // === File Operations (zrtl_fs) ===
+    file_read: "$FS$read_string",
+    file_write: "$FS$write_string",
+    file_exists: "$FS$exists",
+}
+
+// ============================================================================
+// Program Structure
+// ============================================================================
+
+program = { SOI ~ top_level_items ~ EOI }
+  -> TypedProgram {
+      "get_child": { "index": 0 }
+  }
+
+top_level_items = { top_level_item* }
+  -> TypedProgram {
+      "get_all_children": true,
+      "define": "program",
+      "args": { "declarations": "$result" }
+  }
+
+top_level_item = { fn_def | let_stmt | import_stmt | expr_stmt }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// ============================================================================
+// Import Statement
+// ============================================================================
+
+// import tensor, audio, model
+import_stmt = { "import" ~ identifier ~ ("," ~ identifier)* }
+  -> TypedStatement {
+      "get_all_children": true,
+      "define": "import",
+      "args": { "modules": "$result" }
+  }
+
+// ============================================================================
+// Function Definition
+// ============================================================================
+
+// fn main() { ... }
+// fn process(x, y) { ... }
+fn_def = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "auto",
+              "body": "$3"
+          }}
+      ]
+  }
+
+fn_params = { identifier ~ ("," ~ identifier)* }
+  -> List {
+      "get_all_children": true
+  }
+
+// ============================================================================
+// Statements
+// ============================================================================
+
+statement = { let_stmt | assign_stmt | if_stmt | while_stmt | for_stmt | return_stmt | expr_stmt }
+  -> TypedStatement {
+      "get_child": { "index": 0 }
+  }
+
+// let x = expr
+// let mel = audio |> resample(16000) |> to_mono()
+let_stmt = { "let" ~ identifier ~ "=" ~ expr }
+  -> TypedStatement {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": { "define": "infer_type" },
+              "init": "$2",
+              "is_const": false
+          }}
+      ]
+  }
+
+// x = expr
+assign_stmt = { identifier ~ "=" ~ expr }
+  -> TypedStatement {
+      "commands": [
+          { "define": "assignment", "args": {
+              "target": { "define": "variable", "args": { "name": "$1" } },
+              "value": "$2"
+          }}
+      ]
+  }
+
+// if condition { ... } else { ... }
+if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
+  -> TypedStatement {
+      "commands": [
+          { "define": "if_stmt", "args": {
+              "condition": "$1",
+              "then_branch": "$2",
+              "else_branch": "$3"
+          }}
+      ]
+  }
+
+// while condition { ... }
+while_stmt = { "while" ~ expr ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "while_stmt", "args": {
+              "condition": "$1",
+              "body": "$2"
+          }}
+      ]
+  }
+
+// for i in range(10) { ... }
+// for item in items { ... }
+for_stmt = { "for" ~ identifier ~ "in" ~ expr ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "for_stmt", "args": {
+              "var": "$1",
+              "iter": "$2",
+              "body": "$3"
+          }}
+      ]
+  }
+
+// return expr
+return_stmt = { "return" ~ expr? }
+  -> TypedStatement {
+      "commands": [
+          { "define": "return_stmt", "args": {
+              "value": "$1"
+          }}
+      ]
+  }
+
+// expr as statement
+expr_stmt = { expr }
+  -> TypedStatement {
+      "commands": [
+          { "define": "expression_stmt", "args": {
+              "expr": "$1"
+          }}
+      ]
+  }
+
+// { statements }
+block = { "{" ~ statement* ~ "}" }
+  -> TypedBlock {
+      "get_all_children": true,
+      "define": "block",
+      "args": { "statements": "$result" }
+  }
+
+// ============================================================================
+// Expressions
+// ============================================================================
+
+// Expression with pipe operator (lowest precedence)
+expr = { pipe_expr }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Pipe operator: x |> f(args) |> g()
+// Transforms: a |> f(b) into f(a, b)
+pipe_expr = { or_expr ~ ("|>" ~ pipe_call)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left": {
+          "op": "pipe",
+          "transform": "prepend_arg"
+      }
+  }
+
+pipe_call = { identifier ~ "(" ~ call_args? ~ ")" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "pipe_target", "args": {
+              "callee": { "define": "variable", "args": { "name": "$1" } },
+              "args": "$2"
+          }}
+      ]
+  }
+
+// Logical OR
+or_expr = { and_expr ~ ("||" ~ and_expr)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left": { "op": "||" }
+  }
+
+// Logical AND
+and_expr = { comparison_expr ~ ("&&" ~ comparison_expr)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left": { "op": "&&" }
+  }
+
+// Comparison: ==, !=, <, >, <=, >=
+comparison_expr = { additive_expr ~ (comparison_op ~ additive_expr)? }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_binary": true
+  }
+
+comparison_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
+  -> String {
+      "get_text": true
+  }
+
+// Addition and subtraction
+additive_expr = { multiplicative_expr ~ (additive_op ~ multiplicative_expr)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left_ops": true
+  }
+
+additive_op = { "+" | "-" }
+  -> String {
+      "get_text": true
+  }
+
+// Multiplication, division, modulo
+multiplicative_expr = { unary_expr ~ (multiplicative_op ~ unary_expr)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left_ops": true
+  }
+
+multiplicative_op = { "*" | "/" | "%" }
+  -> String {
+      "get_text": true
+  }
+
+// Unary operators: -, !
+unary_expr = { unary_op? ~ postfix_expr }
+  -> TypedExpression {
+      "get_all_children": true,
+      "apply_unary": true
+  }
+
+unary_op = { "-" | "!" }
+  -> String {
+      "get_text": true
+  }
+
+// Postfix: function calls, indexing, member access
+postfix_expr = { primary_expr ~ postfix_op* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_postfix": true
+  }
+
+postfix_op = { call_op | index_op | member_op }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Function call: f(args)
+call_op = { "(" ~ call_args? ~ ")" }
+  -> TypedExpression {
+      "get_child": { "index": 0 },
+      "define": "call_args",
+      "args": { "args": "$result" }
+  }
+
+call_args = { expr ~ ("," ~ expr)* }
+  -> List {
+      "get_all_children": true
+  }
+
+// Indexing: x[i]
+index_op = { "[" ~ expr ~ "]" }
+  -> TypedExpression {
+      "define": "index",
+      "args": { "index": "$1" }
+  }
+
+// Member access: x.field
+member_op = { "." ~ identifier }
+  -> TypedExpression {
+      "define": "member",
+      "args": { "field": "$1" }
+  }
+
+// Primary expressions
+primary_expr = {
+    tensor_literal |
+    array_literal |
+    float_literal |
+    int_literal |
+    string_literal |
+    bool_literal |
+    grouped_expr |
+    var_expr
+}
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Grouped expression: (expr)
+grouped_expr = { "(" ~ expr ~ ")" }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Variable reference
+var_expr = { identifier }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "variable",
+      "args": { "name": "$result" }
+  }
+
+// ============================================================================
+// Tensor Literals
+// ============================================================================
+
+// Tensor literal: tensor([1.0, 2.0, 3.0])
+// Shape inference: tensor([[1, 2], [3, 4]]) -> shape [2, 2]
+tensor_literal = { "tensor" ~ "(" ~ array_literal ~ ")" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "tensor_literal", "args": {
+              "data": "$1",
+              "dtype": "f32"
+          }}
+      ]
+  }
+
+// Array literal: [1, 2, 3] or [[1, 2], [3, 4]]
+array_literal = { "[" ~ (array_element ~ ("," ~ array_element)*)? ~ "]" }
+  -> TypedExpression {
+      "get_all_children": true,
+      "define": "array_literal",
+      "args": { "elements": "$result" }
+  }
+
+array_element = { array_literal | expr }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// ============================================================================
+// Literals
+// ============================================================================
+
+// Float: 3.14, -2.5, 1e-3
+float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_float": true,
+      "define": "float_literal",
+      "args": { "value": "$result" }
+  }
+
+// Integer: 42, -10, 0
+int_literal = @{ "-"? ~ ASCII_DIGIT+ }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_int": true,
+      "define": "int_literal",
+      "args": { "value": "$result" }
+  }
+
+// String: "hello world"
+string_literal = @{ "\"" ~ string_inner* ~ "\"" }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "string_literal",
+      "args": { "value": "$result" }
+  }
+
+string_inner = { !("\"" | "\\") ~ ANY | "\\" ~ ANY }
+
+// Boolean: true, false
+bool_literal = { "true" | "false" }
+  -> TypedExpression {
+      "get_text": true,
+      "parse_bool": true,
+      "define": "bool_literal",
+      "args": { "value": "$result" }
+  }
+
+// Identifier
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+  -> String {
+      "get_text": true
+  }
+
+// ============================================================================
+// Whitespace and Comments
+// ============================================================================
+
+WHITESPACE = _{ " " | "\t" | "\n" | "\r" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }

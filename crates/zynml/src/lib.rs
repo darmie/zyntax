@@ -1,0 +1,378 @@
+//! # ZynML - Machine Learning DSL for Zyntax
+//!
+//! ZynML is a domain-specific language for machine learning that provides:
+//!
+//! - **Tensor Operations**: Create, manipulate, and compute with tensors
+//! - **Audio Processing**: Load, resample, and extract features from audio
+//! - **Text Processing**: Tokenization and text preprocessing
+//! - **Vector Search**: Similarity search and embeddings
+//! - **Model Loading**: Load pre-trained models in SafeTensors format
+//!
+//! ## Quick Start
+//!
+//! ```zynml
+//! // Load and preprocess audio
+//! let audio = audio_load("speech.wav")
+//!     |> resample(16000)
+//!     |> to_mono()
+//!     |> mel_spectrogram(80, 400, 160)
+//!
+//! // Create and manipulate tensors
+//! let x = tensor([[1.0, 2.0], [3.0, 4.0]])
+//! let y = x |> transpose() |> reshape([4])
+//!
+//! // Vector similarity search
+//! let query = tensor([0.1, 0.2, 0.3])
+//! let results = index |> search(query, 10)
+//! ```
+//!
+//! ## Architecture
+//!
+//! ZynML is built on the Zyntax compiler infrastructure:
+//!
+//! 1. **Grammar** (`ml.zyn`): Defines the ZynML syntax using ZynPEG
+//! 2. **Runtime**: Executes ZynML programs using ZRTL plugins
+//! 3. **Plugins**: Native SIMD-accelerated implementations
+//!
+//! ## ZRTL Plugins Used
+//!
+//! - `zrtl_tensor` - Tensor data structure and operations
+//! - `zrtl_audio` - Audio loading and feature extraction
+//! - `zrtl_text` - Tokenization and text processing
+//! - `zrtl_vector` - Vector search and embeddings
+//! - `zrtl_model` - Model loading (SafeTensors)
+//! - `zrtl_simd` - SIMD-accelerated operations
+
+use anyhow::{Context, Result};
+use std::path::Path;
+use thiserror::Error;
+
+// Re-export zyntax_embed types for convenience
+pub use zyntax_embed::{LanguageGrammar, ZyntaxRuntime, FromZyntax};
+
+/// ZynML-specific errors
+#[derive(Error, Debug)]
+pub enum ZynMLError {
+    #[error("Failed to compile grammar: {0}")]
+    GrammarError(String),
+
+    #[error("Failed to load plugin '{plugin}': {reason}")]
+    PluginError { plugin: String, reason: String },
+
+    #[error("Runtime error: {0}")]
+    RuntimeError(String),
+
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    #[error("Type error: {0}")]
+    TypeError(String),
+}
+
+/// The embedded ZynML grammar
+pub const ZYNML_GRAMMAR: &str = include_str!("../ml.zyn");
+
+/// Required ZRTL plugins for ZynML
+pub const REQUIRED_PLUGINS: &[&str] = &[
+    "zrtl_tensor",
+    "zrtl_audio",
+    "zrtl_text",
+    "zrtl_vector",
+    "zrtl_model",
+    "zrtl_simd",
+    "zrtl_io",
+    "zrtl_fs",
+];
+
+/// Optional ZRTL plugins that enhance functionality
+pub const OPTIONAL_PLUGINS: &[&str] = &[
+    "zrtl_image",
+    "zrtl_json",
+    "zrtl_http",
+];
+
+/// ZynML runtime configuration
+#[derive(Debug, Clone)]
+pub struct ZynMLConfig {
+    /// Directory containing ZRTL plugins
+    pub plugins_dir: String,
+
+    /// Whether to load optional plugins
+    pub load_optional: bool,
+
+    /// Enable verbose logging
+    pub verbose: bool,
+}
+
+impl Default for ZynMLConfig {
+    fn default() -> Self {
+        Self {
+            plugins_dir: "plugins/target/zrtl".to_string(),
+            load_optional: false,
+            verbose: false,
+        }
+    }
+}
+
+/// ZynML runtime - the main entry point for running ZynML programs
+pub struct ZynML {
+    runtime: ZyntaxRuntime,
+    config: ZynMLConfig,
+    grammar: LanguageGrammar,
+}
+
+impl ZynML {
+    /// Create a new ZynML runtime with default configuration
+    pub fn new() -> Result<Self> {
+        Self::with_config(ZynMLConfig::default())
+    }
+
+    /// Create a new ZynML runtime with custom configuration
+    pub fn with_config(config: ZynMLConfig) -> Result<Self> {
+        // Compile the grammar
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR)
+            .map_err(|e| ZynMLError::GrammarError(e.to_string()))?;
+
+        // Create the runtime
+        let mut runtime = ZyntaxRuntime::new()
+            .context("Failed to create Zyntax runtime")?;
+
+        // Register the grammar
+        runtime.register_grammar("zynml", grammar.clone());
+
+        // Load required plugins
+        let plugins_path = Path::new(&config.plugins_dir);
+        for plugin_name in REQUIRED_PLUGINS {
+            let plugin_path = plugins_path.join(format!("{}.zrtl", plugin_name));
+            if plugin_path.exists() {
+                if config.verbose {
+                    log::info!("Loading plugin: {}", plugin_name);
+                }
+                runtime.load_plugin(&plugin_path).map_err(|e| {
+                    ZynMLError::PluginError {
+                        plugin: plugin_name.to_string(),
+                        reason: e.to_string(),
+                    }
+                })?;
+            } else if config.verbose {
+                log::warn!("Required plugin not found: {}", plugin_path.display());
+            }
+        }
+
+        // Load optional plugins if requested
+        if config.load_optional {
+            for plugin_name in OPTIONAL_PLUGINS {
+                let plugin_path = plugins_path.join(format!("{}.zrtl", plugin_name));
+                if plugin_path.exists() {
+                    if config.verbose {
+                        log::info!("Loading optional plugin: {}", plugin_name);
+                    }
+                    let _ = runtime.load_plugin(&plugin_path);
+                }
+            }
+        }
+
+        Ok(Self {
+            runtime,
+            config,
+            grammar,
+        })
+    }
+
+    /// Load and compile a ZynML source file
+    pub fn load_file(&mut self, path: &Path) -> Result<Vec<String>> {
+        let source = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+        self.load_source(&source)
+    }
+
+    /// Load and compile ZynML source code
+    pub fn load_source(&mut self, source: &str) -> Result<Vec<String>> {
+        self.runtime
+            .load_module("zynml", source)
+            .context("Failed to compile ZynML program")
+    }
+
+    /// Parse source and return the AST as JSON
+    pub fn parse_to_json(&self, source: &str) -> Result<String> {
+        self.grammar
+            .parse_to_json(source)
+            .context("Failed to parse ZynML program")
+    }
+
+    /// Call a function by name with no arguments
+    pub fn call(&mut self, name: &str) -> Result<()> {
+        self.runtime
+            .call::<()>(name, &[])
+            .with_context(|| format!("Failed to call function: {}", name))
+    }
+
+    /// Call a function and get a result
+    pub fn call_with_result<T: FromZyntax + 'static>(&mut self, name: &str) -> Result<T> {
+        self.runtime
+            .call::<T>(name, &[])
+            .with_context(|| format!("Failed to call function: {}", name))
+    }
+
+    /// Run a ZynML program (calls 'main' if it exists)
+    pub fn run(&mut self, source: &str) -> Result<()> {
+        let functions = self.load_source(source)?;
+
+        if self.config.verbose {
+            log::info!("Compiled functions: {:?}", functions);
+        }
+
+        // Try to find and call an entry point
+        if functions.contains(&"main".to_string()) {
+            self.call("main")
+        } else if !functions.is_empty() {
+            // Call the first function as entry point
+            let entry = &functions[0];
+            if self.config.verbose {
+                log::info!("No 'main' function, calling '{}'", entry);
+            }
+            self.call(entry)
+        } else {
+            Ok(()) // No functions to run
+        }
+    }
+
+    /// Run a ZynML program from a file
+    pub fn run_file(&mut self, path: &Path) -> Result<()> {
+        let source = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read file: {}", path.display()))?;
+
+        self.run(&source)
+    }
+
+    /// Get reference to the underlying runtime
+    pub fn runtime(&self) -> &ZyntaxRuntime {
+        &self.runtime
+    }
+
+    /// Get mutable reference to the underlying runtime
+    pub fn runtime_mut(&mut self) -> &mut ZyntaxRuntime {
+        &mut self.runtime
+    }
+
+    /// Check if a plugin is loaded
+    pub fn has_plugin(&self, name: &str) -> bool {
+        // This would need runtime support to check
+        // For now, return true for required plugins
+        REQUIRED_PLUGINS.contains(&name) || OPTIONAL_PLUGINS.contains(&name)
+    }
+}
+
+/// Convenience function to run a ZynML file
+pub fn run_file(path: &Path, plugins_dir: &Path, verbose: bool) -> Result<()> {
+    let config = ZynMLConfig {
+        plugins_dir: plugins_dir.to_string_lossy().to_string(),
+        verbose,
+        ..Default::default()
+    };
+
+    let mut zynml = ZynML::with_config(config)?;
+    zynml.run_file(path)
+}
+
+/// Convenience function to run ZynML source code
+pub fn run_source(source: &str, plugins_dir: &Path, verbose: bool) -> Result<()> {
+    let config = ZynMLConfig {
+        plugins_dir: plugins_dir.to_string_lossy().to_string(),
+        verbose,
+        ..Default::default()
+    };
+
+    let mut zynml = ZynML::with_config(config)?;
+    zynml.run(source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_grammar_compiles() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR);
+        assert!(grammar.is_ok(), "Grammar should compile: {:?}", grammar.err());
+    }
+
+    #[test]
+    fn test_parse_simple_let() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+        let result = grammar.parse_to_json("let x = 42");
+        assert!(result.is_ok(), "Should parse let statement: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_function() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+        let result = grammar.parse_to_json(r#"
+            fn main() {
+                let x = 10
+                let y = 20
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse function: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_pipe_operator() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+        let result = grammar.parse_to_json(r#"
+            let result = x |> f(1) |> g()
+        "#);
+        assert!(result.is_ok(), "Should parse pipe operator: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_tensor_literal() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+        let result = grammar.parse_to_json(r#"
+            let t = tensor([1.0, 2.0, 3.0])
+        "#);
+        assert!(result.is_ok(), "Should parse tensor literal: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_array_literal() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+        let result = grammar.parse_to_json(r#"
+            let arr = [[1, 2], [3, 4]]
+        "#);
+        assert!(result.is_ok(), "Should parse array literal: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_ml_pipeline() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+        let result = grammar.parse_to_json(r#"
+            fn process_audio() {
+                let audio = audio_load("test.wav")
+                let mono = audio |> to_mono()
+                let mel = mono |> mel_spectrogram(80, 400, 160)
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse ML pipeline: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_control_flow() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+        let result = grammar.parse_to_json(r#"
+            fn test() {
+                if x > 0 {
+                    let y = x * 2
+                } else {
+                    let y = 0
+                }
+
+                while i < 10 {
+                    i = i + 1
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse control flow: {:?}", result.err());
+    }
+}
