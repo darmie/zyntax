@@ -1339,6 +1339,451 @@ pub extern "C" fn log_f32(data: *mut f32, len: u64) {
 }
 
 // ============================================================================
+// Additional Vector Operations for ML Plugins
+// ============================================================================
+
+/// Fill array with constant value: data[i] = value
+#[no_mangle]
+pub extern "C" fn vec_fill_f32(data: *mut f32, value: f32, len: u64) {
+    if data.is_null() || len == 0 {
+        return;
+    }
+
+    let len = len as usize;
+    let value_vec = f32x8::splat(value);
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let arr = value_vec.to_array();
+            for j in 0..8 {
+                *data.add(offset + j) = arr[j];
+            }
+        }
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            *data.add(base + i) = value;
+        }
+    }
+}
+
+/// Element-wise subtraction: out[i] = a[i] - b[i]
+#[no_mangle]
+pub extern "C" fn vec_sub_f32(a: *const f32, b: *const f32, out: *mut f32, len: u64) {
+    if a.is_null() || b.is_null() || out.is_null() || len == 0 {
+        return;
+    }
+
+    let len = len as usize;
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let va = f32x8::new([
+                *a.add(offset), *a.add(offset + 1), *a.add(offset + 2), *a.add(offset + 3),
+                *a.add(offset + 4), *a.add(offset + 5), *a.add(offset + 6), *a.add(offset + 7),
+            ]);
+            let vb = f32x8::new([
+                *b.add(offset), *b.add(offset + 1), *b.add(offset + 2), *b.add(offset + 3),
+                *b.add(offset + 4), *b.add(offset + 5), *b.add(offset + 6), *b.add(offset + 7),
+            ]);
+            let result = va - vb;
+            let arr = result.to_array();
+            for j in 0..8 {
+                *out.add(offset + j) = arr[j];
+            }
+        }
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            *out.add(base + i) = *a.add(base + i) - *b.add(base + i);
+        }
+    }
+}
+
+/// Euclidean distance: sqrt(sum((a[i] - b[i])^2))
+#[no_mangle]
+pub extern "C" fn vec_euclidean_f32(a: *const f32, b: *const f32, len: u64) -> f32 {
+    if a.is_null() || b.is_null() || len == 0 {
+        return 0.0;
+    }
+
+    let len = len as usize;
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        let mut sum = f32x8::ZERO;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let va = f32x8::new([
+                *a.add(offset), *a.add(offset + 1), *a.add(offset + 2), *a.add(offset + 3),
+                *a.add(offset + 4), *a.add(offset + 5), *a.add(offset + 6), *a.add(offset + 7),
+            ]);
+            let vb = f32x8::new([
+                *b.add(offset), *b.add(offset + 1), *b.add(offset + 2), *b.add(offset + 3),
+                *b.add(offset + 4), *b.add(offset + 5), *b.add(offset + 6), *b.add(offset + 7),
+            ]);
+            let diff = va - vb;
+            sum += diff * diff;
+        }
+
+        let arr = sum.to_array();
+        let mut result = arr[0] + arr[1] + arr[2] + arr[3] + arr[4] + arr[5] + arr[6] + arr[7];
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            let diff = *a.add(base + i) - *b.add(base + i);
+            result += diff * diff;
+        }
+
+        result.sqrt()
+    }
+}
+
+/// Squared Euclidean distance: sum((a[i] - b[i])^2) - avoids sqrt
+#[no_mangle]
+pub extern "C" fn vec_euclidean_sq_f32(a: *const f32, b: *const f32, len: u64) -> f32 {
+    if a.is_null() || b.is_null() || len == 0 {
+        return 0.0;
+    }
+
+    let len = len as usize;
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        let mut sum = f32x8::ZERO;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let va = f32x8::new([
+                *a.add(offset), *a.add(offset + 1), *a.add(offset + 2), *a.add(offset + 3),
+                *a.add(offset + 4), *a.add(offset + 5), *a.add(offset + 6), *a.add(offset + 7),
+            ]);
+            let vb = f32x8::new([
+                *b.add(offset), *b.add(offset + 1), *b.add(offset + 2), *b.add(offset + 3),
+                *b.add(offset + 4), *b.add(offset + 5), *b.add(offset + 6), *b.add(offset + 7),
+            ]);
+            let diff = va - vb;
+            sum += diff * diff;
+        }
+
+        let arr = sum.to_array();
+        let mut result = arr[0] + arr[1] + arr[2] + arr[3] + arr[4] + arr[5] + arr[6] + arr[7];
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            let diff = *a.add(base + i) - *b.add(base + i);
+            result += diff * diff;
+        }
+
+        result
+    }
+}
+
+/// Manhattan (L1) distance: sum(|a[i] - b[i]|)
+#[no_mangle]
+pub extern "C" fn vec_manhattan_f32(a: *const f32, b: *const f32, len: u64) -> f32 {
+    if a.is_null() || b.is_null() || len == 0 {
+        return 0.0;
+    }
+
+    let len = len as usize;
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        let mut sum = f32x8::ZERO;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let va = f32x8::new([
+                *a.add(offset), *a.add(offset + 1), *a.add(offset + 2), *a.add(offset + 3),
+                *a.add(offset + 4), *a.add(offset + 5), *a.add(offset + 6), *a.add(offset + 7),
+            ]);
+            let vb = f32x8::new([
+                *b.add(offset), *b.add(offset + 1), *b.add(offset + 2), *b.add(offset + 3),
+                *b.add(offset + 4), *b.add(offset + 5), *b.add(offset + 6), *b.add(offset + 7),
+            ]);
+            let diff = va - vb;
+            sum += diff.abs();
+        }
+
+        let arr = sum.to_array();
+        let mut result = arr[0] + arr[1] + arr[2] + arr[3] + arr[4] + arr[5] + arr[6] + arr[7];
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            result += (*a.add(base + i) - *b.add(base + i)).abs();
+        }
+
+        result
+    }
+}
+
+/// Sum of absolute values: sum(|data[i]|)
+#[no_mangle]
+pub extern "C" fn vec_abs_sum_f32(data: *const f32, len: u64) -> f32 {
+    if data.is_null() || len == 0 {
+        return 0.0;
+    }
+
+    let len = len as usize;
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        let mut sum = f32x8::ZERO;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let v = f32x8::new([
+                *data.add(offset), *data.add(offset + 1), *data.add(offset + 2), *data.add(offset + 3),
+                *data.add(offset + 4), *data.add(offset + 5), *data.add(offset + 6), *data.add(offset + 7),
+            ]);
+            sum += v.abs();
+        }
+
+        let arr = sum.to_array();
+        let mut result = arr[0] + arr[1] + arr[2] + arr[3] + arr[4] + arr[5] + arr[6] + arr[7];
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            result += (*data.add(base + i)).abs();
+        }
+
+        result
+    }
+}
+
+/// Fused multiply-add: out[i] = a[i] * b[i] + c[i]
+#[no_mangle]
+pub extern "C" fn vec_fma_f32(a: *const f32, b: *const f32, c: *const f32, out: *mut f32, len: u64) {
+    if a.is_null() || b.is_null() || c.is_null() || out.is_null() || len == 0 {
+        return;
+    }
+
+    let len = len as usize;
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let va = f32x8::new([
+                *a.add(offset), *a.add(offset + 1), *a.add(offset + 2), *a.add(offset + 3),
+                *a.add(offset + 4), *a.add(offset + 5), *a.add(offset + 6), *a.add(offset + 7),
+            ]);
+            let vb = f32x8::new([
+                *b.add(offset), *b.add(offset + 1), *b.add(offset + 2), *b.add(offset + 3),
+                *b.add(offset + 4), *b.add(offset + 5), *b.add(offset + 6), *b.add(offset + 7),
+            ]);
+            let vc = f32x8::new([
+                *c.add(offset), *c.add(offset + 1), *c.add(offset + 2), *c.add(offset + 3),
+                *c.add(offset + 4), *c.add(offset + 5), *c.add(offset + 6), *c.add(offset + 7),
+            ]);
+            let result = va * vb + vc;
+            let arr = result.to_array();
+            for j in 0..8 {
+                *out.add(offset + j) = arr[j];
+            }
+        }
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            *out.add(base + i) = *a.add(base + i) * *b.add(base + i) + *c.add(base + i);
+        }
+    }
+}
+
+/// Scalar fused multiply-add: out[i] = a[i] * scalar + b[i]
+#[no_mangle]
+pub extern "C" fn vec_fma_scalar_f32(a: *const f32, scalar: f32, b: *const f32, out: *mut f32, len: u64) {
+    if a.is_null() || b.is_null() || out.is_null() || len == 0 {
+        return;
+    }
+
+    let len = len as usize;
+    let scalar_vec = f32x8::splat(scalar);
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            let va = f32x8::new([
+                *a.add(offset), *a.add(offset + 1), *a.add(offset + 2), *a.add(offset + 3),
+                *a.add(offset + 4), *a.add(offset + 5), *a.add(offset + 6), *a.add(offset + 7),
+            ]);
+            let vb = f32x8::new([
+                *b.add(offset), *b.add(offset + 1), *b.add(offset + 2), *b.add(offset + 3),
+                *b.add(offset + 4), *b.add(offset + 5), *b.add(offset + 6), *b.add(offset + 7),
+            ]);
+            let result = va * scalar_vec + vb;
+            let arr = result.to_array();
+            for j in 0..8 {
+                *out.add(offset + j) = arr[j];
+            }
+        }
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            *out.add(base + i) = *a.add(base + i) * scalar + *b.add(base + i);
+        }
+    }
+}
+
+/// Cosine similarity: dot(a,b) / (norm(a) * norm(b))
+#[no_mangle]
+pub extern "C" fn vec_cosine_similarity_f32(a: *const f32, b: *const f32, len: u64) -> f32 {
+    if a.is_null() || b.is_null() || len == 0 {
+        return 0.0;
+    }
+
+    let dot = vec_dot_product_f32(a, b, len);
+    let norm_a_sq = vec_dot_product_f32(a, a, len);
+    let norm_b_sq = vec_dot_product_f32(b, b, len);
+
+    let denom = (norm_a_sq * norm_b_sq).sqrt();
+    if denom < 1e-10 {
+        0.0
+    } else {
+        dot / denom
+    }
+}
+
+/// L2 normalize in place: data[i] /= norm(data)
+#[no_mangle]
+pub extern "C" fn vec_l2_normalize_f32(data: *mut f32, len: u64) {
+    if data.is_null() || len == 0 {
+        return;
+    }
+
+    let norm_sq = vec_dot_product_f32(data, data, len);
+    let norm = norm_sq.sqrt();
+
+    if norm > 1e-10 {
+        vec_scale_f32(data, 1.0 / norm, len);
+    }
+}
+
+/// Find max value and its index
+#[no_mangle]
+pub extern "C" fn vec_argmax_with_val_f32(data: *const f32, len: u64, out_idx: *mut u64, out_val: *mut f32) {
+    if data.is_null() || len == 0 {
+        if !out_idx.is_null() {
+            unsafe { *out_idx = 0; }
+        }
+        if !out_val.is_null() {
+            unsafe { *out_val = f32::NEG_INFINITY; }
+        }
+        return;
+    }
+
+    let len = len as usize;
+    let mut max_idx = 0usize;
+    let mut max_val = f32::NEG_INFINITY;
+
+    unsafe {
+        // Process chunks to find max within each chunk, then compare
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            for j in 0..8 {
+                let val = *data.add(offset + j);
+                if val > max_val {
+                    max_val = val;
+                    max_idx = offset + j;
+                }
+            }
+        }
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            let val = *data.add(base + i);
+            if val > max_val {
+                max_val = val;
+                max_idx = base + i;
+            }
+        }
+
+        if !out_idx.is_null() {
+            *out_idx = max_idx as u64;
+        }
+        if !out_val.is_null() {
+            *out_val = max_val;
+        }
+    }
+}
+
+/// Find min value and its index
+#[no_mangle]
+pub extern "C" fn vec_argmin_with_val_f32(data: *const f32, len: u64, out_idx: *mut u64, out_val: *mut f32) {
+    if data.is_null() || len == 0 {
+        if !out_idx.is_null() {
+            unsafe { *out_idx = 0; }
+        }
+        if !out_val.is_null() {
+            unsafe { *out_val = f32::INFINITY; }
+        }
+        return;
+    }
+
+    let len = len as usize;
+    let mut min_idx = 0usize;
+    let mut min_val = f32::INFINITY;
+
+    unsafe {
+        let chunks = len / 8;
+        let remainder = len % 8;
+
+        for i in 0..chunks {
+            let offset = i * 8;
+            for j in 0..8 {
+                let val = *data.add(offset + j);
+                if val < min_val {
+                    min_val = val;
+                    min_idx = offset + j;
+                }
+            }
+        }
+
+        let base = chunks * 8;
+        for i in 0..remainder {
+            let val = *data.add(base + i);
+            if val < min_val {
+                min_val = val;
+                min_idx = base + i;
+            }
+        }
+
+        if !out_idx.is_null() {
+            *out_idx = min_idx as u64;
+        }
+        if !out_val.is_null() {
+            *out_val = min_val;
+        }
+    }
+}
+
+// ============================================================================
 // Plugin Export
 // ============================================================================
 
@@ -1353,11 +1798,29 @@ zrtl_plugin! {
         ("$SIMD$sum_f32", vec_sum_f32),
         ("$SIMD$scale_f32", vec_scale_f32),
         ("$SIMD$add_f32", vec_add_f32),
+        ("$SIMD$sub_f32", vec_sub_f32),
         ("$SIMD$mul_f32", vec_mul_f32),
         ("$SIMD$min_f32", vec_min_f32),
         ("$SIMD$max_f32", vec_max_f32),
         ("$SIMD$abs_f32", vec_abs_f32),
         ("$SIMD$sqrt_f32", vec_sqrt_f32),
+        ("$SIMD$fill_f32", vec_fill_f32),
+        ("$SIMD$abs_sum_f32", vec_abs_sum_f32),
+
+        // Distance and similarity
+        ("$SIMD$euclidean_f32", vec_euclidean_f32),
+        ("$SIMD$euclidean_sq_f32", vec_euclidean_sq_f32),
+        ("$SIMD$manhattan_f32", vec_manhattan_f32),
+        ("$SIMD$cosine_similarity_f32", vec_cosine_similarity_f32),
+        ("$SIMD$l2_normalize_f32", vec_l2_normalize_f32),
+
+        // Fused operations
+        ("$SIMD$fma_f32", vec_fma_f32),
+        ("$SIMD$fma_scalar_f32", vec_fma_scalar_f32),
+
+        // Argmax/Argmin
+        ("$SIMD$argmax_with_val_f32", vec_argmax_with_val_f32),
+        ("$SIMD$argmin_with_val_f32", vec_argmin_with_val_f32),
 
         // Matrix operations
         ("$SIMD$mat4_mul", mat4_mul),
@@ -1575,5 +2038,102 @@ mod tests {
         transpose_2d_f32(data.as_ptr(), output.as_mut_ptr(), 2, 3);
         // Should be 3x2: [[1,4], [2,5], [3,6]]
         assert_eq!(output, vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    }
+
+    // Tests for new SIMD functions
+
+    #[test]
+    fn test_fill() {
+        let mut data = vec![0.0f32; 10];
+        vec_fill_f32(data.as_mut_ptr(), 3.14, 10);
+        for v in &data {
+            assert!((v - 3.14).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn test_sub() {
+        let a = vec![5.0f32, 4.0, 3.0, 2.0];
+        let b = vec![1.0f32, 2.0, 3.0, 4.0];
+        let mut out = vec![0.0f32; 4];
+        vec_sub_f32(a.as_ptr(), b.as_ptr(), out.as_mut_ptr(), 4);
+        assert_eq!(out, vec![4.0, 2.0, 0.0, -2.0]);
+    }
+
+    #[test]
+    fn test_euclidean_distance() {
+        let a = vec![0.0f32, 0.0, 0.0];
+        let b = vec![3.0f32, 4.0, 0.0];
+        let dist = vec_euclidean_f32(a.as_ptr(), b.as_ptr(), 3);
+        assert!((dist - 5.0).abs() < 0.0001); // 3-4-5 triangle
+    }
+
+    #[test]
+    fn test_manhattan_distance() {
+        let a = vec![0.0f32, 0.0, 0.0];
+        let b = vec![3.0f32, 4.0, 5.0];
+        let dist = vec_manhattan_f32(a.as_ptr(), b.as_ptr(), 3);
+        assert!((dist - 12.0).abs() < 0.0001); // 3 + 4 + 5
+    }
+
+    #[test]
+    fn test_abs_sum() {
+        let data = vec![-1.0f32, 2.0, -3.0, 4.0];
+        let sum = vec_abs_sum_f32(data.as_ptr(), 4);
+        assert!((sum - 10.0).abs() < 0.0001); // 1 + 2 + 3 + 4
+    }
+
+    #[test]
+    fn test_fma() {
+        let a = vec![1.0f32, 2.0, 3.0, 4.0];
+        let b = vec![2.0f32, 2.0, 2.0, 2.0];
+        let c = vec![1.0f32, 1.0, 1.0, 1.0];
+        let mut out = vec![0.0f32; 4];
+        vec_fma_f32(a.as_ptr(), b.as_ptr(), c.as_ptr(), out.as_mut_ptr(), 4);
+        assert_eq!(out, vec![3.0, 5.0, 7.0, 9.0]); // a*b + c
+    }
+
+    #[test]
+    fn test_cosine_similarity() {
+        // Same direction vectors
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![2.0f32, 0.0, 0.0];
+        let sim = vec_cosine_similarity_f32(a.as_ptr(), b.as_ptr(), 3);
+        assert!((sim - 1.0).abs() < 0.0001);
+
+        // Orthogonal vectors
+        let a = vec![1.0f32, 0.0, 0.0];
+        let b = vec![0.0f32, 1.0, 0.0];
+        let sim = vec_cosine_similarity_f32(a.as_ptr(), b.as_ptr(), 3);
+        assert!(sim.abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_l2_normalize() {
+        let mut data = vec![3.0f32, 4.0];
+        vec_l2_normalize_f32(data.as_mut_ptr(), 2);
+        // norm = 5, so [0.6, 0.8]
+        assert!((data[0] - 0.6).abs() < 0.0001);
+        assert!((data[1] - 0.8).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_argmax_with_val() {
+        let data = vec![1.0f32, 5.0, 3.0, 2.0, 4.0];
+        let mut idx: u64 = 0;
+        let mut val: f32 = 0.0;
+        vec_argmax_with_val_f32(data.as_ptr(), 5, &mut idx, &mut val);
+        assert_eq!(idx, 1);
+        assert!((val - 5.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_argmin_with_val() {
+        let data = vec![3.0f32, 5.0, 1.0, 2.0, 4.0];
+        let mut idx: u64 = 0;
+        let mut val: f32 = 0.0;
+        vec_argmin_with_val_f32(data.as_ptr(), 5, &mut idx, &mut val);
+        assert_eq!(idx, 2);
+        assert!((val - 1.0).abs() < 0.0001);
     }
 }

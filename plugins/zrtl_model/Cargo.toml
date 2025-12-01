@@ -1,0 +1,19 @@
+[package]
+name = "zrtl_model"
+version = "0.1.0"
+edition = "2021"
+description = "Model loading and serialization for Zyntax runtime (ZynML)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# ZRTL SDK for plugin macro
+zrtl = { path = "../../sdk/zrtl" }
+
+# SafeTensors format (HuggingFace standard)
+safetensors = "0.4"
+
+# Memory mapping for large files
+memmap2 = "0.9"
+

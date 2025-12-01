@@ -24,6 +24,11 @@ members = [
     "zrtl_svg",
     "zrtl_sdl",
     "zrtl_simd",
+    "zrtl_tensor",
+    "zrtl_vector",
+    "zrtl_audio",
+    "zrtl_text",
+    "zrtl_model",
 ]
 
 [workspace.dependencies]

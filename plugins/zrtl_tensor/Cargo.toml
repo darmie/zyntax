@@ -1,0 +1,15 @@
+[package]
+name = "zrtl_tensor"
+version = "0.1.0"
+edition = "2021"
+description = "Tensor data structures and operations for Zyntax runtime (ZynML)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# ZRTL SDK for plugin macro
+zrtl = { path = "../../sdk/zrtl" }
+
+# SIMD operations for high-performance compute
+zrtl_simd = { path = "../zrtl_simd" }

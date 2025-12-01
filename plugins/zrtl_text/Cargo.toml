@@ -1,0 +1,19 @@
+[package]
+name = "zrtl_text"
+version = "0.1.0"
+edition = "2021"
+description = "Text processing and tokenization for Zyntax runtime (ZynML)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# ZRTL SDK for plugin macro
+zrtl = { path = "../../sdk/zrtl" }
+
+# Unicode normalization
+unicode-normalization = "0.1"
+
+# For JSON tokenizer configs
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

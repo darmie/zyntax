@@ -1,0 +1,24 @@
+[package]
+name = "zrtl_audio"
+version = "0.1.0"
+edition = "2021"
+description = "Audio loading and processing for Zyntax runtime (ZynML)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# ZRTL SDK for plugin macro
+zrtl = { path = "../../sdk/zrtl" }
+
+# SIMD operations for high-performance compute
+zrtl_simd = { path = "../zrtl_simd" }
+
+# Audio decoding (MP3, WAV, FLAC, OGG, etc.)
+symphonia = { version = "0.5", features = ["all"] }
+
+# High-quality resampling
+rubato = "0.15"
+
+# FFT for spectrograms
+rustfft = "6.2"
