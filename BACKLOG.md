@@ -232,7 +232,42 @@ No Rust compilation required for grammar users! Dynamic interpretation of JSON a
 - [ ] Implement optimization passes
 - [ ] Cross-platform testing
 
-### 3. Bytecode Interpreter (LOW PRIORITY)
+### 3. GPU AOT Backend - NVPTX via LLVM (MEDIUM PRIORITY) 📋 PLANNING
+**Status**: Architecture documented, implementation planned for Q1-Q2 2026
+**Location**: `docs/GPU_AOT_ARCHITECTURE.md`
+**Feature Flag**: `compute` (opt-in)
+
+**Goal**: Compile GPU kernels from HIR to NVPTX via LLVM IR for high-performance compute workloads (ZynML, QuantDSL, ImagePipe).
+
+**Key Features**:
+- NVPTX target via LLVM (`nvptx64-nvidia-cuda`)
+- GPU primitives in HIR (ThreadIdx, BlockIdx, SyncThreads, SharedMemAlloc, WarpShuffle)
+- Kernel metadata in TypedAST (@kernel, @device, @workgroup annotations)
+- Critical path CPU optimizations for ultra-low-latency execution
+- CUDA driver runtime integration
+
+**Building with GPU Support**:
+```bash
+cargo build --release --features compute
+```
+
+**Implementation Phases**:
+
+| Phase | Description | Effort |
+|-------|-------------|--------|
+| Phase 1 | TypedAST kernel metadata, HIR GPU primitives, NVPTX target setup | 3 weeks |
+| Phase 2 | Thread indexing, synchronization, shared memory, atomics, warp ops | 3 weeks |
+| Phase 3 | Tensor cores, async copy, critical path optimizer, SIMD codegen | 3 weeks |
+| Phase 4 | CUDA runtime, memory pool, unified memory, DSL integration | 3 weeks |
+
+**Milestone**: End-to-end ZynML `compute()` working with GPU by Q2 2026.
+
+**Related Docs**:
+- [GPU AOT Architecture](docs/GPU_AOT_ARCHITECTURE.md) - Full technical specification
+- [ZynML Unified DSL](docs/ml-dsl-plans/00-unified-ml-dsl.md) - DSL with compute() syntax
+- [GPU Compute System](docs/ml-dsl-plans/09-gpu-compute-system.md) - Compute IR design
+
+### 4. Bytecode Interpreter (LOW PRIORITY)
 **Status**: Specification complete
 **Location**: `docs/BYTECODE_FORMAT_SPEC.md`
 
@@ -569,7 +604,8 @@ Stack-unwinding exceptions for Haxe/Java-style languages. Required for Reflaxe i
 |----------|----------|------|--------|--------|
 | **HIGH** | Ecosystem | Reflaxe/Haxe Integration | 3-4 weeks | Massive |
 | **HIGH** | Testing | Fix remaining 4 test failures | 1-2 days | High |
-| **MEDIUM** | Compiler | LLVM AOT Backend | 2 weeks | High |
+| **MEDIUM** | Compiler | LLVM AOT Backend (CPU) | 2 weeks | High |
+| **MEDIUM** | Compiler | GPU AOT Backend (NVPTX) | 12 weeks | High |
 | **MEDIUM** | Language | Exception Handling | 1 week | Medium |
 | **MEDIUM** | Stdlib | I/O and File System | 1-2 weeks | High |
 | **LOW** | Tooling | LSP Support | 2-3 weeks | Medium |
@@ -593,15 +629,18 @@ Stack-unwinding exceptions for Haxe/Java-style languages. Required for Reflaxe i
 
 ### Milestone 2: Production Features (Q1 2026)
 
-- LLVM AOT backend completion
+- LLVM AOT backend completion (CPU)
+- GPU AOT backend Phase 1-2 (NVPTX target, HIR primitives)
 - Exception handling (try/catch/finally)
 - Complete I/O and networking stdlib
 - Advanced pattern matching
 - Generic functions with type parameters
 
-### Milestone 3: Ecosystem Integration (Q2 2026)
+### Milestone 3: Ecosystem & GPU Integration (Q2 2026)
 
 - Complete Reflaxe/Haxe integration
+- GPU AOT backend Phase 3-4 (tensor cores, CUDA runtime, DSL integration)
+- ZynML `compute()` end-to-end working with GPU
 - Run 100+ Haxe projects through Zyntax
 - Performance benchmarks vs other targets
 - 100% test pass rate
