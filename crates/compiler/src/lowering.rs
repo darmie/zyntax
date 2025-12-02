@@ -587,6 +587,10 @@ impl LoweringContext {
                 self.lower_enum(enum_decl)?;
             }
 
+            TypedDeclaration::Impl(impl_block) => {
+                self.lower_impl_block(impl_block)?;
+            }
+
             _ => {
                 // NOTE: Other declaration types not yet lowered.
                 // Includes: TypeAlias, Interface (trait lowering), etc.
@@ -1183,6 +1187,44 @@ impl LoweringContext {
                 format!("Enum type '{}' not found in type registry", enum_decl.name),
                 Some(enum_decl.span),
             );
+        }
+
+        Ok(())
+    }
+
+    /// Lower an impl block by extracting and lowering its methods
+    fn lower_impl_block(&mut self, impl_block: &zyntax_typed_ast::typed_ast::TypedTraitImpl) -> CompilerResult<()> {
+        use zyntax_typed_ast::TypedFunction;
+
+        // For each method in the impl block, convert it to a function and lower it
+        for method in &impl_block.methods {
+            // Create a function from the method
+            // Method names should be mangled to include the trait and type info
+            let func = TypedFunction {
+                name: method.name,  // TODO: Consider name mangling for trait methods
+                type_params: vec![],
+                params: method.params.iter().map(|p| {
+                    zyntax_typed_ast::TypedParameter {
+                        name: p.name,
+                        ty: p.ty.clone(),
+                        mutability: p.mutability,
+                        kind: p.kind.clone(),
+                        default_value: p.default_value.clone(),
+                        attributes: p.attributes.clone(),
+                        span: p.span,
+                    }
+                }).collect(),
+                return_type: method.return_type.clone(),
+                body: method.body.clone(),
+                visibility: zyntax_typed_ast::type_registry::Visibility::Public,
+                is_async: method.is_async,
+                is_external: false,
+                calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+                link_name: None,
+            };
+
+            // Lower the method as a regular function
+            self.lower_function(&func)?;
         }
 
         Ok(())
