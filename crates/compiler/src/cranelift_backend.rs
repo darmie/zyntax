@@ -1023,21 +1023,29 @@ impl CraneliftBackend {
                                         sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
                                     }
 
-                                    // Determine return type from the result value's HIR type
-                                    let return_cranelift_ty = if let Some(result_id) = result {
-                                        // Look up the HIR type for the result value
+                                    // Determine return type - prefer signature info over HIR type
+                                    let return_cranelift_ty = if let Some(sym_sig) = self.symbol_signatures.get(symbol_name) {
+                                        // Use signature return type if available
+                                        if sym_sig.return_type == crate::zrtl::TypeTag::VOID {
+                                            None
+                                        } else {
+                                            // For now, all non-void returns are i64 (pointers/handles)
+                                            Some(types::I64)
+                                        }
+                                    } else if let Some(result_id) = result {
+                                        // Fall back to HIR type
                                         if let Some(value) = function.values.get(result_id) {
                                             // Map HIR type to Cranelift type inline
-                                            let ty = match &value.ty {
-                                                HirType::I32 => types::I32,
-                                                HirType::I64 => types::I64,
-                                                HirType::F32 => types::F32,
-                                                HirType::F64 => types::F64,
-                                                HirType::Bool => types::I8,
-                                                HirType::Ptr(_) => types::I64,
-                                                _ => types::I64, // Default to i64 for handles/complex types
-                                            };
-                                            Some(ty)
+                                            match &value.ty {
+                                                HirType::I32 => Some(types::I32),
+                                                HirType::I64 => Some(types::I64),
+                                                HirType::F32 => Some(types::F32),
+                                                HirType::F64 => Some(types::F64),
+                                                HirType::Bool => Some(types::I8),
+                                                HirType::Ptr(_) => Some(types::I64),
+                                                HirType::Void => None,
+                                                _ => Some(types::I64), // Default to i64 for handles/complex types
+                                            }
                                         } else {
                                             // Default to i64 for unknown external call results
                                             Some(types::I64)
