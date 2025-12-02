@@ -1656,7 +1656,10 @@ impl AstHostFunctions for TypedAstBuilder {
         let right_expr = self.get_expr(right).unwrap_or_else(|| self.inner.int_literal(0, span));
 
         let binary_op = Self::string_to_binary_op(op);
-        let result_type = Type::Primitive(PrimitiveType::I32);
+
+        // Don't hardcode result type - let type checker infer it from operands
+        // For operator overloading, the result type depends on the trait implementation
+        let result_type = Type::Any;
 
         let expr = self.inner.binary(binary_op, left_expr, right_expr, result_type, span);
         self.store_expr(expr)
@@ -1675,7 +1678,10 @@ impl AstHostFunctions for TypedAstBuilder {
         }
 
         let unary_op = Self::string_to_unary_op(op);
-        let result_type = Type::Primitive(PrimitiveType::I32);
+
+        // Don't hardcode result type - let type checker infer it from operand
+        // For operator overloading, the result type depends on the trait implementation
+        let result_type = Type::Any;
 
         let expr = self.inner.unary(unary_op, operand_expr, result_type, span);
         self.store_expr(expr)
