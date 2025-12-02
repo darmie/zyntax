@@ -271,6 +271,9 @@ pub trait AstHostFunctions {
         body: NodeHandle,
     ) -> NodeHandle;
 
+    /// Create an import declaration
+    fn create_import(&mut self, module_name: &str) -> NodeHandle;
+
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
 
@@ -1415,6 +1418,15 @@ impl AstHostFunctions for TypedAstBuilder {
         );
 
         self.store_decl(func)
+    }
+
+    fn create_import(&mut self, module_name: &str) -> NodeHandle {
+        let span = self.default_span();
+
+        // Create import declaration using the builder's import method
+        let import_decl = self.inner.import(module_name, span);
+
+        self.store_decl(import_decl)
     }
 
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
@@ -4989,14 +5001,22 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "import" => {
-                // Import declarations are structural - just return a placeholder for now
-                let path = match args.get("path") {
+                // Import a module (e.g., "import prelude")
+                let module_name = match args.get("module_name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
+                    Some(RuntimeValue::Node(h)) => {
+                        // If it's a node, it might be an identifier - get its text
+                        // For now, just use "unknown" as fallback
+                        "unknown".to_string()
+                    }
                     _ => String::new(),
                 };
-                // For now, imports don't generate AST nodes - they're metadata
-                // Return a dummy node that won't be included in declarations
-                let handle = self.host.create_identifier(&path);
+
+                if module_name.is_empty() {
+                    return Err(crate::error::ZynPegError::CodeGenError("import: missing module_name".into()));
+                }
+
+                let handle = self.host.create_import(&module_name);
                 Ok(RuntimeValue::Node(handle))
             }
 

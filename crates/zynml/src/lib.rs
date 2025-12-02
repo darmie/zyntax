@@ -72,6 +72,12 @@ pub enum ZynMLError {
 /// The embedded ZynML grammar
 pub const ZYNML_GRAMMAR: &str = include_str!("../ml.zyn");
 
+/// The embedded ZynML standard library - prelude
+pub const ZYNML_STDLIB_PRELUDE: &str = include_str!("../stdlib/prelude.zynml");
+
+/// The embedded ZynML standard library - tensor
+pub const ZYNML_STDLIB_TENSOR: &str = include_str!("../stdlib/tensor.zynml");
+
 /// Required ZRTL plugins for ZynML
 pub const REQUIRED_PLUGINS: &[&str] = &[
     "zrtl_tensor",
@@ -139,6 +145,16 @@ impl ZynML {
 
         // Register the grammar
         runtime.register_grammar("zynml", grammar.clone());
+
+        // Register stdlib import resolver
+        // This allows `import prelude` and `import tensor` to resolve
+        runtime.add_import_resolver(Box::new(|module_name| {
+            match module_name {
+                "prelude" => Ok(Some(ZYNML_STDLIB_PRELUDE.to_string())),
+                "tensor" => Ok(Some(ZYNML_STDLIB_TENSOR.to_string())),
+                _ => Ok(None), // Not a stdlib module
+            }
+        }));
 
         // Load required plugins
         let plugins_path = Path::new(&config.plugins_dir);

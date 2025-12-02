@@ -962,6 +962,41 @@ impl TypedASTBuilder {
         )
     }
 
+    /// Build import declaration for a single module
+    ///
+    /// # Arguments
+    /// * `module_name` - The module name to import (e.g., "prelude", "tensor")
+    /// * `span` - Source span for error reporting
+    ///
+    /// # Example
+    /// ```ignore
+    /// // import prelude
+    /// builder.import("prelude", span)
+    /// ```
+    pub fn import(
+        &mut self,
+        module_name: &str,
+        span: Span,
+    ) -> TypedNode<TypedDeclaration> {
+        use crate::typed_ast::{TypedImport, TypedImportItem};
+
+        let module_path = vec![self.intern(module_name)];
+
+        // For simple imports like "import prelude", we treat it as a glob import
+        // This makes all symbols from the module available
+        let items = vec![TypedImportItem::Glob];
+
+        typed_node(
+            TypedDeclaration::Import(TypedImport {
+                module_path,
+                items,
+                span,
+            }),
+            Type::Never, // Imports don't have a type
+            span,
+        )
+    }
+
     // ====== COROUTINE AND ASYNC BUILDERS ======
 
     /// Build coroutine statement

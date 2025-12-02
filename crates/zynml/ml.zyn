@@ -257,12 +257,15 @@ top_level_item = { trait_def | impl_block | type_def | fn_def | let_stmt | impor
 // Import Statement
 // ============================================================================
 
-// import tensor, audio, model
-import_stmt = { "import" ~ identifier ~ ("," ~ identifier)* }
-  -> TypedStatement {
-      "get_all_children": true,
-      "define": "import",
-      "args": { "modules": "$result" }
+// import tensor
+// import prelude
+import_stmt = { "import" ~ identifier }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "import", "args": {
+              "module_name": "$1"
+          }}
+      ]
   }
 
 // ============================================================================
