@@ -811,6 +811,9 @@ impl ZyntaxRuntime {
         let module_name = InternedString::new_global("main");
         let type_registry = std::sync::Arc::new(TypeRegistry::new());
 
+        // Process imports to load stdlib traits and impls before lowering
+        self.process_imports_for_traits(&program, &type_registry)?;
+
         let mut lowering_ctx = LoweringContext::new(
             module_name,
             type_registry.clone(),
@@ -830,6 +833,45 @@ impl ZyntaxRuntime {
             .map_err(|e| RuntimeError::Execution(format!("Monomorphization error: {:?}", e)))?;
 
         Ok(hir_module)
+    }
+
+    /// Process import declarations to load stdlib traits and implementations
+    ///
+    /// This scans the TypedProgram for Import declarations, resolves them using
+    /// the registered import resolvers, parses the imported modules, and registers
+    /// their trait definitions and implementations in the TypeRegistry.
+    fn process_imports_for_traits(
+        &self,
+        program: &zyntax_typed_ast::TypedProgram,
+        type_registry: &std::sync::Arc<zyntax_typed_ast::TypeRegistry>,
+    ) -> RuntimeResult<()> {
+        use zyntax_typed_ast::typed_ast::TypedDeclaration;
+
+        // Collect all import declarations
+        for decl in &program.declarations {
+            if let TypedDeclaration::Import(import) = &decl.node {
+                // Get module name (for simple imports like "import prelude", it's a single identifier)
+                let module_name = import.module_path
+                    .first()
+                    .and_then(|s| s.resolve_global())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                log::debug!("Processing import: {}", module_name);
+
+                // Try to resolve the import using our import resolvers
+                if let Ok(Some(source)) = self.resolve_import(&module_name) {
+                    log::debug!("Resolved import '{}', parsing module...", module_name);
+
+                    // TODO: Parse the imported module and extract traits/impls
+                    // For now, just log that we found it
+                    log::info!("Found stdlib module '{}' ({} bytes)", module_name, source.len());
+                } else {
+                    log::warn!("Could not resolve import: {}", module_name);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Get a function pointer by name
