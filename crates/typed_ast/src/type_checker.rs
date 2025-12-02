@@ -653,6 +653,7 @@ impl TypeChecker {
             // TODO: Implement other declaration types
             TypedDeclaration::Class(_)
             | TypedDeclaration::Interface(_)
+            | TypedDeclaration::Impl(_)
             | TypedDeclaration::Enum(_)
             | TypedDeclaration::TypeAlias(_)
             | TypedDeclaration::Module(_)

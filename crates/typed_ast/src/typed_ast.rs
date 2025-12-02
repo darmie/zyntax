@@ -53,6 +53,7 @@ pub enum TypedDeclaration {
     Variable(TypedVariable),
     Class(TypedClass),
     Interface(TypedInterface),
+    Impl(TypedTraitImpl),
     Enum(TypedEnum),
     TypeAlias(TypedTypeAlias),
     Module(TypedModule),
@@ -1126,6 +1127,31 @@ pub struct TypedInterface {
     pub methods: Vec<TypedMethodSignature>,
     pub associated_types: Vec<TypedAssociatedType>,
     pub visibility: Visibility,
+    pub span: Span,
+}
+
+/// Trait implementation block
+/// Represents: impl TraitName<TypeArgs> for TypeName { ... }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedTraitImpl {
+    /// The trait being implemented (e.g., "Add" in "impl Add<T> for Vec<T>")
+    pub trait_name: InternedString,
+    /// Type arguments for the trait (e.g., <Tensor> in "impl Add<Tensor> for Tensor")
+    pub trait_type_args: Vec<Type>,
+    /// The type implementing the trait (e.g., "Tensor" in "impl Add for Tensor")
+    pub for_type: Type,
+    /// Method implementations
+    pub methods: Vec<TypedMethod>,
+    /// Associated type definitions (e.g., "type Output = Tensor")
+    pub associated_types: Vec<TypedImplAssociatedType>,
+    pub span: Span,
+}
+
+/// Associated type definition in impl block
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedImplAssociatedType {
+    pub name: InternedString,
+    pub ty: Type,
     pub span: Span,
 }
 

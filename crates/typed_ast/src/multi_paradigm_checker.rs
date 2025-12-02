@@ -405,6 +405,7 @@ impl TypeChecker {
             TypedDeclaration::TypeAlias(_)
             | TypedDeclaration::Class(_)
             | TypedDeclaration::Interface(_)
+            | TypedDeclaration::Impl(_)
             | TypedDeclaration::Enum(_)
             | TypedDeclaration::Module(_)
             | TypedDeclaration::Import(_)
