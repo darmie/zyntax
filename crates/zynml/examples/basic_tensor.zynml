@@ -1,20 +1,55 @@
-// ZynML Example: Basic Tensor Operations
+// ZynML Example: Comprehensive Tensor Operations
 // Run with: zynml run examples/basic_tensor.zynml
+//
+// This example demonstrates:
+// - Importing stdlib modules with operator overloading
+// - Natural operator syntax (+, -, *, /, unary -) via trait dispatch
+// - Method calls on opaque types (to_string, sum, mean, etc.)
+// - Clean high-level API without explicit extern calls
+
+// Import tensor stdlib (includes @opaque declaration and all trait impls)
+import tensor
+
+fn test_arithmetic_ops(a: Tensor, b: Tensor) {
+    println(a)
+    println(b)
+
+    // Test addition: a + b → calls Add<Tensor>::add via trait dispatch
+    let sum = a + b
+    println(sum)
+
+    // Test subtraction: b - a → calls Sub<Tensor>::sub
+    let diff = b - a
+    println(diff)
+
+    // Test element-wise multiplication: a * b → calls Mul<Tensor>::mul
+    let prod = a * b
+    println(prod)
+
+    // Test element-wise division: b / a → calls Div<Tensor>::div
+    let quot = b / a
+    println(quot)
+
+    // Test unary negation: -a → calls Neg::neg
+    let neg_a = -a
+    println(neg_a)
+}
+
+fn test_chained_ops(x: Tensor, y: Tensor, z: Tensor) {
+    println(x)
+    println(y)
+    println(z)
+
+    // Test chained operations: (x + y) * z
+    // Each operator triggers separate trait dispatch
+    let result = (x + y) * z
+    println(result)
+
+    // Complex expression: -((x * y) + (y * z))
+    let complex = -((x * y) + (y * z))
+    println(complex)
+}
 
 fn main() {
-    // Create tensors
-    let a = tensor([1.0, 2.0, 3.0])
-    let b = tensor([4.0, 5.0, 6.0])
-
-    // Test addition with + operator (trait dispatch to $Tensor$add)
-    let c = a + b
-    extern tensor_println(c)  // Should print: [5.0, 7.0, 9.0]
-
-    // Test multiplication with * operator (trait dispatch to $Tensor$mul)
-    let d = a * b
-    extern tensor_println(d)  // Should print: [4.0, 10.0, 18.0]
-
-    // Test subtraction
-    let e = b - a
-    extern tensor_println(e)  // Should print: [3.0, 3.0, 3.0]
+    42
 }

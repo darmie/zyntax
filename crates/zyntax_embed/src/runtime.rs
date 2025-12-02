@@ -803,7 +803,7 @@ impl ZyntaxRuntime {
     ///
     /// This performs the lowering pass to convert the TypedAST to HIR,
     /// which can then be compiled to machine code.
-    fn lower_typed_program(&self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
+    fn lower_typed_program(&self, mut program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
         use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry};
 
@@ -814,11 +814,12 @@ impl ZyntaxRuntime {
         // Process extern declarations to register opaque types (needs &mut)
         self.process_extern_declarations_mut(&program, &mut type_registry)?;
 
+        // Process imports to load stdlib traits and impls BEFORE lowering
+        // This must happen before wrapping type_registry in Arc since it needs &mut
+        self.process_imports_for_traits(&mut program, &mut type_registry)?;
+
         // Wrap in Arc for sharing
         let type_registry = std::sync::Arc::new(type_registry);
-
-        // Process imports to load stdlib traits and impls before lowering
-        self.process_imports_for_traits(&program, &type_registry)?;
 
         let mut lowering_ctx = LoweringContext::new(
             module_name,
@@ -848,32 +849,68 @@ impl ZyntaxRuntime {
     /// their trait definitions and implementations in the TypeRegistry.
     fn process_imports_for_traits(
         &self,
-        program: &zyntax_typed_ast::TypedProgram,
-        type_registry: &std::sync::Arc<zyntax_typed_ast::TypeRegistry>,
+        program: &mut zyntax_typed_ast::TypedProgram,
+        type_registry: &mut zyntax_typed_ast::TypeRegistry,
     ) -> RuntimeResult<()> {
         use zyntax_typed_ast::typed_ast::TypedDeclaration;
 
-        // Collect all import declarations
+        // Collect imports to process (can't mutate while iterating)
+        let mut imports_to_process = Vec::new();
         for decl in &program.declarations {
             if let TypedDeclaration::Import(import) = &decl.node {
-                // Get module name (for simple imports like "import prelude", it's a single identifier)
                 let module_name = import.module_path
                     .first()
                     .and_then(|s| s.resolve_global())
                     .unwrap_or_else(|| "unknown".to_string());
+                imports_to_process.push(module_name);
+            }
+        }
 
-                log::debug!("Processing import: {}", module_name);
+        // Process each import
+        for module_name in imports_to_process {
+            log::debug!("Processing import: {}", module_name);
 
-                // Try to resolve the import using our import resolvers
-                if let Ok(Some(source)) = self.resolve_import(&module_name) {
-                    log::debug!("Resolved import '{}', parsing module...", module_name);
+            // Try to resolve the import using our import resolvers
+            if let Ok(Some(source)) = self.resolve_import(&module_name) {
+                log::debug!("Resolved import '{}', parsing module...", module_name);
 
-                    // TODO: Parse the imported module and extract traits/impls
-                    // For now, just log that we found it
-                    log::info!("Found stdlib module '{}' ({} bytes)", module_name, source.len());
-                } else {
-                    log::warn!("Could not resolve import: {}", module_name);
+                // Find a grammar to parse the imported module
+                // Try each registered grammar until one succeeds
+                let mut parsed_program = None;
+                for (_lang_name, grammar) in &self.grammars {
+                    match grammar.parse(&source) {
+                        Ok(imported_program) => {
+                            parsed_program = Some(imported_program);
+                            break;
+                        }
+                        Err(_) => continue,
+                    }
                 }
+
+                if let Some(mut imported_program) = parsed_program {
+                    log::info!("Parsed stdlib module '{}': {} declarations",
+                        module_name, imported_program.declarations.len());
+
+                    // First, process extern declarations from the imported module
+                    // to register opaque types in the type registry
+                    if let Err(e) = self.process_extern_declarations_mut(&imported_program, type_registry) {
+                        log::warn!("Failed to process extern declarations from '{}': {}", module_name, e);
+                    }
+
+                    // Merge declarations from imported module into main program
+                    // Filter out the import declarations themselves to avoid circular imports
+                    for imported_decl in imported_program.declarations.drain(..) {
+                        if !matches!(imported_decl.node, TypedDeclaration::Import(_)) {
+                            program.declarations.push(imported_decl);
+                        }
+                    }
+
+                    log::debug!("Merged declarations from '{}'", module_name);
+                } else {
+                    log::warn!("Failed to parse imported module '{}' with any registered grammar", module_name);
+                }
+            } else {
+                log::warn!("Could not resolve import: {}", module_name);
             }
         }
 

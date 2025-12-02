@@ -135,36 +135,32 @@ fn randn(shape: Array<i64>, seed: i64) -> Tensor {
 }
 
 // ============================================================================
-// Tensor Methods (via method syntax extension)
+// Tensor Methods
 // ============================================================================
+//
+// TODO: These should use @method attribute when that's implemented
+// For now, they can be called as regular functions: sum(tensor)
 
-// These are defined as @method to enable x.sum() syntax
-@method
-fn sum(self: Tensor) -> f32 {
-    extern tensor_sum(self)
+fn sum(t: Tensor) -> f32 {
+    extern tensor_sum(t)
 }
 
-@method
-fn mean(self: Tensor) -> f32 {
-    extern tensor_mean(self)
+fn mean(t: Tensor) -> f32 {
+    extern tensor_mean(t)
 }
 
-@method
-fn max(self: Tensor) -> f32 {
-    extern tensor_max(self)
+fn max(t: Tensor) -> f32 {
+    extern tensor_max(t)
 }
 
-@method
-fn min(self: Tensor) -> f32 {
-    extern tensor_min(self)
+fn min(t: Tensor) -> f32 {
+    extern tensor_min(t)
 }
 
-@method
-fn reshape(self: Tensor, shape: Array<i64>) -> Tensor {
-    extern tensor_reshape(self, shape)
+fn reshape(t: Tensor, shape: Array<i64>) -> Tensor {
+    extern tensor_reshape(t, shape)
 }
 
-@method
-fn transpose(self: Tensor, dim0: i32, dim1: i32) -> Tensor {
-    extern tensor_transpose(self, dim0, dim1)
+fn transpose(t: Tensor, dim0: i32, dim1: i32) -> Tensor {
+    extern tensor_transpose(t, dim0, dim1)
 }
