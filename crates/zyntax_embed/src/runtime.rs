@@ -653,6 +653,9 @@ pub struct ZyntaxRuntime {
     extension_map: HashMap<String, String>,
     /// Names of async functions (original name, not _new suffix)
     async_functions: std::collections::HashSet<String>,
+    /// Plugin signatures (symbol name -> ZRTL signature)
+    /// Collected from loaded plugins for proper extern function type checking
+    plugin_signatures: HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>,
 }
 
 /// An external function that can be called from Zyntax code
@@ -691,6 +694,7 @@ impl ZyntaxRuntime {
             grammars: HashMap::new(),
             extension_map: HashMap::new(),
             async_functions: std::collections::HashSet::new(),
+            plugin_signatures: HashMap::new(),
         })
     }
 
@@ -710,6 +714,7 @@ impl ZyntaxRuntime {
             grammars: HashMap::new(),
             extension_map: HashMap::new(),
             async_functions: std::collections::HashSet::new(),
+            plugin_signatures: HashMap::new(),
         })
     }
 
@@ -1393,12 +1398,18 @@ impl ZyntaxRuntime {
 
         let plugin = ZrtlPlugin::load(path).map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
-        // Register all symbols from the plugin
-        for (name, ptr) in plugin.symbols() {
-            self.register_function(name, *ptr, 0); // Arity unknown without type info
+        // Register all symbols from the plugin as runtime symbols
+        // AND collect their signatures for type checking
+        for symbol_info in plugin.symbols_with_signatures() {
+            self.register_function(symbol_info.name, symbol_info.ptr, 0); // Arity unknown without type info
+
+            // Store signature if available
+            if let Some(sig) = symbol_info.sig {
+                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+            }
         }
 
-        // Register symbol signatures for auto-boxing support
+        // Register symbol signatures for auto-boxing support in backend
         self.backend.register_symbol_signatures(plugin.symbols_with_signatures());
 
         // Rebuild the JIT module to include the new symbols
@@ -1421,12 +1432,17 @@ impl ZyntaxRuntime {
         let count = registry.load_directory(&dir)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
-        // Register all collected symbols
-        for (name, ptr) in registry.collect_symbols() {
-            self.register_function(name, ptr, 0);
+        // Register all collected symbols AND their signatures
+        for symbol_info in registry.collect_symbols_with_signatures() {
+            self.register_function(symbol_info.name, symbol_info.ptr, 0);
+
+            // Store signature if available
+            if let Some(sig) = symbol_info.sig {
+                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+            }
         }
 
-        // Register symbol signatures for auto-boxing support
+        // Register symbol signatures for auto-boxing support in backend
         let symbols_with_sigs = registry.collect_symbols_with_signatures();
         self.backend.register_symbol_signatures(&symbols_with_sigs);
 
@@ -1733,14 +1749,14 @@ impl ZyntaxRuntime {
                 self.languages()
             )))?;
 
-        // Parse source to TypedAST with filename if provided
+        // Parse source to TypedAST with plugin signatures for proper extern declarations
         let typed_program = if let Some(fname) = filename {
             grammar
-                .parse_with_filename(source, fname)
+                .parse_with_signatures(source, fname, &self.plugin_signatures)
                 .map_err(|e| RuntimeError::Execution(e.to_string()))?
         } else {
             grammar
-                .parse(source)
+                .parse_with_signatures(source, "module.zynml", &self.plugin_signatures)
                 .map_err(|e| RuntimeError::Execution(e.to_string()))?
         };
 
@@ -1912,6 +1928,9 @@ pub struct TieredRuntime {
     grammars: HashMap<String, Arc<LanguageGrammar>>,
     /// File extension to language mapping (e.g., ".zig" -> "zig")
     extension_map: HashMap<String, String>,
+    /// Plugin signatures (symbol name -> ZRTL signature)
+    /// Collected from loaded plugins for proper extern function type checking
+    plugin_signatures: HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>,
 }
 
 impl TieredRuntime {
@@ -1926,6 +1945,7 @@ impl TieredRuntime {
             config,
             grammars: HashMap::new(),
             extension_map: HashMap::new(),
+            plugin_signatures: HashMap::new(),
         })
     }
 
@@ -2150,8 +2170,14 @@ impl TieredRuntime {
         let plugin = ZrtlPlugin::load(path).map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
         // Register all symbols from the plugin as runtime symbols
-        for (name, ptr) in plugin.symbols() {
-            self.backend.register_runtime_symbol(name, *ptr);
+        // AND collect their signatures for type checking
+        for symbol_info in plugin.symbols_with_signatures() {
+            self.backend.register_runtime_symbol(symbol_info.name, symbol_info.ptr);
+
+            // Store signature if available
+            if let Some(sig) = symbol_info.sig {
+                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+            }
         }
 
         Ok(())
@@ -2171,12 +2197,29 @@ impl TieredRuntime {
         let count = registry.load_directory(&dir)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
-        // Register all collected symbols
-        for (name, ptr) in registry.collect_symbols() {
-            self.backend.register_runtime_symbol(name, ptr);
+        // Register all collected symbols AND their signatures
+        for symbol_info in registry.collect_symbols_with_signatures() {
+            self.backend.register_runtime_symbol(symbol_info.name, symbol_info.ptr);
+
+            // Store signature if available
+            if let Some(sig) = symbol_info.sig {
+                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+            }
         }
 
         Ok(count)
+    }
+
+    /// Get plugin signatures for all loaded plugins
+    ///
+    /// Returns a reference to the mapping of symbol names to ZRTL signatures.
+    /// This can be used during parsing to create properly typed extern function declarations.
+    ///
+    /// # Returns
+    ///
+    /// A HashMap mapping symbol names (e.g., "$IO$println_dynamic") to their ZRTL signatures.
+    pub fn plugin_signatures(&self) -> &HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig> {
+        &self.plugin_signatures
     }
 
     // ========================================================================
@@ -2267,9 +2310,9 @@ impl TieredRuntime {
                 self.languages()
             )))?;
 
-        // Parse source to TypedAST
+        // Parse source to TypedAST with plugin signatures for proper extern declarations
         let typed_program = grammar
-            .parse(source)
+            .parse_with_signatures(source, "module.zynml", &self.plugin_signatures)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
         // Lower to HIR

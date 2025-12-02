@@ -277,7 +277,37 @@ impl LanguageGrammar {
 
         // Inject extern function declarations for all builtins from @builtin directive
         // This ensures the type checker can find these symbols in scope
-        self.inject_builtin_externs(&mut program)?;
+        self.inject_builtin_externs(&mut program, None)?;
+
+        Ok(program)
+    }
+
+    /// Parse source code with plugin signatures (for proper extern function declarations)
+    ///
+    /// # Arguments
+    /// * `source` - The source code to parse
+    /// * `filename` - The filename to use for source location (for diagnostics)
+    /// * `signatures` - Plugin signatures mapping symbol names to ZRTL signatures
+    ///
+    /// # Returns
+    /// The parsed TypedProgram ready for lowering to HIR
+    pub fn parse_with_signatures(
+        &self,
+        source: &str,
+        filename: &str,
+        signatures: &std::collections::HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>,
+    ) -> GrammarResult<TypedProgram> {
+        use zyntax_typed_ast::source::SourceFile;
+
+        let json = self.parse_to_json_with_filename(source, filename)?;
+        let mut program: TypedProgram = serde_json::from_str(&json)
+            .map_err(|e| GrammarError::AstBuildError(format!("Failed to deserialize TypedAST: {}", e)))?;
+
+        // Add source file for proper diagnostics
+        program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
+
+        // Inject extern function declarations with signatures
+        self.inject_builtin_externs(&mut program, Some(signatures))?;
 
         Ok(program)
     }
@@ -350,36 +380,78 @@ impl LanguageGrammar {
     ///
     /// This creates TypedDeclaration::Function entries with is_external=true for each
     /// builtin function so the type checker can find them in scope.
-    fn inject_builtin_externs(&self, program: &mut TypedProgram) -> GrammarResult<()> {
+    ///
+    /// # Arguments
+    /// * `program` - The TypedProgram to inject declarations into
+    /// * `signatures` - Optional plugin signatures for proper parameter types
+    fn inject_builtin_externs(
+        &self,
+        program: &mut TypedProgram,
+        signatures: Option<&std::collections::HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>>,
+    ) -> GrammarResult<()> {
         use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedFunction, TypedParameter};
         use zyntax_typed_ast::type_registry::{Type, PrimitiveType};
         use zyntax_typed_ast::{typed_node, Span, Visibility, CallingConvention, Mutability, InternedString};
 
         eprintln!("[DEBUG inject_builtin_externs] Called with {} existing declarations", program.declarations.len());
         eprintln!("[DEBUG inject_builtin_externs] Builtins.functions has {} entries", self.module.metadata.builtins.functions.len());
+        if let Some(sigs) = signatures {
+            eprintln!("[DEBUG inject_builtin_externs] Plugin signatures available: {} entries", sigs.len());
+        }
 
         let span = Span::new(0, 0); // Synthetic span for injected declarations
 
         // Iterate over all builtins from @builtin directive
         for (source_name, target_symbol) in &self.module.metadata.builtins.functions {
-            // Get return type from @types.function_returns if available, otherwise use Any
-            // All return types in @types are extern/opaque types
-            let return_type = self.module.metadata.types.function_returns.get(source_name)
-                .map(|type_str| {
-                    Type::Extern {
-                        name: InternedString::new_global(type_str),
-                        layout: None,  // Layout determined by ZRTL at runtime
-                    }
-                })
-                .unwrap_or(Type::Any);
+            // Get return type from @types.function_returns if available, otherwise use signature or Any
+            let return_type = if let Some(type_str) = self.module.metadata.types.function_returns.get(source_name) {
+                // Use type from @types directive
+                Type::Extern {
+                    name: InternedString::new_global(type_str),
+                    layout: None,  // Layout determined by ZRTL at runtime
+                }
+            } else if let Some(sigs) = signatures {
+                // Try to get return type from plugin signature
+                sigs.get(target_symbol.as_str())
+                    .map(|sig| Self::type_tag_to_type(&sig.return_type))
+                    .unwrap_or(Type::Any)
+            } else {
+                Type::Any
+            };
+
+            // Get parameters from signature if available
+            let params = if let Some(sigs) = signatures {
+                if let Some(sig) = sigs.get(target_symbol.as_str()) {
+                    eprintln!("[DEBUG inject_builtin_externs] Found signature for {}: param_count={}", target_symbol, sig.param_count);
+                    // Convert ZRTL signature parameters to TypedParameter
+                    use zyntax_typed_ast::typed_ast::ParameterKind;
+                    (0..sig.param_count)
+                        .map(|i| {
+                            let ty = Self::type_tag_to_type(&sig.params[i as usize]);
+                            TypedParameter {
+                                name: InternedString::new_global(&format!("p{}", i)),
+                                ty,
+                                mutability: Mutability::Immutable,
+                                kind: ParameterKind::Regular,
+                                default_value: None,
+                                attributes: vec![],
+                                span: span,
+                            }
+                        })
+                        .collect()
+                } else {
+                    eprintln!("[DEBUG inject_builtin_externs] No signature found for {}", target_symbol);
+                    vec![]  // No signature found - accept anything
+                }
+            } else {
+                vec![]  // No signatures provided - accept anything
+            };
 
             // Create extern function declaration
-            // We don't declare any parameters - the type checker will allow any arguments
-            // The actual signature is enforced by ZRTL at runtime
             let extern_func = TypedFunction {
                 name: InternedString::new_global(target_symbol),
                 type_params: vec![],
-                params: vec![],  // No parameters - accept anything
+                params,
                 return_type,
                 body: None,  // Extern functions have no body
                 visibility: Visibility::Public,
@@ -402,6 +474,55 @@ impl LanguageGrammar {
             program.declarations.len());
 
         Ok(())
+    }
+
+    /// Convert ZRTL TypeTag to Type
+    ///
+    /// Maps ZRTL runtime type tags to compile-time Type enum values
+    fn type_tag_to_type(tag: &zyntax_compiler::zrtl::TypeTag) -> zyntax_typed_ast::type_registry::Type {
+        use zyntax_compiler::zrtl::{TypeCategory, PrimitiveSize};
+        use zyntax_typed_ast::type_registry::{Type, PrimitiveType};
+
+        match tag.category() {
+            TypeCategory::Void => Type::Primitive(PrimitiveType::Unit),
+            TypeCategory::Bool => Type::Primitive(PrimitiveType::Bool),
+            TypeCategory::Int => {
+                // Check size from type_id (PrimitiveSize enum values)
+                let size = tag.type_id();
+                match size {
+                    x if x == PrimitiveSize::Bits8 as u16 => Type::Primitive(PrimitiveType::I8),
+                    x if x == PrimitiveSize::Bits16 as u16 => Type::Primitive(PrimitiveType::I16),
+                    x if x == PrimitiveSize::Bits32 as u16 => Type::Primitive(PrimitiveType::I32),
+                    x if x == PrimitiveSize::Bits64 as u16 => Type::Primitive(PrimitiveType::I64),
+                    _ => Type::Primitive(PrimitiveType::I32), // Default to i32
+                }
+            }
+            TypeCategory::UInt => {
+                let size = tag.type_id();
+                match size {
+                    x if x == PrimitiveSize::Bits8 as u16 => Type::Primitive(PrimitiveType::U8),
+                    x if x == PrimitiveSize::Bits16 as u16 => Type::Primitive(PrimitiveType::U16),
+                    x if x == PrimitiveSize::Bits32 as u16 => Type::Primitive(PrimitiveType::U32),
+                    x if x == PrimitiveSize::Bits64 as u16 => Type::Primitive(PrimitiveType::U64),
+                    _ => Type::Primitive(PrimitiveType::U32), // Default to u32
+                }
+            }
+            TypeCategory::Float => {
+                let size = tag.type_id();
+                match size {
+                    x if x == PrimitiveSize::Bits32 as u16 => Type::Primitive(PrimitiveType::F32),
+                    x if x == PrimitiveSize::Bits64 as u16 => Type::Primitive(PrimitiveType::F64),
+                    _ => Type::Primitive(PrimitiveType::F32), // Default to f32
+                }
+            }
+            TypeCategory::String => Type::Primitive(PrimitiveType::String),
+            TypeCategory::Opaque => {
+                // For opaque types, use Any for now
+                // TODO: Could use Type::Extern with proper name if we had type registry
+                Type::Any
+            }
+            _ => Type::Any,  // Fallback for complex types
+        }
     }
 }
 
