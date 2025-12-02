@@ -368,6 +368,12 @@ pub trait AstHostFunctions {
         None // Default implementation returns None
     }
 
+    /// Allocate a new node handle
+    fn alloc_handle(&mut self) -> NodeHandle;
+
+    /// Store a type associated with a handle (for type resolution)
+    fn store_type(&mut self, handle: NodeHandle, ty: zyntax_typed_ast::type_registry::Type);
+
     /// Create a method call expression
     fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle;
 
@@ -1127,13 +1133,6 @@ impl TypedAstBuilder {
         }
     }
 
-    /// Allocate a new handle ID
-    fn alloc_handle(&mut self) -> NodeHandle {
-        let handle = NodeHandle(self.next_id);
-        self.next_id += 1;
-        handle
-    }
-
     /// Store an expression and return its handle
     fn store_expr(&mut self, expr: TypedNode<TypedExpression>) -> NodeHandle {
         let handle = self.alloc_handle();
@@ -1291,6 +1290,16 @@ impl AstHostFunctions for TypedAstBuilder {
         let typed_program = self.build_program();
         serde_json::to_string(&typed_program)
             .unwrap_or_else(|e| format!(r#"{{"declarations": [], "error": "{}"}}"#, e))
+    }
+
+    fn alloc_handle(&mut self) -> NodeHandle {
+        let handle = NodeHandle(self.next_id);
+        self.next_id += 1;
+        handle
+    }
+
+    fn store_type(&mut self, handle: NodeHandle, ty: zyntax_typed_ast::type_registry::Type) {
+        self.types.insert(handle, ty);
     }
 
     fn create_function(
@@ -4025,9 +4034,15 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     }
                     _ => "arg".to_string(),
                 };
+                // If type is not provided, default to Any (dynamic box pointer)
                 let ty = match args.get("type") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => self.host.create_primitive_type("i32"),
+                    _ => {
+                        // Create a handle for Type::Any
+                        let handle = self.host.alloc_handle();
+                        self.host.store_type(handle, zyntax_typed_ast::type_registry::Type::Any);
+                        handle
+                    }
                 };
                 let handle = self.host.create_param(&name, ty);
                 Ok(RuntimeValue::Node(handle))

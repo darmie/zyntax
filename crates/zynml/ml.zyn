@@ -430,7 +430,7 @@ impl_block = { "impl" ~ identifier ~ type_args_angle? ~ "for" ~ identifier ~ "{"
       ]
   }
 
-impl_item = { impl_assoc_type | impl_method }
+impl_item = { impl_assoc_type | impl_method_return | impl_method_params | impl_method_simple }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -446,9 +446,46 @@ impl_assoc_type = { "type" ~ identifier ~ "=" ~ type_expr }
       ]
   }
 
-impl_method = { fn_def }
+// Impl methods can't have their own type params (they use the impl block's)
+// So we define specific impl method rules without type params
+
+// fn add(self, rhs: T) -> ReturnType { ... }
+impl_method_return = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
   -> TypedDeclaration {
-      "get_child": { "index": 0 }
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// fn process(self, other: T) { ... }
+impl_method_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "void",
+              "body": "$3"
+          }}
+      ]
+  }
+
+// fn simple() { ... }
+impl_method_simple = { "fn" ~ identifier ~ "(" ~ ")" ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "void",
+              "body": "$2"
+          }}
+      ]
   }
 
 // Type arguments in angle brackets (for trait impl)
@@ -580,12 +617,16 @@ fn_params = { fn_param ~ ("," ~ fn_param)* }
       "get_all_children": true
   }
 
-// Parameter is just identifier for now (dynamic typing)
-fn_param = { identifier }
+// Parameter with optional type annotation
+// Supports: x, x: Int, self, self: Tensor
+fn_param = { identifier ~ (":" ~ type_expr)? }
   -> TypedParameter {
-      "get_text": true,
-      "define": "param",
-      "args": { "name": "$result", "type": { "define": "primitive_type", "args": { "name": "i64" } } }
+      "commands": [
+          { "define": "param", "args": {
+              "name": "$1",
+              "type": "$2"
+          }}
+      ]
   }
 
 // ============================================================================
