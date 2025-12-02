@@ -1330,8 +1330,8 @@ impl SsaBuilder {
                 if let TypedLiteral::String(s) = lit {
                     Ok(self.create_string_global(*s))
                 } else {
-                    let constant = self.translate_literal(lit);
                     let ty = self.convert_type(&expr.ty);
+                    let constant = self.translate_literal_with_type(lit, &ty);
                     Ok(self.create_value(ty, HirValueKind::Constant(constant)))
                 }
             }
@@ -3168,8 +3168,13 @@ impl SsaBuilder {
         }
     }
 
-    /// Translate literal to constant
+    /// Translate literal to constant (legacy - always uses default types)
     fn translate_literal(&self, lit: &zyntax_typed_ast::typed_ast::TypedLiteral) -> crate::hir::HirConstant {
+        self.translate_literal_with_type(lit, &HirType::I32)
+    }
+
+    /// Translate literal to constant with target type information
+    fn translate_literal_with_type(&self, lit: &zyntax_typed_ast::typed_ast::TypedLiteral, target_ty: &HirType) -> crate::hir::HirConstant {
         use zyntax_typed_ast::typed_ast::TypedLiteral;
         use crate::hir::HirConstant;
 
@@ -3177,7 +3182,13 @@ impl SsaBuilder {
             TypedLiteral::Bool(b) => HirConstant::Bool(*b),
             // Use I32 for integers (TypedAST builder defaults to I32)
             TypedLiteral::Integer(i) => HirConstant::I32(*i as i32),
-            TypedLiteral::Float(f) => HirConstant::F64(*f),
+            // Float literals use the target type (F32 or F64)
+            TypedLiteral::Float(f) => {
+                match target_ty {
+                    HirType::F32 => HirConstant::F32(*f as f32),
+                    _ => HirConstant::F64(*f),
+                }
+            }
             TypedLiteral::String(s) => HirConstant::String(*s),
             TypedLiteral::Char(c) => HirConstant::I32(*c as i32),
             TypedLiteral::Unit => HirConstant::Struct(vec![]),

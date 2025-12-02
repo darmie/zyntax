@@ -103,6 +103,24 @@ impl TypedASTBuilder {
         )
     }
 
+    /// Build float literal (defaults to F32 for ML-focused usage)
+    pub fn float_literal(&mut self, value: f64, span: Span) -> TypedNode<TypedExpression> {
+        typed_node(
+            TypedExpression::Literal(TypedLiteral::Float(value)),
+            Type::Primitive(PrimitiveType::F32),
+            span,
+        )
+    }
+
+    /// Build F64 float literal
+    pub fn float64_literal(&mut self, value: f64, span: Span) -> TypedNode<TypedExpression> {
+        typed_node(
+            TypedExpression::Literal(TypedLiteral::Float(value)),
+            Type::Primitive(PrimitiveType::F64),
+            span,
+        )
+    }
+
     /// Build string literal
     pub fn string_literal(&mut self, value: &str, span: Span) -> TypedNode<TypedExpression> {
         let interned = self.intern(value);

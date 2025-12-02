@@ -1482,9 +1482,7 @@ impl AstHostFunctions for TypedAstBuilder {
 
     fn create_float_literal(&mut self, value: f64) -> NodeHandle {
         let span = self.default_span();
-        // TypedASTBuilder doesn't have float_literal, use string_literal workaround for now
-        // or we could add a float literal type
-        let expr = self.inner.int_literal(value as i128, span);
+        let expr = self.inner.float_literal(value, span);
         self.store_expr(expr)
     }
 

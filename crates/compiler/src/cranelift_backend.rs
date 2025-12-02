@@ -1162,8 +1162,15 @@ impl CraneliftBackend {
                                             warn!(" No struct layout found for GEP");
                                         }
                                     }
+                                    // For scalar types (U8, I8, etc.), treat as byte-level pointer arithmetic
+                                    // This is used when the SSA layer wants to do direct byte offset calculation
+                                    HirType::U8 | HirType::I8 => {
+                                        // Index is already a byte offset, just add it
+                                        current_ptr = builder.ins().iadd(current_ptr, index);
+                                        // Type stays the same for subsequent indices
+                                    }
                                     _ => {
-                                        warn!(" GEP on unsupported type");
+                                        warn!(" GEP on unsupported type: {:?}", current_type);
                                         break;
                                     }
                                 }
