@@ -10,7 +10,7 @@
 //! - Supports languages like Rust, Java, C#, TypeScript, and Haxe
 
 use crate::arena::InternedString;
-use crate::source::Span;
+use crate::source::{Span, SourceFile};
 use crate::type_registry::{Type, Mutability, Visibility, CallingConvention};
 use serde::{Deserialize, Serialize};
 
@@ -39,11 +39,24 @@ impl<T: Default> Default for TypedNode<T> {
 }
 
 /// Typed program - the root of the AST
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedProgram {
     pub declarations: Vec<TypedNode<TypedDeclaration>>,
     #[serde(default)]
     pub span: Span,
+    /// Source files used in this program (for diagnostics)
+    #[serde(default)]
+    pub source_files: Vec<SourceFile>,
+}
+
+impl Default for TypedProgram {
+    fn default() -> Self {
+        Self {
+            declarations: Vec::new(),
+            span: Span::default(),
+            source_files: Vec::new(),
+        }
+    }
 }
 
 /// Top-level declarations

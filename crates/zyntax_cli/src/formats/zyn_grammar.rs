@@ -61,7 +61,8 @@ pub fn load(
     let zpeg_module = compile_grammar(&grammar_code, grammar_name, verbose)?;
 
     // Step 2: Parse source code using zpeg runtime
-    let typed_ast_json = parse_with_zpeg(&zpeg_module, &source_code, verbose)?;
+    let source_file_name = source_path.to_string_lossy().to_string();
+    let typed_ast_json = parse_with_zpeg(&zpeg_module, &source_code, &source_file_name, verbose)?;
 
     // Step 3: Deserialize TypedAST JSON to TypedProgram
     if verbose {
@@ -71,8 +72,12 @@ pub fn load(
         }
     }
 
-    let typed_program: TypedProgram = serde_json::from_str(&typed_ast_json)
+    let mut typed_program: TypedProgram = serde_json::from_str(&typed_ast_json)
         .map_err(|e| format!("Failed to deserialize TypedAST: {}", e))?;
+
+    // Add the source file to the program for proper diagnostics
+    use zyntax_typed_ast::source::SourceFile;
+    typed_program.source_files = vec![SourceFile::new(source_file_name.clone(), source_code.clone())];
 
     if verbose {
         println!(
@@ -145,6 +150,7 @@ fn compile_grammar(
 fn parse_with_zpeg(
     zpeg_module: &zyn_peg::runtime::ZpegModule,
     source_code: &str,
+    source_file_name: &str,
     verbose: bool,
 ) -> Result<String, Box<dyn std::error::Error>> {
     use pest::iterators::{Pair, Pairs};
@@ -177,7 +183,9 @@ fn parse_with_zpeg(
     }
 
     // Create interpreter with TypedAstBuilder host
-    let builder = TypedAstBuilder::new();
+    let mut builder = TypedAstBuilder::new();
+    // Set source file information for proper span tracking
+    builder.set_source(source_file_name.to_string(), source_code.to_string());
     let mut interpreter = CommandInterpreter::new(zpeg_module, builder);
 
     // Walk the parse tree and execute commands
@@ -229,6 +237,10 @@ fn walk_parse_tree<'a, H: zyn_peg::runtime::AstHostFunctions>(
             );
         }
 
+        // Set current span in interpreter and host before processing
+        interpreter.set_current_span(span_start, span_end);
+        interpreter.host_mut().set_current_span(span_start, span_end);
+
         // Recursively process children first
         let children: Vec<RuntimeValue> = pair.into_inner()
             .map(|child| walk_pair_to_value(child, interpreter, verbose))
@@ -263,6 +275,8 @@ fn walk_pair_to_value<'a, H: zyn_peg::runtime::AstHostFunctions>(
 
     let rule_name = pair.as_rule().to_string();
     let text = pair.as_str().to_string();
+    let span_start = pair.as_span().start();
+    let span_end = pair.as_span().end();
 
     // Always trace for debugging
     log::trace!("[walk_pair] rule='{}', text='{}'", rule_name, text.chars().take(50).collect::<String>());
@@ -272,12 +286,17 @@ fn walk_pair_to_value<'a, H: zyn_peg::runtime::AstHostFunctions>(
             if text.len() > 30 { format!("{}...", &text[..30]) } else { text.clone() });
     }
 
-    // Recursively process children
+    // Recursively process children first
     let children: Vec<RuntimeValue> = pair.into_inner()
         .map(|c| walk_pair_to_value(c, interpreter, verbose))
         .collect();
 
-    // Execute commands for this rule
+    // Set current span for THIS node (after children have been processed)
+    // This ensures the span corresponds to the current rule, not a child
+    interpreter.set_current_span(span_start, span_end);
+    interpreter.host_mut().set_current_span(span_start, span_end);
+
+    // Execute commands for this rule with the correct span
     interpreter.execute_rule(&rule_name, &text, children)
         .unwrap_or(RuntimeValue::Null)
 }

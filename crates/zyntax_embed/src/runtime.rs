@@ -821,8 +821,8 @@ impl ZyntaxRuntime {
             LoweringConfig::default(),
         );
 
-        // Skip type checking (parser already produced typed AST)
-        std::env::set_var("SKIP_TYPE_CHECK", "1");
+        // Don't skip type checking - enable type inference for trait resolution
+        // The parser produces TypedAST with Type::Any and placeholder TypeIds that need inference
 
         let mut hir_module = lowering_ctx
             .lower_program(&program)
@@ -1372,7 +1372,7 @@ impl ZyntaxRuntime {
     /// let result: i32 = runtime.call("add", &[10.into(), 32.into()])?;
     /// ```
     pub fn load_module(&mut self, language: &str, source: &str) -> RuntimeResult<Vec<String>> {
-        self.load_module_with_exports(language, source, &[])
+        self.load_module_with_exports_and_filename(language, source, &[], None)
     }
 
     /// Load a module and export specified functions for cross-module linking
@@ -1408,6 +1408,17 @@ impl ZyntaxRuntime {
         source: &str,
         exports: &[&str],
     ) -> RuntimeResult<Vec<String>> {
+        self.load_module_with_exports_and_filename(language, source, exports, None)
+    }
+
+    /// Load a module with exports and a specific filename for diagnostics
+    pub fn load_module_with_exports_and_filename(
+        &mut self,
+        language: &str,
+        source: &str,
+        exports: &[&str],
+        filename: Option<&str>,
+    ) -> RuntimeResult<Vec<String>> {
         let grammar = self
             .grammars
             .get(language)
@@ -1418,10 +1429,16 @@ impl ZyntaxRuntime {
                 self.languages()
             )))?;
 
-        // Parse source to TypedAST
-        let typed_program = grammar
-            .parse(source)
-            .map_err(|e| RuntimeError::Execution(e.to_string()))?;
+        // Parse source to TypedAST with filename if provided
+        let typed_program = if let Some(fname) = filename {
+            grammar
+                .parse_with_filename(source, fname)
+                .map_err(|e| RuntimeError::Execution(e.to_string()))?
+        } else {
+            grammar
+                .parse(source)
+                .map_err(|e| RuntimeError::Execution(e.to_string()))?
+        };
 
         // Lower to HIR
         let hir_module = self.lower_typed_program(typed_program)?;
@@ -1527,7 +1544,9 @@ impl ZyntaxRuntime {
                 e
             )))?;
 
-        self.load_module(&language, &source)
+        // Use the file path as the filename for diagnostics
+        let filename = path.to_string_lossy();
+        self.load_module_with_exports_and_filename(&language, &source, &[], Some(&filename))
     }
 
     /// List all loaded function names

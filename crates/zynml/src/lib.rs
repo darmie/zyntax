@@ -256,10 +256,24 @@ impl ZynML {
 
     /// Run a ZynML program from a file
     pub fn run_file(&mut self, path: &Path) -> Result<()> {
-        let source = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read file: {}", path.display()))?;
+        // Load the file with proper filename tracking for diagnostics
+        let functions = self.runtime
+            .load_module_file(path)
+            .with_context(|| format!("Failed to load file: {}", path.display()))?;
 
-        self.run(&source)
+        if self.config.verbose {
+            println!("Loaded {} functions", functions.len());
+        }
+
+        // Try to call main() if it exists
+        if functions.iter().any(|f| f == "main") {
+            if self.config.verbose {
+                println!("Calling main()...");
+            }
+            self.call("main")
+        } else {
+            Ok(()) // No main function to run
+        }
     }
 
     /// Get reference to the underlying runtime

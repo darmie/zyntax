@@ -443,8 +443,11 @@ impl LoweringContext {
 
             eprintln!("\n=== Type Checking Diagnostics ===");
 
-            // Create a source map (empty for now since we don't have source files in tests)
-            let source_map = SourceMap::new();
+            // Create a source map and populate it with source files from the program
+            let mut source_map = SourceMap::new();
+            for source_file in &program.source_files {
+                source_map.add_file(source_file.name.clone(), source_file.content.clone());
+            }
             let display = ConsoleDiagnosticDisplay::default();
 
             // Use the built-in pretty formatter

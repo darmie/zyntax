@@ -230,6 +230,7 @@ pub mod typescript_example {
             Ok(TypedProgram {
                 declarations,
                 span: Span::new(0, 0), // Would get from source
+                source_files: vec![], // TODO: Add source file info
             })
         }
     }

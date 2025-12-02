@@ -182,6 +182,7 @@ impl WhirlwindAdapter {
         let mut program = TypedProgram {
             declarations: all_declarations,
             span,
+            source_files: vec![],
         };
 
         // Run our type inference engine to fill in Unknown types

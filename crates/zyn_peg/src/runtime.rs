@@ -243,6 +243,11 @@ pub trait AstHostFunctions {
     /// Finalize program and return serialized TypedAST JSON
     fn finalize_program(&mut self, program: NodeHandle) -> String;
 
+    /// Set the current source span for tracking locations
+    fn set_current_span(&mut self, _start: usize, _end: usize) {
+        // Default implementation does nothing - can be overridden
+    }
+
     // ========== Functions ==========
 
     /// Create a function declaration
@@ -1102,6 +1107,8 @@ pub struct TypedAstBuilder {
     enum_types: HashMap<String, Vec<String>>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
+    /// Current span being processed (start, end)
+    current_span: (usize, usize),
 }
 
 impl Default for TypedAstBuilder {
@@ -1131,7 +1138,23 @@ impl TypedAstBuilder {
             variable_types: HashMap::new(),
             enum_types: HashMap::new(),
             program_decls: Vec::new(),
+            current_span: (0, 0),
         }
+    }
+
+    /// Set the current span for the next node being created
+    pub fn set_current_span(&mut self, start: usize, end: usize) {
+        self.current_span = (start, end);
+    }
+
+    /// Get the current span
+    pub fn get_current_span(&self) -> (usize, usize) {
+        self.current_span
+    }
+
+    /// Set the source file information for span tracking and diagnostics
+    pub fn set_source(&mut self, file_name: String, content: String) {
+        self.inner.set_source(file_name, content);
     }
 
     /// Store an expression and return its handle
@@ -1229,20 +1252,30 @@ impl TypedAstBuilder {
         }
     }
 
-    /// Get the default span for nodes
+    /// Get the default span for nodes (uses current span from parsing)
     fn default_span(&self) -> Span {
-        self.inner.dummy_span()
+        Span::new(self.current_span.0, self.current_span.1)
     }
 
     /// Build and return the final TypedProgram
     pub fn build_program(&self) -> TypedProgram {
+        use zyntax_typed_ast::source::SourceFile;
+
         let decls: Vec<TypedNode<TypedDeclaration>> = self.program_decls.iter()
             .filter_map(|h| self.declarations.get(h).cloned())
             .collect();
 
+        // Create SourceFile if we have source information
+        let source_files = if let (Some(name), Some(content)) = (self.inner.source_file(), self.inner.source_content()) {
+            vec![SourceFile::new(name.to_string(), content.to_string())]
+        } else {
+            vec![]
+        };
+
         TypedProgram {
             declarations: decls,
             span: self.default_span(),
+            source_files,
         }
     }
 
@@ -1304,6 +1337,10 @@ impl AstHostFunctions for TypedAstBuilder {
         let typed_program = self.build_program();
         serde_json::to_string(&typed_program)
             .unwrap_or_else(|e| format!(r#"{{"declarations": [], "error": "{}"}}"#, e))
+    }
+
+    fn set_current_span(&mut self, start: usize, end: usize) {
+        self.current_span = (start, end);
     }
 
     fn alloc_handle(&mut self) -> NodeHandle {
@@ -1487,6 +1524,7 @@ impl AstHostFunctions for TypedAstBuilder {
         items: Vec<NodeHandle>,
     ) -> NodeHandle {
         let span = self.default_span();
+        eprintln!("DEBUG: create_impl_block span=({}, {})", span.start, span.end);
 
         // Convert trait type arguments from handles to Type
         let trait_type_args: Vec<Type> = trait_args.iter()
@@ -2899,6 +2937,8 @@ pub struct CommandInterpreter<'a, H: AstHostFunctions> {
     value_stack: Vec<RuntimeValue>,
     /// Named variables
     variables: HashMap<String, RuntimeValue>,
+    /// Current span being processed (start, end)
+    current_span: (usize, usize),
 }
 
 impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
@@ -2909,7 +2949,18 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             host,
             value_stack: Vec::new(),
             variables: HashMap::new(),
+            current_span: (0, 0),
         }
+    }
+
+    /// Set the current span for the node being processed
+    pub fn set_current_span(&mut self, start: usize, end: usize) {
+        self.current_span = (start, end);
+    }
+
+    /// Get the current span
+    pub fn get_current_span(&self) -> (usize, usize) {
+        self.current_span
     }
 
     /// Unescape a string literal, processing escape sequences

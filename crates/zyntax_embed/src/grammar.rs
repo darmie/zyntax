@@ -229,7 +229,21 @@ impl LanguageGrammar {
     /// # Returns
     /// The TypedAST serialized as JSON
     pub fn parse_to_json(&self, source: &str) -> GrammarResult<String> {
-        self.parse_with_builder(source, TypedAstBuilder::new())
+        self.parse_to_json_with_filename(source, "unknown.zynml")
+    }
+
+    /// Parse source code with a specific filename and return the TypedAST as JSON
+    ///
+    /// # Arguments
+    /// * `source` - The source code to parse
+    /// * `filename` - The filename to use for source location (for diagnostics)
+    ///
+    /// # Returns
+    /// The TypedAST serialized as JSON
+    pub fn parse_to_json_with_filename(&self, source: &str, filename: &str) -> GrammarResult<String> {
+        let mut builder = TypedAstBuilder::new();
+        builder.set_source(filename.to_string(), source.to_string());
+        self.parse_with_builder(source, builder)
     }
 
     /// Parse source code and return a TypedProgram
@@ -240,9 +254,27 @@ impl LanguageGrammar {
     /// # Returns
     /// The parsed TypedProgram ready for lowering to HIR
     pub fn parse(&self, source: &str) -> GrammarResult<TypedProgram> {
-        let json = self.parse_to_json(source)?;
-        let program: TypedProgram = serde_json::from_str(&json)
+        self.parse_with_filename(source, "unknown.zynml")
+    }
+
+    /// Parse source code with a specific filename (for diagnostics)
+    ///
+    /// # Arguments
+    /// * `source` - The source code to parse
+    /// * `filename` - The filename to use for source location (for diagnostics)
+    ///
+    /// # Returns
+    /// The parsed TypedProgram ready for lowering to HIR
+    pub fn parse_with_filename(&self, source: &str, filename: &str) -> GrammarResult<TypedProgram> {
+        use zyntax_typed_ast::source::SourceFile;
+
+        let json = self.parse_to_json_with_filename(source, filename)?;
+        let mut program: TypedProgram = serde_json::from_str(&json)
             .map_err(|e| GrammarError::AstBuildError(format!("Failed to deserialize TypedAST: {}", e)))?;
+
+        // Add source file for proper diagnostics
+        program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
+
         Ok(program)
     }
 
@@ -321,10 +353,14 @@ fn walk_parse_tree<'a, H: AstHostFunctions>(
     for pair in pairs {
         let rule_name = pair.as_rule().to_string();
         let text = pair.as_str().to_string();
+        let span_start = pair.as_span().start();
+        let span_end = pair.as_span().end();
 
         log::trace!(
-            "[grammar] Processing rule '{}': {:?}",
+            "[grammar] Processing rule '{}' at {}..{}: {:?}",
             rule_name,
+            span_start,
+            span_end,
             if text.len() > 40 {
                 format!("{}...", &text[..40])
             } else {
@@ -338,7 +374,12 @@ fn walk_parse_tree<'a, H: AstHostFunctions>(
             .map(|child| walk_pair_to_value(child, interpreter))
             .collect();
 
-        // Execute commands for this rule
+        // Set current span for THIS node (after children have been processed)
+        // This ensures the span corresponds to the current rule, not a child
+        interpreter.set_current_span(span_start, span_end);
+        interpreter.host_mut().set_current_span(span_start, span_end);
+
+        // Execute commands for this rule with the correct span
         let result = interpreter
             .execute_rule(&rule_name, &text, children)
             .map_err(|e| GrammarError::AstBuildError(format!("Error executing rule '{}': {}", rule_name, e)))?;
@@ -357,10 +398,14 @@ fn walk_pair_to_value<'a, H: AstHostFunctions>(
 ) -> RuntimeValue {
     let rule_name = pair.as_rule().to_string();
     let text = pair.as_str().to_string();
+    let span_start = pair.as_span().start();
+    let span_end = pair.as_span().end();
 
     log::trace!(
-        "[grammar] walk_pair '{}': {:?}",
+        "[grammar] walk_pair '{}' at {}..{}: {:?}",
         rule_name,
+        span_start,
+        span_end,
         if text.len() > 30 {
             format!("{}...", &text[..30])
         } else {
@@ -376,7 +421,12 @@ fn walk_pair_to_value<'a, H: AstHostFunctions>(
 
     log::trace!("[WALK_PAIR] {}: children.len()={}, children={:?}", rule_name, children.len(), children);
 
-    // Execute commands for this rule
+    // Set current span for THIS node (after children have been processed)
+    // This ensures the span corresponds to the current rule, not a child
+    interpreter.set_current_span(span_start, span_end);
+    interpreter.host_mut().set_current_span(span_start, span_end);
+
+    // Execute commands for this rule with the correct span
     let result = interpreter
         .execute_rule(&rule_name, &text, children)
         .unwrap_or(RuntimeValue::Null);

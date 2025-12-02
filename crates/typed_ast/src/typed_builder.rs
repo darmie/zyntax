@@ -18,6 +18,8 @@ use crate::type_registry::TypeRegistry;
 pub struct TypedASTBuilder {
     arena: AstArena,
     pub registry: TypeRegistry,
+    source_file: Option<String>,
+    source_content: Option<String>,
 }
 
 impl TypedASTBuilder {
@@ -25,7 +27,25 @@ impl TypedASTBuilder {
         Self {
             arena: AstArena::new(),
             registry: TypeRegistry::new(),
+            source_file: None,
+            source_content: None,
         }
+    }
+
+    /// Set the source file information for span tracking
+    pub fn set_source(&mut self, file_name: String, content: String) {
+        self.source_file = Some(file_name);
+        self.source_content = Some(content);
+    }
+
+    /// Get the source file name
+    pub fn source_file(&self) -> Option<&str> {
+        self.source_file.as_deref()
+    }
+
+    /// Get the source content
+    pub fn source_content(&self) -> Option<&str> {
+        self.source_content.as_deref()
     }
 
     /// Get a reference to the arena for string interning
@@ -1153,7 +1173,16 @@ impl TypedASTBuilder {
         declarations: Vec<TypedNode<TypedDeclaration>>,
         span: Span,
     ) -> TypedProgram {
-        TypedProgram { declarations, span }
+        use crate::source::SourceFile;
+
+        // Create SourceFile if we have source information
+        let source_files = if let (Some(name), Some(content)) = (self.source_file(), self.source_content()) {
+            vec![SourceFile::new(name.to_string(), content.to_string())]
+        } else {
+            vec![]
+        };
+
+        TypedProgram { declarations, span, source_files }
     }
 }
 

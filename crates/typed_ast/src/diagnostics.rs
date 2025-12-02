@@ -331,35 +331,65 @@ impl DiagnosticDisplay for ConsoleDiagnosticDisplay {
         
         // Group annotations by file and sort by line
         let mut file_annotations: HashMap<String, Vec<&Annotation>> = HashMap::new();
+
+        // Get the first source file name from the source map (for single-file programs)
+        // TODO: For multi-file programs, track file_id in Span
+        let default_filename = source_map.get_file_by_id(0)
+            .map(|f| f.name.clone())
+            .unwrap_or_else(|| "input.zy".to_string());
+
         for annotation in &diagnostic.annotations {
-            // For now, use a placeholder filename - in practice, get from source_map
-            let filename = "input.zy".to_string(); // source_map.get_filename(annotation.span)
-            file_annotations.entry(filename).or_default().push(annotation);
+            file_annotations.entry(default_filename.clone()).or_default().push(annotation);
         }
-        
+
         // Display each file's annotations
         for (filename, annotations) in file_annotations {
-            writeln!(f, "  --> {}:{}:{}", filename, 1, 1)?; // Placeholder line/column
-            writeln!(f, "   |")?;
-            
+            // Get the source file
+            let source_file = source_map.get_file(&filename);
+
             // Sort annotations by span start
             let mut sorted_annotations = annotations;
             sorted_annotations.sort_by_key(|a| a.span.start);
-            
+
             // Display source lines with annotations
             for annotation in sorted_annotations {
-                // Placeholder source line display
-                writeln!(f, "{:3} | {}", 1, "    // source code line here")?;
-                writeln!(f, "   | {}{}",
-                    " ".repeat(4), // Column offset
-                    self.format_underline(annotation.style, 10) // Underline length
-                )?;
-                
-                if let Some(message) = &annotation.message {
-                    writeln!(f, "   | {}{}", " ".repeat(4), message)?;
+                // Get the actual location and source line
+                if let Some(file) = source_file {
+                    let location = file.get_location(annotation.span.start);
+                    let source_line = file.get_line(location.line).unwrap_or("");
+
+                    writeln!(f, "  --> {}:{}:{}", filename, location.line, location.column)?;
+                    writeln!(f, "   |")?;
+                    writeln!(f, "{:3} | {}", location.line, source_line)?;
+
+                    // Calculate underline position and length
+                    let underline_start = location.column - 1; // Convert to 0-based
+                    let underline_len = annotation.span.len().max(1);
+
+                    writeln!(f, "   | {}{}",
+                        " ".repeat(underline_start),
+                        self.format_underline(annotation.style, underline_len)
+                    )?;
+
+                    if let Some(message) = &annotation.message {
+                        writeln!(f, "   | {}{}", " ".repeat(underline_start), message)?;
+                    }
+                } else {
+                    // Fallback to placeholder if source file not found
+                    writeln!(f, "  --> {}:{}:{}", filename, 1, 1)?;
+                    writeln!(f, "   |")?;
+                    writeln!(f, "{:3} | {}", 1, "    // source code line here")?;
+                    writeln!(f, "   | {}{}",
+                        " ".repeat(4),
+                        self.format_underline(annotation.style, 10)
+                    )?;
+
+                    if let Some(message) = &annotation.message {
+                        writeln!(f, "   | {}{}", " ".repeat(4), message)?;
+                    }
                 }
             }
-            
+
             writeln!(f, "   |")?;
         }
         
