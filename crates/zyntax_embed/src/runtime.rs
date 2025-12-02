@@ -809,7 +809,13 @@ impl ZyntaxRuntime {
 
         let arena = AstArena::new();
         let module_name = InternedString::new_global("main");
-        let type_registry = std::sync::Arc::new(TypeRegistry::new());
+        let mut type_registry = TypeRegistry::new();
+
+        // Process extern declarations to register opaque types (needs &mut)
+        self.process_extern_declarations_mut(&program, &mut type_registry)?;
+
+        // Wrap in Arc for sharing
+        let type_registry = std::sync::Arc::new(type_registry);
 
         // Process imports to load stdlib traits and impls before lowering
         self.process_imports_for_traits(&program, &type_registry)?;
@@ -867,6 +873,54 @@ impl ZyntaxRuntime {
                     log::info!("Found stdlib module '{}' ({} bytes)", module_name, source.len());
                 } else {
                     log::warn!("Could not resolve import: {}", module_name);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Process extern declarations to register opaque types in the TypeRegistry
+    ///
+    /// This scans the TypedProgram for Extern::Struct declarations (created by @opaque)
+    /// and registers them in the TypeRegistry so they can be resolved during type checking.
+    fn process_extern_declarations_mut(
+        &self,
+        program: &zyntax_typed_ast::TypedProgram,
+        type_registry: &mut zyntax_typed_ast::TypeRegistry,
+    ) -> RuntimeResult<()> {
+        use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedExtern};
+        use zyntax_typed_ast::type_registry::{Type, ExternLayout};
+
+        eprintln!("[DEBUG] process_extern_declarations_mut called with {} declarations", program.declarations.len());
+
+        // Collect all extern struct declarations
+        for decl in &program.declarations {
+            eprintln!("[DEBUG] Processing declaration: {:?}", std::mem::discriminant(&decl.node));
+            if let TypedDeclaration::Extern(extern_decl) = &decl.node {
+                eprintln!("[DEBUG] Found Extern declaration!");
+                if let TypedExtern::Struct(extern_struct) = extern_decl {
+                    eprintln!("[DEBUG] Found Extern::Struct!");
+
+                    // Register the extern type in the type registry
+                    // The type name (e.g., "Tensor") should resolve to Type::Extern with runtime_prefix (e.g., "$Tensor")
+                    eprintln!("[DEBUG] Registering extern struct: name='{}', runtime_prefix='{}'",
+                        extern_struct.name.resolve_global().unwrap_or_default(),
+                        extern_struct.runtime_prefix.resolve_global().unwrap_or_default()
+                    );
+
+                    // Create a Type::Extern for this opaque type
+                    let extern_type = Type::Extern {
+                        name: extern_struct.runtime_prefix,
+                        layout: None,  // Layout determined by ZRTL plugin at runtime
+                    };
+
+                    // Register the type by name in the type registry using register_alias
+                    // This allows type resolution to find "Tensor" -> Type::Extern { name: "$Tensor" }
+                    type_registry.register_alias(extern_struct.name, extern_type.clone());
+                    eprintln!("[DEBUG] Registered extern type successfully");
+                } else {
+                    eprintln!("[DEBUG] Extern but not Struct: {:?}", std::mem::discriminant(extern_decl));
                 }
             }
         }

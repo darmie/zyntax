@@ -959,6 +959,13 @@ impl LoweringContext {
                 HirType::Opaque(*type_name)
             }
 
+            Type::Extern { name, .. } => {
+                // External/opaque types from ZRTL plugins
+                // These are represented as opaque pointers at the HIR level
+                eprintln!("[DEBUG convert_type] Converting Type::Extern with name='{}'", name.resolve_global().unwrap_or_default());
+                HirType::Opaque(*name)
+            }
+
             Type::Named { id, .. } => {
                 // Look up type definition in registry
                 if let Some(type_def) = self.type_registry.get_type_by_id(*id) {

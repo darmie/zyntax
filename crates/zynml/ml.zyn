@@ -365,12 +365,14 @@ type_def = { type_opaque | type_alias | type_struct }
   }
 
 // Opaque type wrapping external (ZRTL) type
-type_opaque = { "@opaque" ~ "(" ~ string_literal ~ ")" ~ "type" ~ identifier }
+// Match @opaque as two separate tokens to avoid conflict with @ operator
+// Get the full text and parse it in the runtime since atomic rules don't create child nodes
+type_opaque = { "@" ~ "opaque" ~ "(" ~ string_literal ~ ")" ~ "type" ~ identifier }
   -> TypedDeclaration {
+      "get_text": true,
       "commands": [
           { "define": "opaque_type", "args": {
-              "name": "$2",
-              "external_name": "$1"
+              "text": "$result"
           }}
       ]
   }

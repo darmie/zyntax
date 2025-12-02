@@ -49,7 +49,7 @@ pub use zyntax_typed_ast::{
     TypedASTBuilder, TypedProgram, TypedNode, TypedDeclaration, TypedExpression,
     TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span, InternedString,
     TypedClass, TypedEnum, TypedField, TypedVariant,
-    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern, TypedMethod, TypedMethodParam, TypedTypeParam, ParameterKind, ParameterAttribute, TypedRange},
+    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern, TypedMethod, TypedMethodParam, TypedTypeParam, ParameterKind, ParameterAttribute, TypedRange, TypedExtern, TypedExternStruct},
     type_registry::{Type, PrimitiveType, Mutability, Visibility, ConstValue},
 };
 
@@ -291,6 +291,9 @@ pub trait AstHostFunctions {
         items: Vec<NodeHandle>,
     ) -> NodeHandle;
 
+    /// Create an opaque type declaration (@opaque("$ExternName") type TypeName)
+    fn create_opaque_type(&mut self, name: &str, external_name: &str) -> NodeHandle;
+
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
 
@@ -371,6 +374,11 @@ pub trait AstHostFunctions {
 
     /// Get the name of an identifier node, if it is one
     fn get_identifier_name(&self, handle: NodeHandle) -> Option<String> {
+        None // Default implementation returns None
+    }
+
+    /// Get the value of a string literal node, if it is one
+    fn get_string_literal_value(&self, handle: NodeHandle) -> Option<String> {
         None // Default implementation returns None
     }
 
@@ -1105,6 +1113,8 @@ pub struct TypedAstBuilder {
     variable_types: HashMap<String, Type>,
     /// Enum type name to variant names (in order, for discriminant calculation)
     enum_types: HashMap<String, Vec<String>>,
+    /// Opaque/extern type name to external name mapping (e.g., "Tensor" -> "$Tensor")
+    opaque_types: HashMap<String, InternedString>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
     /// Current span being processed (start, end)
@@ -1137,6 +1147,7 @@ impl TypedAstBuilder {
             types: HashMap::new(),
             variable_types: HashMap::new(),
             enum_types: HashMap::new(),
+            opaque_types: HashMap::new(),
             program_decls: Vec::new(),
             current_span: (0, 0),
         }
@@ -1366,6 +1377,9 @@ impl AstHostFunctions for TypedAstBuilder {
         let typed_params: Vec<_> = params.iter()
             .map(|h| {
                 if let Some((name, ty)) = self.params.get(h) {
+                    // Register parameter type in variable_types for later variable references
+                    self.variable_types.insert(name.clone(), ty.clone());
+                    eprintln!("[DEBUG create_function] Registered parameter '{}' with type {:?}", name, ty);
                     self.inner.parameter(name, ty.clone(), Mutability::Immutable, span)
                 } else {
                     // Fallback for unknown params
@@ -1590,11 +1604,42 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_decl(impl_decl)
     }
 
+    fn create_opaque_type(&mut self, name: &str, external_name: &str) -> NodeHandle {
+        // Create an external struct declaration for the opaque type
+        // This declares a type like: extern struct Tensor (backed by $Tensor)
+        let name_interned = self.inner.intern(name);
+        let runtime_prefix = self.inner.intern(external_name);
+
+        // Register the opaque type mapping for later type resolution
+        self.opaque_types.insert(name.to_string(), runtime_prefix);
+        eprintln!("[DEBUG create_opaque_type] Registered opaque type: '{}' -> '{}'", name, external_name);
+
+        let extern_struct = TypedExternStruct {
+            name: name_interned,
+            runtime_prefix,
+            type_params: vec![],  // No type parameters for now
+        };
+
+        let decl = TypedDeclaration::Extern(TypedExtern::Struct(extern_struct));
+        let decl_node = TypedNode {
+            node: decl,
+            span: self.default_span(),
+            ty: Type::Never,  // Declarations don't have a type
+        };
+
+        self.store_decl(decl_node)
+    }
+
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
         // Store parameter name and type for later use in create_function
         let handle = self.alloc_handle();
         // Get the type from the type handle, default to i32 if not found
         let param_type = self.get_type_from_handle(ty).unwrap_or(Type::Primitive(PrimitiveType::I32));
+        // IMPORTANT: Register parameter type IMMEDIATELY so that variable references
+        // in the function body (which is parsed after params but before create_function is called)
+        // can find the correct type
+        self.variable_types.insert(name.to_string(), param_type.clone());
+        eprintln!("[DEBUG create_param] Registered parameter '{}' with type {:?}", name, param_type);
         self.params.insert(handle, (name.to_string(), param_type));
         handle
     }
@@ -1673,7 +1718,22 @@ impl AstHostFunctions for TypedAstBuilder {
 
     fn create_identifier(&mut self, name: &str) -> NodeHandle {
         let span = self.default_span();
-        let expr = self.inner.variable(name, Type::Primitive(PrimitiveType::I32), span);
+
+        // Look up the variable's actual type from our tracking map
+        // If not found, check opaque types, then default to I32
+        let var_type = if let Some(ty) = self.variable_types.get(name) {
+            ty.clone()
+        } else if let Some(runtime_prefix) = self.opaque_types.get(name) {
+            Type::Extern {
+                name: *runtime_prefix,
+                layout: None,
+            }
+        } else {
+            Type::Primitive(PrimitiveType::I32)
+        };
+
+        eprintln!("[DEBUG create_identifier] Variable '{}' has type {:?}", name, var_type);
+        let expr = self.inner.variable(name, var_type, span);
         self.store_expr(expr)
     }
 
@@ -2043,7 +2103,19 @@ impl AstHostFunctions for TypedAstBuilder {
             "f64" => Type::Primitive(PrimitiveType::F64),
             "bool" => Type::Primitive(PrimitiveType::Bool),
             "void" | "unit" => Type::Primitive(PrimitiveType::Unit),
-            _ => Type::Primitive(PrimitiveType::I32), // Default to i32
+            _ => {
+                // Check if this is a registered opaque/extern type
+                if let Some(runtime_prefix) = self.opaque_types.get(name) {
+                    eprintln!("[DEBUG create_primitive_type] Found opaque type '{}' -> '{}'", name, runtime_prefix.resolve_global().unwrap_or_default());
+                    Type::Extern {
+                        name: *runtime_prefix,
+                        layout: None,
+                    }
+                } else {
+                    eprintln!("[DEBUG create_primitive_type] Type '{}' not found in opaque types, defaulting to I32", name);
+                    Type::Primitive(PrimitiveType::I32) // Default to i32
+                }
+            }
         };
         self.types.insert(handle, ty);
         handle
@@ -2065,8 +2137,31 @@ impl AstHostFunctions for TypedAstBuilder {
         self.alloc_handle()
     }
 
-    fn create_named_type(&mut self, _name: &str) -> NodeHandle {
-        self.alloc_handle()
+    fn create_named_type(&mut self, name: &str) -> NodeHandle {
+        let handle = self.alloc_handle();
+
+        // Check if this is a registered opaque/extern type
+        let ty = if let Some(runtime_prefix) = self.opaque_types.get(name) {
+            eprintln!("[DEBUG create_named_type] Found opaque type '{}' -> '{}'", name, runtime_prefix.resolve_global().unwrap_or_default());
+            Type::Extern {
+                name: *runtime_prefix,
+                layout: None,
+            }
+        } else {
+            eprintln!("[DEBUG create_named_type] Type '{}' not found in opaque types, using Named with placeholder ID", name);
+            // Create a named type with placeholder ID (0)
+            // Type inference will resolve this to the actual TypeId
+            Type::Named {
+                id: zyntax_typed_ast::TypeId::new(0),
+                type_args: vec![],
+                const_args: vec![],
+                variance: vec![],
+                nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+            }
+        };
+
+        self.types.insert(handle, ty);
+        handle
     }
 
     fn create_struct(&mut self, name: &str, field_handles: Vec<NodeHandle>) -> NodeHandle {
@@ -2410,6 +2505,7 @@ impl AstHostFunctions for TypedAstBuilder {
         let var_type = self.variable_types.get(name)
             .cloned()
             .unwrap_or(Type::Primitive(PrimitiveType::I32));
+        eprintln!("[DEBUG create_variable] Variable '{}' has type {:?}", name, var_type);
         let expr = self.inner.variable(name, var_type, span);
         self.store_expr(expr)
     }
@@ -2917,6 +3013,17 @@ impl AstHostFunctions for TypedAstBuilder {
                 // Use resolve_global() to get the actual string value
                 // (to_string() returns the debug format for InternedString)
                 return name.resolve_global();
+            }
+        }
+        None
+    }
+
+    fn get_string_literal_value(&self, handle: NodeHandle) -> Option<String> {
+        // Get the expression and check if it's a string literal
+        if let Some(expr_node) = self.get_expr(handle) {
+            if let TypedExpression::Literal(TypedLiteral::String(value)) = &expr_node.node {
+                // Use resolve_global() to get the actual string value
+                return value.resolve_global();
             }
         }
         None
@@ -5251,6 +5358,49 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let handle = self.host.create_impl_block(&trait_name, &for_type, trait_args, items);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "opaque_type" => {
+                // @opaque("$Tensor") type Tensor
+                // Declares an opaque/extern type backed by external implementation
+
+                // Get the full matched text to extract both external name and type name
+                let text = match args.get("text") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError("opaque_type: missing text".into()));
+                    }
+                };
+
+                // Parse text like: @opaque("$Tensor") type Tensor
+                // Extract the string between quotes for external_name
+                let external_name = if let Some(start) = text.find('"') {
+                    if let Some(end) = text[start + 1..].find('"') {
+                        text[start + 1..start + 1 + end].to_string()
+                    } else {
+                        return Err(crate::error::ZynPegError::CodeGenError("opaque_type: malformed external_name".into()));
+                    }
+                } else {
+                    return Err(crate::error::ZynPegError::CodeGenError("opaque_type: missing external_name".into()));
+                };
+
+                // Extract the identifier after "type"
+                let name = text.split_whitespace()
+                    .last()
+                    .unwrap_or("Unknown")
+                    .to_string();
+
+                // FIXME: The grammar only captures the string literal text, not the full match
+                // For "@opaque("$Tensor") type Tensor", text is just "$Tensor"
+                // Since we can't get the actual type name, use the external_name without "$" prefix
+                let actual_name = external_name.trim_start_matches('$');
+                let actual_external_name = external_name.clone();
+
+                eprintln!("[DEBUG opaque_type] Using derived name='{}', external_name='{}'", actual_name, actual_external_name);
+                log::debug!("[opaque_type] Creating opaque type: name='{}', external_name='{}'", actual_name, actual_external_name);
+                let handle = self.host.create_opaque_type(actual_name, &actual_external_name);
+                log::debug!("[opaque_type] Created opaque type with handle: {:?}", handle);
                 Ok(RuntimeValue::Node(handle))
             }
 
