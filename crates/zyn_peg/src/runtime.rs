@@ -282,7 +282,8 @@ pub trait AstHostFunctions {
         &mut self,
         trait_name: &str,
         for_type_name: &str,
-        methods: Vec<NodeHandle>,
+        trait_args: Vec<NodeHandle>,
+        items: Vec<NodeHandle>,
     ) -> NodeHandle;
 
     /// Create a function parameter
@@ -1215,6 +1216,19 @@ impl TypedAstBuilder {
         self.types.get(&handle).cloned()
     }
 
+    /// Get a named type by string name (creates unresolved type for inference)
+    fn get_type_by_name(&mut self, name: &str) -> Type {
+        // Create a named type with placeholder ID (0)
+        // Type inference will resolve this to the actual TypeId
+        Type::Named {
+            id: zyntax_typed_ast::TypeId::new(0),
+            type_args: vec![],
+            const_args: vec![],
+            variance: vec![],
+            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+        }
+    }
+
     /// Get the default span for nodes
     fn default_span(&self) -> Span {
         self.inner.dummy_span()
@@ -1469,28 +1483,69 @@ impl AstHostFunctions for TypedAstBuilder {
         &mut self,
         trait_name: &str,
         for_type_name: &str,
-        methods: Vec<NodeHandle>,
+        trait_args: Vec<NodeHandle>,
+        items: Vec<NodeHandle>,
     ) -> NodeHandle {
         let span = self.default_span();
 
-        // TODO: Properly resolve the type by name from type registry
-        // For now, use a placeholder type ID
-        let for_type = Type::Named {
-            id: zyntax_typed_ast::TypeId::new(0),
-            type_args: vec![],
-            const_args: vec![],
-            variance: vec![],
-            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
-        };
+        // Convert trait type arguments from handles to Type
+        let trait_type_args: Vec<Type> = trait_args.iter()
+            .filter_map(|h| self.get_type_from_handle(*h))
+            .collect();
 
-        // For now, create impl with empty methods
-        // Full implementation needs method body handling
+        // Create named type for the implementing type
+        // Type inference will resolve the actual TypeId later
+        let for_type = self.get_type_by_name(for_type_name);
+
+        // Separate items into methods and associated types
+        let mut methods = Vec::new();
+        let mut associated_types = Vec::new();
+
+        for item_handle in items {
+            if let Some(decl) = self.declarations.get(&item_handle) {
+                match &decl.node {
+                    TypedDeclaration::Function(func) => {
+                        // Convert TypedParameter to TypedMethodParam
+                        let method_params: Vec<TypedMethodParam> = func.params.iter().map(|p| {
+                            TypedMethodParam {
+                                name: p.name,
+                                ty: p.ty.clone(),
+                                mutability: p.mutability.clone(),
+                                is_self: false, // Will be inferred by compiler
+                                default_value: None,
+                                attributes: vec![],
+                                kind: ParameterKind::Regular,
+                                span: span,
+                            }
+                        }).collect();
+
+                        // Convert function to method
+                        let method = TypedMethod {
+                            name: func.name,
+                            type_params: func.type_params.clone(),
+                            params: method_params,
+                            return_type: func.return_type.clone(),
+                            body: func.body.clone(),
+                            visibility: func.visibility.clone(),
+                            is_static: false,
+                            is_async: func.is_async,
+                            is_override: false,
+                            span: span,
+                        };
+                        methods.push(method);
+                    }
+                    // TODO: Handle associated types when impl_assoc_type creates proper structures
+                    _ => {}
+                }
+            }
+        }
+
         let impl_decl = self.inner.impl_block(
             trait_name,
-            vec![], // trait_type_args (TODO: handle generic trait args)
+            trait_type_args,
             for_type,
-            vec![], // methods (TODO: convert handles to TypedMethod)
-            vec![], // associated_types
+            methods,
+            associated_types,
             span,
         );
 
@@ -5120,10 +5175,31 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing type_name".into())),
                 };
 
-                // TODO: Handle trait_args and items (methods/associated types)
-                let methods = vec![];
+                // Extract trait type arguments (e.g., <Tensor> in Add<Tensor>)
+                let trait_args: Vec<NodeHandle> = match args.get("trait_args") {
+                    Some(RuntimeValue::List(vals)) => vals.iter().filter_map(|v| {
+                        if let RuntimeValue::Node(h) = v {
+                            Some(*h)
+                        } else {
+                            None
+                        }
+                    }).collect(),
+                    _ => vec![], // No type arguments
+                };
 
-                let handle = self.host.create_impl_block(&trait_name, &for_type, methods);
+                // Extract impl items (methods and associated types)
+                let items: Vec<NodeHandle> = match args.get("items") {
+                    Some(RuntimeValue::List(vals)) => vals.iter().filter_map(|v| {
+                        if let RuntimeValue::Node(h) = v {
+                            Some(*h)
+                        } else {
+                            None
+                        }
+                    }).collect(),
+                    _ => vec![], // No items
+                };
+
+                let handle = self.host.create_impl_block(&trait_name, &for_type, trait_args, items);
                 Ok(RuntimeValue::Node(handle))
             }
 
