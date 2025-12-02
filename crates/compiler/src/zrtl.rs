@@ -1259,6 +1259,7 @@ pub struct DynamicBoxRepr {
     pub size: u32,    // Size in bytes
     pub data: *mut u8,
     pub dropper: Option<extern "C" fn(*mut u8)>,
+    pub display_fn: Option<extern "C" fn(*const u8) -> *const u8>,
 }
 
 /// Convert compiler closure to ZrtlClosure
@@ -1414,6 +1415,7 @@ pub unsafe extern "C" fn zyntax_primitive_to_box(
         size,
         data,
         dropper: Some(default_box_dropper),
+        display_fn: None,
     });
 
     Box::into_raw(boxed)
@@ -1428,6 +1430,7 @@ pub unsafe extern "C" fn zyntax_box_i32(value: i32) -> *mut DynamicBoxRepr {
         size: 4,
         data,
         dropper: Some(drop_box_i32),
+        display_fn: None,
     });
     Box::into_raw(boxed)
 }
@@ -1441,6 +1444,7 @@ pub unsafe extern "C" fn zyntax_box_i64(value: i64) -> *mut DynamicBoxRepr {
         size: 8,
         data,
         dropper: Some(drop_box_i64),
+        display_fn: None,
     });
     Box::into_raw(boxed)
 }
@@ -1454,6 +1458,7 @@ pub unsafe extern "C" fn zyntax_box_f32(value: f32) -> *mut DynamicBoxRepr {
         size: 4,
         data,
         dropper: Some(drop_box_f32),
+        display_fn: None,
     });
     Box::into_raw(boxed)
 }
@@ -1467,6 +1472,7 @@ pub unsafe extern "C" fn zyntax_box_f64(value: f64) -> *mut DynamicBoxRepr {
         size: 8,
         data,
         dropper: Some(drop_box_f64),
+        display_fn: None,
     });
     Box::into_raw(boxed)
 }
@@ -1480,6 +1486,7 @@ pub unsafe extern "C" fn zyntax_box_bool(value: i32) -> *mut DynamicBoxRepr {
         size: 1,
         data,
         dropper: Some(drop_box_u8),
+        display_fn: None,
     });
     Box::into_raw(boxed)
 }

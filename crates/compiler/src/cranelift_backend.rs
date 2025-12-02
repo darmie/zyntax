@@ -979,15 +979,21 @@ impl CraneliftBackend {
                                             .copied()
                                             .unwrap_or(false);
                                         log::debug!("[DynamicBox] Symbol: {}, param {}: needs_boxing = {}", symbol_name, param_index, needs_boxing);
+                                        eprintln!("[DEBUG Boxing] Symbol: {}, param {}: needs_boxing = {}", symbol_name, param_index, needs_boxing);
+                                        if let Some(sig) = self.symbol_signatures.get(symbol_name) {
+                                            eprintln!("[DEBUG Signature] Symbol: {}, returns_dynamic = {}", symbol_name, sig.returns_dynamic());
+                                        } else {
+                                            eprintln!("[DEBUG Signature] Symbol: {} has no signature", symbol_name);
+                                        }
                                         if needs_boxing {
                                             // This parameter expects DynamicBox - wrap it
                                             // For opaque types (i64 pointer), we need to create a DynamicBox struct
-                                            // DynamicBox layout: { tag: u32, size: u32, data: i64, dropper: i64 }
+                                            // DynamicBox layout: { tag: u32, size: u32, data: i64, dropper: i64, display_fn: i64 }
 
-                                            // Allocate stack space for DynamicBox (24 bytes on 64-bit)
+                                            // Allocate stack space for DynamicBox (32 bytes on 64-bit)
                                             let slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                                                 cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                                                24,
+                                                32,
                                             ));
                                             let box_addr = builder.ins().stack_addr(types::I64, slot, 0);
 
@@ -1005,6 +1011,74 @@ impl CraneliftBackend {
                                             // Set dropper to null (0)
                                             let null_dropper = builder.ins().iconst(types::I64, 0);
                                             builder.ins().store(cranelift_codegen::ir::MemFlags::new(), null_dropper, box_addr, 16);
+
+                                            // Set display_fn - check if this opaque type implements Display trait
+                                            // Convention: Display::to_string is at symbol {type_name}$to_string
+                                            let display_fn_value = {
+                                                // Get the HIR value to check if it's an opaque type
+                                                let arg_hir_id = args[param_index];
+                                                eprintln!("[DEBUG DynamicBox] Checking arg_hir_id: {:?}", arg_hir_id);
+                                                eprintln!("[DEBUG DynamicBox] args list: {:?}", args);
+                                                if let Some(hir_value) = function.values.get(&arg_hir_id) {
+                                                    eprintln!("[DEBUG DynamicBox] HIR value: {:?}", hir_value);
+                                                    eprintln!("[DEBUG DynamicBox] HIR value type: {:?}", hir_value.ty);
+
+                                                    // Extract opaque type name, handling both Opaque and Ptr(Opaque(...))
+                                                    let opaque_name = match &hir_value.ty {
+                                                        HirType::Opaque(type_name) => Some(type_name),
+                                                        HirType::Ptr(inner) => {
+                                                            if let HirType::Opaque(type_name) = inner.as_ref() {
+                                                                Some(type_name)
+                                                            } else {
+                                                                None
+                                                            }
+                                                        }
+                                                        _ => None,
+                                                    };
+
+                                                    if let Some(type_name) = opaque_name {
+                                                        // Extract the type name string
+                                                        let type_name_str = type_name.resolve_global()
+                                                            .unwrap_or_else(|| String::new());
+                                                        eprintln!("[DEBUG DynamicBox] Opaque type name: {}", type_name_str);
+
+                                                        if !type_name_str.is_empty() {
+                                                            // Construct Display method symbol: {type_name}$to_string
+                                                            let display_symbol = format!("{}$to_string", type_name_str);
+                                                            eprintln!("[DEBUG DynamicBox] Looking for Display symbol: {}", display_symbol);
+
+                                                            // Look up in runtime symbols
+                                                            if let Some((_, func_ptr)) = self.runtime_symbols
+                                                                .iter()
+                                                                .find(|(name, _)| name == &display_symbol)
+                                                            {
+                                                                eprintln!("[DEBUG DynamicBox] Found Display impl: {} -> {:p}", display_symbol, *func_ptr);
+                                                                // Found Display implementation!
+                                                                builder.ins().iconst(types::I64, *func_ptr as i64)
+                                                            } else {
+                                                                eprintln!("[DEBUG DynamicBox] No Display impl found for: {}", display_symbol);
+                                                                // No Display implementation
+                                                                builder.ins().iconst(types::I64, 0)
+                                                            }
+                                                        } else {
+                                                            eprintln!("[DEBUG DynamicBox] Empty type name");
+                                                            // Empty type name
+                                                            builder.ins().iconst(types::I64, 0)
+                                                        }
+                                                    } else {
+                                                        eprintln!("[DEBUG DynamicBox] Not an opaque type (or Ptr to opaque)");
+                                                        // Not an opaque type
+                                                        builder.ins().iconst(types::I64, 0)
+                                                    }
+                                                } else {
+                                                    eprintln!("[DEBUG DynamicBox] HIR value not found");
+                                                    // HIR value not found
+                                                    builder.ins().iconst(types::I64, 0)
+                                                }
+                                            };
+                                            eprintln!("[DEBUG DynamicBox] Storing display_fn at offset 24");
+                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), display_fn_value, box_addr, 24);
+                                            eprintln!("[DEBUG DynamicBox] DynamicBox complete, passing to function");
 
                                             // Pass the box by value (load struct fields and pass as args)
                                             // Actually, DynamicBox is passed by value, so we need to load the struct

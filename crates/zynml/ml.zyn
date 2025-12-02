@@ -35,6 +35,7 @@
     tensor_zeros: "$Tensor$zeros",
     tensor_ones: "$Tensor$ones",
     tensor_full: "$Tensor$full_f32",
+    arange: "$Tensor$arange_f32",             // arange(1.0, 10.0, 1.0) shorthand
     tensor_arange: "$Tensor$arange_f32",
     tensor_linspace: "$Tensor$linspace_f32",
     tensor_rand: "$Tensor$rand_f32",
@@ -202,6 +203,7 @@
         tensor_zeros: $Tensor,
         tensor_ones: $Tensor,
         tensor_full: $Tensor,
+        arange: $Tensor,                // Shorthand for tensor_arange
         tensor_arange: $Tensor,
         tensor_linspace: $Tensor,
         tensor_rand: $Tensor,

@@ -1864,23 +1864,23 @@ pub extern "C" fn tensor_mod(a: TensorPtr, b: TensorPtr) -> TensorPtr {
 zrtl_plugin! {
     name: "tensor",
     symbols: [
-        // Creation
-        ("$Tensor$new", tensor_new),
-        ("$Tensor$zeros", tensor_zeros),
-        ("$Tensor$ones", tensor_ones),
-        ("$Tensor$full_f32", tensor_full_f32),
-        ("$Tensor$from_array_f32", tensor_from_array_f32),
-        ("$Tensor$from_raw_f32", tensor_from_raw_f32),
-        ("$Tensor$arange_f32", tensor_arange_f32),
-        ("$Tensor$linspace_f32", tensor_linspace_f32),
-        ("$Tensor$rand_f32", tensor_rand_f32),
-        ("$Tensor$randn_f32", tensor_randn_f32),
+        // Creation - all return TensorPtr (opaque pointers)
+        ("$Tensor$new", tensor_new, () -> opaque),
+        ("$Tensor$zeros", tensor_zeros, () -> opaque),
+        ("$Tensor$ones", tensor_ones, () -> opaque),
+        ("$Tensor$full_f32", tensor_full_f32, () -> opaque),
+        ("$Tensor$from_array_f32", tensor_from_array_f32, () -> opaque),
+        ("$Tensor$from_raw_f32", tensor_from_raw_f32, () -> opaque),
+        ("$Tensor$arange_f32", tensor_arange_f32, (f32, f32, f32) -> opaque),
+        ("$Tensor$linspace_f32", tensor_linspace_f32, () -> opaque),
+        ("$Tensor$rand_f32", tensor_rand_f32, () -> opaque),
+        ("$Tensor$randn_f32", tensor_randn_f32, () -> opaque),
 
         // Memory
         ("$Tensor$free", tensor_free),
-        ("$Tensor$clone", tensor_clone),
-        ("$Tensor$view", tensor_view),
-        ("$Tensor$contiguous", tensor_contiguous),
+        ("$Tensor$clone", tensor_clone, () -> opaque),
+        ("$Tensor$view", tensor_view, () -> opaque),
+        ("$Tensor$contiguous", tensor_contiguous, () -> opaque),
 
         // Info
         ("$Tensor$ndim", tensor_ndim),
@@ -1897,14 +1897,14 @@ zrtl_plugin! {
         ("$Tensor$get_at_f32", tensor_get_at_f32),
         ("$Tensor$set_at_f32", tensor_set_at_f32),
 
-        // Shape operations
-        ("$Tensor$reshape", tensor_reshape),
-        ("$Tensor$transpose", tensor_transpose),
-        ("$Tensor$squeeze", tensor_squeeze),
-        ("$Tensor$unsqueeze", tensor_unsqueeze),
-        ("$Tensor$slice", tensor_slice),
+        // Shape operations - return new tensors
+        ("$Tensor$reshape", tensor_reshape, () -> opaque),
+        ("$Tensor$transpose", tensor_transpose, () -> opaque),
+        ("$Tensor$squeeze", tensor_squeeze, () -> opaque),
+        ("$Tensor$unsqueeze", tensor_unsqueeze, () -> opaque),
+        ("$Tensor$slice", tensor_slice, () -> opaque),
 
-        // Reductions
+        // Reductions - return scalars
         ("$Tensor$sum_f32", tensor_sum_f32),
         ("$Tensor$mean_f32", tensor_mean_f32),
         ("$Tensor$max_f32", tensor_max_f32),
@@ -1912,21 +1912,21 @@ zrtl_plugin! {
         ("$Tensor$argmax_f32", tensor_argmax_f32),
 
         // Type conversion
-        ("$Tensor$to_dtype", tensor_to_dtype),
+        ("$Tensor$to_dtype", tensor_to_dtype, () -> opaque),
 
         // Display trait implementation
         ("$Tensor$to_string", tensor_to_string),
         ("$Tensor$print", tensor_print),
         ("$Tensor$println", tensor_println),
 
-        // Arithmetic operator trait methods
-        ("$Tensor$add", tensor_add),
-        ("$Tensor$sub", tensor_sub),
-        ("$Tensor$mul", tensor_mul),
-        ("$Tensor$div", tensor_div),
-        ("$Tensor$mod", tensor_mod),
-        ("$Tensor$neg", tensor_neg),
-        ("$Tensor$matmul", tensor_dot),  // @ operator uses matmul method name
+        // Arithmetic operator trait methods - return new tensors
+        ("$Tensor$add", tensor_add, () -> opaque),
+        ("$Tensor$sub", tensor_sub, () -> opaque),
+        ("$Tensor$mul", tensor_mul, () -> opaque),
+        ("$Tensor$div", tensor_div, () -> opaque),
+        ("$Tensor$mod", tensor_mod, () -> opaque),
+        ("$Tensor$neg", tensor_neg, () -> opaque),
+        ("$Tensor$matmul", tensor_dot),  // @ operator returns f32, not tensor
     ]
 }
 

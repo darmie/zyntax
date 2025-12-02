@@ -514,7 +514,7 @@ unsafe fn format_dynamic_box(value: &zrtl::DynamicBox, output: &mut String) {
 
         TypeCategory::Tuple => {
             // Tuple is stored as consecutive DynamicBox values
-            // Size tells us total bytes, each DynamicBox is 24 bytes (on 64-bit)
+            // Size tells us total bytes, each DynamicBox is 32 bytes (on 64-bit)
             let num_elements = value.size as usize / std::mem::size_of::<zrtl::DynamicBox>();
             output.push('(');
             let elements = value.data as *const zrtl::DynamicBox;
@@ -602,17 +602,37 @@ unsafe fn format_dynamic_box(value: &zrtl::DynamicBox, output: &mut String) {
         }
 
         TypeCategory::Opaque | TypeCategory::Custom => {
-            // For opaque/custom types, show hex dump of first few bytes
-            output.push_str("<opaque ");
-            let num_bytes = (value.size as usize).min(16);
-            for i in 0..num_bytes {
-                let byte = *value.data.add(i);
-                let _ = write!(output, "{:02x}", byte);
+            // Check if this opaque type has a Display trait implementation
+            if let Some(display_fn) = value.display_fn {
+                // Call the display function to format the value
+                let formatted_ptr = display_fn(value.data as *const u8);
+                if !formatted_ptr.is_null() {
+                    // Display function returned a ZRTL string pointer
+                    // Cast from *const u8 to StringConstPtr (*const i32)
+                    let str_ptr = formatted_ptr as StringConstPtr;
+                    if let Some(formatted_str) = zrtl::string_as_str(str_ptr) {
+                        output.push_str(formatted_str);
+                    } else {
+                        output.push_str("<opaque (display invalid utf8)>");
+                    }
+                    // The string is owned by the display function, don't free it here
+                } else {
+                    // Display function returned null - fall back to hex dump
+                    output.push_str("<opaque (display failed)>");
+                }
+            } else {
+                // No Display trait - show hex dump of first few bytes
+                output.push_str("<opaque ");
+                let num_bytes = (value.size as usize).min(16);
+                for i in 0..num_bytes {
+                    let byte = *value.data.add(i);
+                    let _ = write!(output, "{:02x}", byte);
+                }
+                if value.size > 16 {
+                    let _ = write!(output, "... ({} bytes total)", value.size);
+                }
+                output.push('>');
             }
-            if value.size > 16 {
-                let _ = write!(output, "... ({} bytes total)", value.size);
-            }
-            output.push('>');
         }
     }
 }

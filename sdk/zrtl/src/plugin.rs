@@ -250,6 +250,35 @@ macro_rules! zrtl_symbol_sig {
             &SIG as *const $crate::ZrtlSymbolSig,
         )
     }};
+    // Function that returns opaque pointer (raw pointer to opaque type, no params)
+    ($name:expr, $func:ident, () -> opaque) => {{
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: 0,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::DYNAMIC_BOX,  // Mark as opaque
+            params: [$crate::TypeTag::VOID; $crate::MAX_PARAMS],
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns opaque pointer
+    // Match: (...) -> opaque where ... is anything
+    ($name:expr, $func:ident, ($($param:tt)*) -> opaque) => {{
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: 0,  // We don't parse param types yet, just mark return as opaque
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::DYNAMIC_BOX,  // Mark as opaque
+            params: [$crate::TypeTag::VOID; $crate::MAX_PARAMS],
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
     // Legacy: no signature (backwards compatible)
     ($name:expr, $func:ident) => {
         $crate::zrtl_symbol!($name, $func)
@@ -267,6 +296,14 @@ macro_rules! __zrtl_symbol_entry {
     // All-dynamic signature with dynamic return
     ($sym_name:expr, $func:ident, dynamic($count:expr) -> dynamic) => {
         $crate::zrtl_symbol_sig!($sym_name, $func, dynamic($count) -> dynamic)
+    };
+    // Opaque return type (no params)
+    ($sym_name:expr, $func:ident, () -> opaque) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, () -> opaque)
+    };
+    // Opaque return type (with params)
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> opaque) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> opaque)
     };
     // No signature (backwards compatible)
     ($sym_name:expr, $func:ident) => {

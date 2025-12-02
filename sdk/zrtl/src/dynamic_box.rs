@@ -10,13 +10,19 @@ use crate::type_system::{TypeTag, TypeCategory};
 /// Drop function type for custom types (C ABI compatible)
 pub type DropFn = extern "C" fn(*mut u8);
 
+/// Display function type for formatting values (C ABI compatible)
+/// Takes a pointer to the data and a ZrtlString buffer to write into
+/// Returns the formatted string (same as buffer, or newly allocated if needed)
+pub type DisplayFn = extern "C" fn(*const u8) -> *const u8;
+
 /// Dynamic boxed value - C ABI compatible
 ///
-/// Layout (24 bytes on 64-bit):
+/// Layout (32 bytes on 64-bit):
 /// - tag: Type tag identifying the contained type
 /// - size: Size of the data in bytes
 /// - data: Pointer to the actual data
 /// - dropper: Optional destructor function
+/// - display_fn: Optional display/formatting function
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct DynamicBox {
@@ -28,6 +34,8 @@ pub struct DynamicBox {
     pub data: *mut u8,
     /// Optional destructor (null if no cleanup needed)
     pub dropper: Option<DropFn>,
+    /// Optional display function for formatting (null if no Display trait)
+    pub display_fn: Option<DisplayFn>,
 }
 
 impl DynamicBox {
@@ -39,6 +47,7 @@ impl DynamicBox {
             size: 0,
             data: std::ptr::null_mut(),
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -233,6 +242,7 @@ impl DynamicBox {
             size: std::mem::size_of::<i8>() as u32,
             data: value as *mut i8 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -243,6 +253,7 @@ impl DynamicBox {
             size: std::mem::size_of::<i16>() as u32,
             data: value as *mut i16 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -253,6 +264,7 @@ impl DynamicBox {
             size: std::mem::size_of::<i32>() as u32,
             data: value as *mut i32 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -263,6 +275,7 @@ impl DynamicBox {
             size: std::mem::size_of::<i64>() as u32,
             data: value as *mut i64 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -273,6 +286,7 @@ impl DynamicBox {
             size: std::mem::size_of::<u8>() as u32,
             data: value as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -283,6 +297,7 @@ impl DynamicBox {
             size: std::mem::size_of::<u16>() as u32,
             data: value as *mut u16 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -293,6 +308,7 @@ impl DynamicBox {
             size: std::mem::size_of::<u32>() as u32,
             data: value as *mut u32 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -303,6 +319,7 @@ impl DynamicBox {
             size: std::mem::size_of::<u64>() as u32,
             data: value as *mut u64 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -313,6 +330,7 @@ impl DynamicBox {
             size: std::mem::size_of::<f32>() as u32,
             data: value as *mut f32 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -323,6 +341,7 @@ impl DynamicBox {
             size: std::mem::size_of::<f64>() as u32,
             data: value as *mut f64 as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -333,6 +352,7 @@ impl DynamicBox {
             size: std::mem::size_of::<u8>() as u32,
             data: value as *mut u8,
             dropper: None,
+            display_fn: None,
         }
     }
 
@@ -350,6 +370,7 @@ impl DynamicBox {
             size,
             data,
             dropper: Some(default_dropper),
+            display_fn: None,
         }
     }
 
@@ -363,6 +384,7 @@ impl DynamicBox {
             size: std::mem::size_of::<T>() as u32,
             data: ptr as *mut u8,
             dropper: Some(drop_box::<T>),
+            display_fn: None,
         }
     }
 

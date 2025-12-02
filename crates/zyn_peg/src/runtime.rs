@@ -1638,8 +1638,8 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
         // Store parameter name and type for later use in create_function
         let handle = self.alloc_handle();
-        // Get the type from the type handle, default to i32 if not found
-        let param_type = self.get_type_from_handle(ty).unwrap_or(Type::Primitive(PrimitiveType::I32));
+        // Get the type from the type handle, default to Any if not found
+        let param_type = self.get_type_from_handle(ty).unwrap_or(Type::Any);
         // IMPORTANT: Register parameter type IMMEDIATELY so that variable references
         // in the function body (which is parsed after params but before create_function is called)
         // can find the correct type
@@ -1731,10 +1731,10 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Look up the variable's actual type from our tracking map
-        // If not found, default to I32
+        // If not found, default to Any (will be resolved during type inference)
         let var_type = self.variable_types.get(name)
             .cloned()
-            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+            .unwrap_or(Type::Any);
 
         eprintln!("[DEBUG create_identifier] Variable '{}' has type {:?}", name, var_type);
         let expr = self.inner.variable(name, var_type, span);
@@ -1777,10 +1777,10 @@ impl AstHostFunctions for TypedAstBuilder {
                     "f64" | "F64" => Type::Primitive(PrimitiveType::F64),
                     "bool" | "Bool" => Type::Primitive(PrimitiveType::Bool),
                     "void" | "Void" | "()" => Type::Primitive(PrimitiveType::Unit),
-                    _ => Type::Primitive(PrimitiveType::I32), // Default for unknown types
+                    _ => Type::Any, // Use Any for unknown types - will be resolved during type inference
                 }
             }
-            None => Type::Primitive(PrimitiveType::I32), // Default when no return type specified
+            None => Type::Any, // Use Any when no return type specified - will be resolved during type inference
         };
 
         let expr = self.inner.call_positional(callee_expr, arg_exprs, ty, span);
@@ -1850,7 +1850,7 @@ impl AstHostFunctions for TypedAstBuilder {
         // Infer type from initializer expression if available
         let var_type = init_expr.as_ref()
             .map(|expr| expr.ty.clone())
-            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+            .unwrap_or(Type::Any);
 
         // Register the variable type for later lookup
         self.variable_types.insert(name.to_string(), var_type.clone());

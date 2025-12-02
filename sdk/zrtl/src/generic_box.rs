@@ -160,6 +160,7 @@ impl GenericBox {
             size,
             data,
             dropper,
+            display_fn: None,
         };
         Self::with_type_args(base, GenericTypeArgs::array(element_type))
     }
@@ -171,6 +172,7 @@ impl GenericBox {
             size,
             data,
             dropper,
+            display_fn:None
         };
         Self::with_type_args(base, GenericTypeArgs::map(key_type, value_type))
     }
@@ -182,6 +184,7 @@ impl GenericBox {
             size,
             data,
             dropper,
+            display_fn: None,
         };
         Self::with_type_args(base, GenericTypeArgs::optional(inner_type))
     }
@@ -193,6 +196,7 @@ impl GenericBox {
             size,
             data,
             dropper,
+            display_fn: None,
         };
         Self::with_type_args(base, GenericTypeArgs::result(ok_type, err_type))
     }
