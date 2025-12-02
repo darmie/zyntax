@@ -285,7 +285,7 @@ fn typed_ast_to_hir(
     let mut lowering_ctx = LoweringContext::new(module_name, type_registry, arena_arc, config);
 
     // Lower the program using the proper pipeline
-    let hir_module = lowering_ctx.lower_program(&augmented_program)?;
+    let hir_module = lowering_ctx.lower_program(&mut augmented_program)?;
 
     return Ok(hir_module);
 

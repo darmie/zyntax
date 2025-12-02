@@ -328,7 +328,7 @@ pub enum DiagnosticLevel {
 /// Main AST lowering interface
 pub trait AstLowering {
     /// Lower a typed program to HIR
-    fn lower_program(&mut self, program: &TypedProgram) -> CompilerResult<HirModule>;
+    fn lower_program(&mut self, program: &mut TypedProgram) -> CompilerResult<HirModule>;
 }
 
 /// Lowering pipeline implementation
@@ -382,7 +382,7 @@ impl LoweringContext {
 }
 
 impl AstLowering for LoweringContext {
-    fn lower_program(&mut self, program: &TypedProgram) -> CompilerResult<HirModule> {
+    fn lower_program(&mut self, program: &mut TypedProgram) -> CompilerResult<HirModule> {
         // Phase 0: Run type checking and inference (Issue 0 Phase 1)
         // This validates types and performs type inference, reporting any errors
         // Skip type checking if SKIP_TYPE_CHECK env var is set (for debugging)
@@ -416,7 +416,7 @@ impl AstLowering for LoweringContext {
 impl LoweringContext {
     /// Run type checking and inference on the program
     /// This is Issue 0 Phase 1: integrate type inference into lowering
-    fn run_type_checking(&mut self, program: &TypedProgram) -> CompilerResult<()> {
+    fn run_type_checking(&mut self, program: &mut TypedProgram) -> CompilerResult<()> {
         use zyntax_typed_ast::type_checker::{TypeChecker, TypeCheckOptions};
 
         // Create type checker - needs Box<TypeRegistry>
@@ -430,6 +430,10 @@ impl LoweringContext {
 
         // Run type checking (validates and performs internal inference)
         type_checker.check_program(program);
+
+        // Apply resolved types from inference to the AST
+        // This propagates Type::Any resolutions back to the AST nodes
+        type_checker.apply_inferred_types(program);
 
         // Check for type errors and display diagnostics
         let diagnostics_collector = type_checker.diagnostics();

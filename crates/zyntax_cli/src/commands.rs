@@ -850,7 +850,7 @@ fn eval_input(
     }
 
     // Deserialize to TypedProgram
-    let typed_program: TypedProgram = serde_json::from_str(&json)
+    let mut typed_program: TypedProgram = serde_json::from_str(&json)
         .map_err(|e| format!("Failed to deserialize TypedAST: {}", e))?;
 
     // Lower to HIR
@@ -868,7 +868,7 @@ fn eval_input(
     std::env::set_var("SKIP_TYPE_CHECK", "1");
 
     let mut hir_module = lowering_ctx
-        .lower_program(&typed_program)
+        .lower_program(&mut typed_program)
         .map_err(|e| format!("Lowering error: {:?}", e))?;
 
     // Monomorphization

@@ -107,7 +107,7 @@ fn test_literal_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower literal expression: {:?}", result.err());
 
     let module = result.unwrap();
@@ -166,7 +166,7 @@ fn test_binary_operation_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower binary operation: {:?}", result.err());
 
     let module = result.unwrap();
@@ -232,7 +232,7 @@ fn test_unary_operation_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower unary operation: {:?}", result.err());
 
     let module = result.unwrap();
@@ -311,7 +311,7 @@ fn test_if_expression_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower if expression: {:?}", result.err());
 
     let module = result.unwrap();
@@ -386,7 +386,7 @@ fn test_variable_reference_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower variable reference: {:?}", result.err());
 }
 
@@ -448,7 +448,7 @@ fn test_tuple_construction_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower tuple construction: {:?}", result.err());
 
     let module = result.unwrap();
@@ -529,7 +529,7 @@ fn test_array_construction_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower array construction: {:?}", result.err());
 }
 
@@ -601,7 +601,7 @@ fn test_complex_expression_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower complex expression: {:?}", result.err());
 
     let module = result.unwrap();
@@ -827,7 +827,7 @@ fn test_assignment_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower assignment expression: {:?}", result.err());
 
     let module = result.unwrap();
@@ -960,7 +960,7 @@ fn test_pattern_matching_lowering() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower match expression: {:?}", result.err());
 
     let module = result.unwrap();

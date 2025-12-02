@@ -151,7 +151,7 @@ fn test_vtable_generation_simple() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
 
     // Clean up env var
     std::env::remove_var("SKIP_TYPE_CHECK");

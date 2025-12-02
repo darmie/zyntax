@@ -78,7 +78,7 @@ fn test_compilation_pipeline_simple_function() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "return_42", body);
+    let mut program = create_test_program(&mut arena, "return_42", body);
 
     // Run compilation pipeline
     let config = CompilationConfig {
@@ -88,7 +88,7 @@ fn test_compilation_pipeline_simple_function() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation should succeed: {:?}", result.err());
 
     let hir_module = result.unwrap();
@@ -153,7 +153,7 @@ fn test_compilation_pipeline_binary_operation() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "add_numbers", body);
+    let mut program = create_test_program(&mut arena, "add_numbers", body);
 
     // Run compilation pipeline
     let config = CompilationConfig {
@@ -163,7 +163,7 @@ fn test_compilation_pipeline_binary_operation() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation should succeed: {:?}", result.err());
 
     let hir_module = result.unwrap();
@@ -328,7 +328,7 @@ fn test_compilation_pipeline_with_analysis() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_analysis", body);
+    let mut program = create_test_program(&mut arena, "test_analysis", body);
 
     // Run compilation with all passes enabled
     let config = CompilationConfig {
@@ -338,7 +338,7 @@ fn test_compilation_pipeline_with_analysis() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation with analysis should succeed");
 
     let hir_module = result.unwrap();
@@ -370,7 +370,7 @@ fn test_compilation_pipeline_with_memory_management() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_memory", body);
+    let mut program = create_test_program(&mut arena, "test_memory", body);
 
     // Run compilation with ARC memory strategy
     let config = CompilationConfig {
@@ -381,7 +381,7 @@ fn test_compilation_pipeline_with_memory_management() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation with ARC should succeed");
 
     let hir_module = result.unwrap();
@@ -411,7 +411,7 @@ fn test_compilation_pipeline_without_memory_management() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_no_memory", body);
+    let mut program = create_test_program(&mut arena, "test_no_memory", body);
 
     // Run compilation with memory management disabled
     let config = CompilationConfig {
@@ -422,7 +422,7 @@ fn test_compilation_pipeline_without_memory_management() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation without memory management should succeed");
 
     let hir_module = result.unwrap();
@@ -452,7 +452,7 @@ fn test_compilation_pipeline_with_gc_strategy() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_gc", body);
+    let mut program = create_test_program(&mut arena, "test_gc", body);
 
     // Run compilation with GC memory strategy
     let config = CompilationConfig {
@@ -463,7 +463,7 @@ fn test_compilation_pipeline_with_gc_strategy() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation with GC should succeed");
 
     let hir_module = result.unwrap();
@@ -509,7 +509,7 @@ fn test_compilation_pipeline_all_features() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_all_features", body);
+    let mut program = create_test_program(&mut arena, "test_all_features", body);
 
     // Run compilation with ALL features enabled
     let config = CompilationConfig {
@@ -523,7 +523,7 @@ fn test_compilation_pipeline_all_features() {
         import_resolver: None,
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation with all features should succeed");
 
     let hir_module = result.unwrap();
@@ -576,7 +576,7 @@ fn test_compilation_pipeline_with_memory_optimizations() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_opt", body);
+    let mut program = create_test_program(&mut arena, "test_opt", body);
 
     // Run compilation with full optimization including memory optimizations
     let config = CompilationConfig {
@@ -590,7 +590,7 @@ fn test_compilation_pipeline_with_memory_optimizations() {
         import_resolver: None,
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Compilation with memory optimizations should succeed");
 
     let hir_module = result.unwrap();
@@ -658,7 +658,7 @@ fn test_compilation_pipeline_with_async_function() -> CompilerResult<()> {
         ..Default::default()
     };
 
-    let hir_module = compile_to_hir(&program, type_registry, config)?;
+    let hir_module = compile_to_hir(&mut program, type_registry, config)?;
 
     // Verify module was created
     // Async functions generate additional state machine functions, so we expect >= 1
@@ -728,7 +728,7 @@ fn test_compilation_pipeline_without_async_runtime() -> CompilerResult<()> {
         ..Default::default()
     };
 
-    let hir_module = compile_to_hir(&program, type_registry, config)?;
+    let hir_module = compile_to_hir(&mut program, type_registry, config)?;
 
     // Verify module was created
     assert!(hir_module.functions.len() >= 1, "Should have at least one function");
@@ -835,7 +835,7 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
         ..Default::default()
     };
 
-    let hir_module = compile_to_hir(&program, type_registry, config)?;
+    let hir_module = compile_to_hir(&mut program, type_registry, config)?;
 
     // Verify both functions were created
     // Async functions may generate additional state machine functions
@@ -879,7 +879,7 @@ fn test_compilation_pipeline_while_loop() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_while", body);
+    let mut program = create_test_program(&mut arena, "test_while", body);
 
     let config = CompilationConfig {
         opt_level: 0,
@@ -888,7 +888,7 @@ fn test_compilation_pipeline_while_loop() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "While loop compilation should succeed: {:?}", result.err());
 
     let hir_module = result.unwrap();
@@ -937,7 +937,7 @@ fn test_compilation_pipeline_infinite_loop_with_break() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_loop_break", body);
+    let mut program = create_test_program(&mut arena, "test_loop_break", body);
 
     let config = CompilationConfig {
         opt_level: 0,
@@ -946,7 +946,7 @@ fn test_compilation_pipeline_infinite_loop_with_break() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Infinite loop with break should compile: {:?}", result.err());
 
     let hir_module = result.unwrap();
@@ -978,7 +978,7 @@ fn test_compilation_pipeline_nested_blocks() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_nested_blocks", outer_block);
+    let mut program = create_test_program(&mut arena, "test_nested_blocks", outer_block);
 
     let config = CompilationConfig {
         opt_level: 0,
@@ -987,7 +987,7 @@ fn test_compilation_pipeline_nested_blocks() {
         ..Default::default()
     };
 
-    let result = compile_to_hir(&program, type_registry, config);
+    let result = compile_to_hir(&mut program, type_registry, config);
     assert!(result.is_ok(), "Nested blocks should compile: {:?}", result.err());
 
     let hir_module = result.unwrap();

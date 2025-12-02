@@ -636,6 +636,149 @@ impl TypeChecker {
         }
     }
 
+    /// Apply resolved types from inference to the program AST
+    ///
+    /// This method walks the TypedProgram and replaces Type::Any instances
+    /// with their resolved types from the inference context.
+    /// Call this after check_program() to propagate inferred types.
+    pub fn apply_inferred_types(&self, program: &mut TypedProgram) {
+        for decl in &mut program.declarations {
+            self.apply_types_to_declaration(&mut decl.node);
+        }
+    }
+
+    fn apply_types_to_declaration(&self, decl: &mut TypedDeclaration) {
+        match decl {
+            TypedDeclaration::Function(func) => self.apply_types_to_function(func),
+            TypedDeclaration::Variable(var) => {
+                var.ty = self.inference.apply_substitutions(&var.ty);
+                if let Some(init) = &mut var.initializer {
+                    self.apply_types_to_expr_node(init);
+                }
+            }
+            // TODO: Handle other declaration types as needed
+            _ => {}
+        }
+    }
+
+    fn apply_types_to_function(&self, func: &mut crate::typed_ast::TypedFunction) {
+        // Apply to return type
+        func.return_type = self.inference.apply_substitutions(&func.return_type);
+
+        // Apply to parameters
+        for param in &mut func.params {
+            param.ty = self.inference.apply_substitutions(&param.ty);
+        }
+
+        // Apply to function body
+        if let Some(body) = &mut func.body {
+            for stmt in &mut body.statements {
+                self.apply_types_to_statement(stmt);
+            }
+        }
+    }
+
+    fn apply_types_to_statement(&self, stmt_node: &mut crate::typed_ast::TypedNode<crate::typed_ast::TypedStatement>) {
+        use crate::typed_ast::TypedStatement;
+
+        // Apply to the node's type
+        stmt_node.ty = self.inference.apply_substitutions(&stmt_node.ty);
+
+        match &mut stmt_node.node {
+            TypedStatement::Expression(expr) => {
+                self.apply_types_to_expr_node(expr);
+            }
+            TypedStatement::Let(let_stmt) => {
+                let_stmt.ty = self.inference.apply_substitutions(&let_stmt.ty);
+                if let Some(init) = &mut let_stmt.initializer {
+                    self.apply_types_to_expr_node(init);
+                }
+            }
+            TypedStatement::Return(opt_value) => {
+                if let Some(val) = opt_value {
+                    self.apply_types_to_expr_node(val);
+                }
+            }
+            TypedStatement::Block(block) => {
+                for stmt in &mut block.statements {
+                    self.apply_types_to_statement(stmt);
+                }
+            }
+            TypedStatement::If(if_stmt) => {
+                self.apply_types_to_expr_node(&mut if_stmt.condition);
+                for stmt in &mut if_stmt.then_block.statements {
+                    self.apply_types_to_statement(stmt);
+                }
+                if let Some(else_block) = &mut if_stmt.else_block {
+                    for stmt in &mut else_block.statements {
+                        self.apply_types_to_statement(stmt);
+                    }
+                }
+            }
+            TypedStatement::While(while_stmt) => {
+                self.apply_types_to_expr_node(&mut while_stmt.condition);
+                for stmt in &mut while_stmt.body.statements {
+                    self.apply_types_to_statement(stmt);
+                }
+            }
+            // TODO: Handle other statement types
+            _ => {}
+        }
+    }
+
+    fn apply_types_to_expr_node(&self, expr_node: &mut crate::typed_ast::TypedNode<crate::typed_ast::TypedExpression>) {
+        use crate::typed_ast::TypedExpression;
+
+        // Apply to the node's type
+        expr_node.ty = self.inference.apply_substitutions(&expr_node.ty);
+
+        match &mut expr_node.node {
+            TypedExpression::Call(call) => {
+                // Apply to callee
+                self.apply_types_to_expr_node(&mut call.callee);
+                // Apply to arguments
+                for arg in &mut call.positional_args {
+                    self.apply_types_to_expr_node(arg);
+                }
+                for arg in &mut call.named_args {
+                    self.apply_types_to_expr_node(&mut arg.value);
+                }
+            }
+            TypedExpression::Binary(binary) => {
+                self.apply_types_to_expr_node(&mut binary.left);
+                self.apply_types_to_expr_node(&mut binary.right);
+            }
+            TypedExpression::Unary(unary) => {
+                self.apply_types_to_expr_node(&mut unary.operand);
+            }
+            TypedExpression::Variable(_) => {
+                // Variable name only, type is in the node
+            }
+            TypedExpression::Literal(_) => {
+                // Literal value only, type is in the node
+            }
+            TypedExpression::Field(field) => {
+                self.apply_types_to_expr_node(&mut field.object);
+            }
+            TypedExpression::Index(index) => {
+                self.apply_types_to_expr_node(&mut index.object);
+                self.apply_types_to_expr_node(&mut index.index);
+            }
+            TypedExpression::Array(elements) => {
+                for elem in elements {
+                    self.apply_types_to_expr_node(elem);
+                }
+            }
+            TypedExpression::Tuple(elements) => {
+                for elem in elements {
+                    self.apply_types_to_expr_node(elem);
+                }
+            }
+            // TODO: Handle other expression types
+            _ => {}
+        }
+    }
+
     /// Type check a declaration
     pub fn check_declaration(&mut self, decl: &TypedDeclaration, span: Span) {
         match decl {

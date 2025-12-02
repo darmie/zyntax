@@ -68,7 +68,7 @@ fn test_extern_function_lowers_to_hir() {
     );
 
     // Lower to HIR
-    let result = lowering_ctx.lower_program(&program);
+    let result = lowering_ctx.lower_program(&mut program);
 
     // Should succeed
     assert!(result.is_ok(), "Failed to lower extern function: {:?}", result.err());
@@ -124,7 +124,7 @@ fn test_extern_function_compiles_with_cranelift() {
         arena_arc,
         lowering::LoweringConfig::default(),
     );
-    let hir_module = lowering_ctx.lower_program(&program).expect("Failed to lower to HIR");
+    let hir_module = lowering_ctx.lower_program(&mut program).expect("Failed to lower to HIR");
 
     // Compile with Cranelift
     let mut cranelift_backend = cranelift_backend::CraneliftBackend::new()
@@ -172,7 +172,7 @@ fn test_calling_convention_conversion() {
             arena_arc,
             lowering::LoweringConfig::default(),
         );
-        let hir_module = lowering_ctx.lower_program(&program).expect("Failed to lower");
+        let hir_module = lowering_ctx.lower_program(&mut program).expect("Failed to lower");
 
         let hir_func = hir_module.functions.values().next().unwrap();
         assert_eq!(
@@ -226,7 +226,7 @@ fn test_non_extern_function_without_body_fails() {
         lowering::LoweringConfig::default(),
     );
 
-    let result = lowering_ctx.lower_program(&program);
+    let result = lowering_ctx.lower_program(&mut program);
 
     // Should fail
     assert!(result.is_err(), "Non-extern function without body should fail");
@@ -262,7 +262,7 @@ fn test_multiple_extern_functions() {
         lowering::LoweringConfig::default(),
     );
 
-    let result = lowering_ctx.lower_program(&program);
+    let result = lowering_ctx.lower_program(&mut program);
     assert!(result.is_ok());
 
     let hir_module = result.unwrap();

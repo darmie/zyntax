@@ -303,7 +303,7 @@ fn walk_pair_to_value<'a, H: zyn_peg::runtime::AstHostFunctions>(
 
 /// Lower TypedProgram to HIR module
 fn lower_to_hir(
-    program: TypedProgram,
+    mut program: TypedProgram,
     verbose: bool,
 ) -> Result<HirModule, Box<dyn std::error::Error>> {
     let arena = AstArena::new();
@@ -321,7 +321,7 @@ fn lower_to_hir(
     std::env::set_var("SKIP_TYPE_CHECK", "1");
 
     let mut hir_module = lowering_ctx
-        .lower_program(&program)
+        .lower_program(&mut program)
         .map_err(|e| format!("Lowering error: {:?}", e))?;
 
     if verbose {

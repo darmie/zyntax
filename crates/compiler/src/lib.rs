@@ -173,7 +173,7 @@ impl Default for CompilationConfig {
 /// 4. Run optimization passes
 /// 5. Return optimized HIR ready for backend code generation
 pub fn compile_to_hir(
-    program: &TypedProgram,
+    program: &mut TypedProgram,
     type_registry: Arc<zyntax_typed_ast::TypeRegistry>,
     config: CompilationConfig,
 ) -> CompilerResult<HirModule> {
@@ -300,7 +300,7 @@ pub fn compile_to_hir(
 /// 3. Returns a Cranelift backend ready to execute functions
 #[cfg(feature = "cranelift")]
 pub fn compile_to_jit(
-    program: &TypedProgram,
+    program: &mut TypedProgram,
     type_registry: Arc<zyntax_typed_ast::TypeRegistry>,
     config: CompilationConfig,
 ) -> CompilerResult<cranelift_backend::CraneliftBackend> {

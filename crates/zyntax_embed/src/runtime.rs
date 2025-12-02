@@ -839,7 +839,7 @@ impl ZyntaxRuntime {
         // The parser produces TypedAST with Type::Any and placeholder TypeIds that need inference
 
         let mut hir_module = lowering_ctx
-            .lower_program(&program)
+            .lower_program(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Lowering error: {:?}", e)))?;
 
         // Monomorphization
@@ -2319,7 +2319,7 @@ impl TieredRuntime {
     }
 
     /// Lower a TypedProgram to HirModule
-    fn lower_typed_program(&self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
+    fn lower_typed_program(&self, mut program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
         use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry};
 
@@ -2334,10 +2334,8 @@ impl TieredRuntime {
             LoweringConfig::default(),
         );
 
-        std::env::set_var("SKIP_TYPE_CHECK", "1");
-
         let mut hir_module = lowering_ctx
-            .lower_program(&program)
+            .lower_program(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Lowering error: {:?}", e)))?;
 
         zyntax_compiler::monomorphize_module(&mut hir_module)
