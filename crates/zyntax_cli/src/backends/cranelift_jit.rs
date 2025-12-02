@@ -13,12 +13,14 @@ use zyntax_compiler::hir::HirModule;
 /// - `entry_candidates`: Pre-resolved entry point candidates from EntryPointResolver
 ///   These are in order of preference (most likely first).
 /// - `pack_symbols`: Runtime symbols from loaded ZPack archives
+/// - `pack_symbols_with_sigs`: Runtime symbols with signature information (for auto-boxing)
 pub fn compile_jit(
     module: HirModule,
     _opt_level: u8,
     run: bool,
     entry_candidates: &[String],
     pack_symbols: &[(&'static str, *const u8)],
+    pack_symbols_with_sigs: &[zyntax_compiler::zrtl::RuntimeSymbolInfo],
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Runtime symbols come exclusively from ZPack archives
@@ -39,6 +41,9 @@ pub fn compile_jit(
 
     let mut backend = CraneliftBackend::with_runtime_symbols(&runtime_symbols)
         .map_err(|e| format!("Failed to initialize backend: {}", e))?;
+
+    // Register symbol signatures for auto-boxing support
+    backend.register_symbol_signatures(pack_symbols_with_sigs);
 
     if verbose {
         println!("{} Compiling functions...", "info:".blue());

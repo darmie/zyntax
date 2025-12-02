@@ -51,5 +51,16 @@ fn test_chained_ops(x: Tensor, y: Tensor, z: Tensor) {
 }
 
 fn main() {
+    // Create test tensors using arange
+    let a = arange(1.0, 4.0, 1.0)  // [1.0, 2.0, 3.0]
+    let b = arange(2.0, 5.0, 1.0)  // [2.0, 3.0, 4.0]
+    let c = arange(0.5, 1.6, 0.5)  // [0.5, 1.0, 1.5]
+
+    // Test arithmetic operations
+    test_arithmetic_ops(a, b)
+
+    // Test chained operations
+    test_chained_ops(a, b, c)
+
     42
 }

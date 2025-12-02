@@ -1398,6 +1398,9 @@ impl ZyntaxRuntime {
             self.register_function(name, *ptr, 0); // Arity unknown without type info
         }
 
+        // Register symbol signatures for auto-boxing support
+        self.backend.register_symbol_signatures(plugin.symbols_with_signatures());
+
         // Rebuild the JIT module to include the new symbols
         self.backend.rebuild_with_accumulated_symbols()?;
 
@@ -1422,6 +1425,10 @@ impl ZyntaxRuntime {
         for (name, ptr) in registry.collect_symbols() {
             self.register_function(name, ptr, 0);
         }
+
+        // Register symbol signatures for auto-boxing support
+        let symbols_with_sigs = registry.collect_symbols_with_signatures();
+        self.backend.register_symbol_signatures(&symbols_with_sigs);
 
         // Rebuild the JIT module to include all the new symbols
         self.backend.rebuild_with_accumulated_symbols()?;

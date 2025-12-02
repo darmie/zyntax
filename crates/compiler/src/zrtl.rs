@@ -1211,6 +1211,15 @@ impl ZrtlRegistry {
         symbols
     }
 
+    /// Get all symbols with signature information from all loaded plugins
+    pub fn collect_symbols_with_signatures(&self) -> Vec<RuntimeSymbolInfo> {
+        let mut symbols = Vec::new();
+        for plugin in &self.plugins {
+            symbols.extend_from_slice(plugin.symbols_with_signatures());
+        }
+        symbols
+    }
+
     /// List all loaded plugin names
     pub fn list_plugins(&self) -> Vec<&str> {
         self.plugins.iter().map(|p| p.name()).collect()

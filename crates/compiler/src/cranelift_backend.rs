@@ -51,6 +51,8 @@ pub struct CraneliftBackend {
     exported_symbols: HashMap<String, *const u8>,
     /// Runtime symbols registered for external linking
     runtime_symbols: Vec<(String, *const u8)>,
+    /// Symbol signatures for auto-boxing support (symbol_name → signature)
+    symbol_signatures: HashMap<String, crate::zrtl::ZrtlSymbolSig>,
 }
 
 /// Hot-reload state management
@@ -146,9 +148,32 @@ impl CraneliftBackend {
             },
             exported_symbols: HashMap::new(),
             runtime_symbols,
+            symbol_signatures: HashMap::new(),
         })
     }
     
+    /// Register symbol signatures for auto-boxing support
+    pub fn register_symbol_signatures(&mut self, symbols: &[crate::zrtl::RuntimeSymbolInfo]) {
+        log::info!("[DynamicBox] Registering {} symbol signatures", symbols.len());
+        for sym in symbols {
+            if let Some(sig) = &sym.sig {
+                log::debug!("[DynamicBox] Registering signature for {}: params={}, dynamic_params={:?}",
+                    sym.name, sig.param_count,
+                    (0..sig.param_count).filter(|&i| sig.param_is_dynamic(i as usize)).collect::<Vec<_>>());
+                self.symbol_signatures.insert(sym.name.to_string(), sig.clone());
+            }
+        }
+        log::info!("[DynamicBox] Registered {} signatures total", self.symbol_signatures.len());
+    }
+
+    /// Check if a symbol parameter expects DynamicBox
+    fn param_needs_boxing(&self, symbol_name: &str, param_index: usize) -> bool {
+        self.symbol_signatures
+            .get(symbol_name)
+            .map(|sig| sig.param_is_dynamic(param_index))
+            .unwrap_or(false)
+    }
+
     /// Compile a HIR module to native code
     pub fn compile_module(&mut self, module: &HirModule) -> CompilerResult<()> {
         // Process globals first (including vtables)
@@ -495,6 +520,21 @@ impl CraneliftBackend {
                 if let HirValueKind::Global(_) = value.kind {
                     let ptr_ty = self.translate_type(&value.ty)?;
                     global_types.insert(value.id, ptr_ty);
+                }
+            }
+
+            // Pre-compute symbol parameter boxing requirements to avoid borrow checker issues
+            let mut symbol_boxing: HashMap<(String, usize), bool> = HashMap::new();
+            for block in function.blocks.values() {
+                for inst in &block.instructions {
+                    if let HirInstruction::Call { callee: HirCallable::Symbol(symbol_name), args, .. } = inst {
+                        for param_index in 0..args.len() {
+                            let key = (symbol_name.clone(), param_index);
+                            if !symbol_boxing.contains_key(&key) {
+                                symbol_boxing.insert(key, self.param_needs_boxing(symbol_name, param_index));
+                            }
+                        }
+                    }
                 }
             }
 
@@ -930,9 +970,55 @@ impl CraneliftBackend {
                                 }
                                 HirCallable::Symbol(symbol_name) => {
                                     // Call external runtime symbol by name (e.g., "$Image$load")
-                                    // Create signature based on argument types
+                                    // Check if any parameters need DynamicBox wrapping
+                                    let mut boxed_args = Vec::new();
+                                    for (param_index, &arg_val) in arg_values.iter().enumerate() {
+                                        // Look up boxing requirement from pre-computed map
+                                        let needs_boxing = symbol_boxing
+                                            .get(&(symbol_name.clone(), param_index))
+                                            .copied()
+                                            .unwrap_or(false);
+                                        log::debug!("[DynamicBox] Symbol: {}, param {}: needs_boxing = {}", symbol_name, param_index, needs_boxing);
+                                        if needs_boxing {
+                                            // This parameter expects DynamicBox - wrap it
+                                            // For opaque types (i64 pointer), we need to create a DynamicBox struct
+                                            // DynamicBox layout: { tag: u32, size: u32, data: i64, dropper: i64 }
+
+                                            // Allocate stack space for DynamicBox (24 bytes on 64-bit)
+                                            let slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                                24,
+                                            ));
+                                            let box_addr = builder.ins().stack_addr(types::I64, slot, 0);
+
+                                            // Set tag (TypeCategory::Opaque = 0x12, type_id = 0)
+                                            let tag_val = builder.ins().iconst(types::I32, 0x12); // Opaque category
+                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), tag_val, box_addr, 0);
+
+                                            // Set size (8 bytes for pointer)
+                                            let size_val = builder.ins().iconst(types::I32, 8);
+                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), size_val, box_addr, 4);
+
+                                            // Set data pointer (the opaque value itself)
+                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), arg_val, box_addr, 8);
+
+                                            // Set dropper to null (0)
+                                            let null_dropper = builder.ins().iconst(types::I64, 0);
+                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), null_dropper, box_addr, 16);
+
+                                            // Pass the box by value (load struct fields and pass as args)
+                                            // Actually, DynamicBox is passed by value, so we need to load the struct
+                                            // For now, pass the pointer to the struct (this might need ABI adjustment)
+                                            boxed_args.push(box_addr);
+                                        } else {
+                                            // No boxing needed - use value as-is
+                                            boxed_args.push(arg_val);
+                                        }
+                                    }
+
+                                    // Create signature based on (possibly boxed) argument types
                                     let mut sig = self.module.make_signature();
-                                    for arg_val in &arg_values {
+                                    for arg_val in &boxed_args {
                                         let arg_ty = builder.func.dfg.value_type(*arg_val);
                                         sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
                                     }
@@ -971,7 +1057,7 @@ impl CraneliftBackend {
                                     let local_func = self.module
                                         .declare_func_in_func(func, builder.func);
 
-                                    let call = builder.ins().call(local_func, &arg_values);
+                                    let call = builder.ins().call(local_func, &boxed_args);
 
                                     if let Some(result_id) = result {
                                         if let Some(&ret_val) = builder.inst_results(call).first() {

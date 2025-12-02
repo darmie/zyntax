@@ -392,6 +392,14 @@ impl ZPack {
             .unwrap_or_default()
     }
 
+    /// Get runtime symbols with signature information (for auto-boxing)
+    pub fn runtime_symbols_with_signatures(&self) -> &[crate::zrtl::RuntimeSymbolInfo] {
+        self.runtime
+            .as_ref()
+            .map(|r| r.symbols_with_signatures())
+            .unwrap_or(&[])
+    }
+
     /// Get a module's HIR by path
     pub fn get_module(&self, path: &str) -> Option<&HirModule> {
         self.modules.get(path)

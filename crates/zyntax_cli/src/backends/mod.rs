@@ -59,8 +59,10 @@ pub fn compile(
 
     // Collect runtime symbols from all packs (for JIT mode)
     let mut pack_symbols: Vec<(&'static str, *const u8)> = Vec::new();
+    let mut pack_symbols_with_sigs: Vec<zyntax_compiler::zrtl::RuntimeSymbolInfo> = Vec::new();
     for pack in packs.iter() {
         pack_symbols.extend(pack.runtime_symbols());
+        pack_symbols_with_sigs.extend_from_slice(pack.runtime_symbols_with_signatures());
     }
 
     if verbose && !pack_symbols.is_empty() {
@@ -69,13 +71,13 @@ pub fn compile(
 
     match (backend, jit) {
         // JIT execution - uses dynamic runtime symbols from ZPack
-        (Backend::Cranelift, true) => compile_jit(module, opt_level, true, &candidates, &pack_symbols, verbose),
+        (Backend::Cranelift, true) => compile_jit(module, opt_level, true, &candidates, &pack_symbols, &pack_symbols_with_sigs, verbose),
         (Backend::Llvm, true) => {
             compile_and_run_llvm(module, opt_level, Some(entry), &pack_symbols, verbose)?;
             Ok(())
         }
         // AOT compilation - users link static libraries directly
-        (Backend::Cranelift, false) => compile_jit(module, opt_level, false, &candidates, &pack_symbols, verbose),
+        (Backend::Cranelift, false) => compile_jit(module, opt_level, false, &candidates, &pack_symbols, &pack_symbols_with_sigs, verbose),
         (Backend::Llvm, false) => {
             // Static libraries are provided directly by the user via --lib flag
             // ZPack is for JIT only - AOT users link their runtime libraries directly

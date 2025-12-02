@@ -175,13 +175,12 @@ impl TypedCfgBuilder {
         for stmt in &block.statements {
             match &stmt.node {
                 TypedStatement::Return(expr) => {
-                    // Return terminates the block
+                    // Explicit return terminates the block
                     terminator = TypedTerminator::Return(expr.clone());
                     break; // No more statements after return
                 }
 
-                // For now, treat all other statements as non-terminating
-                // TODO: Handle If, While, Match, etc. that create control flow
+                // For all other statements, treat as non-terminating
                 _ => {
                     statements.push(stmt.clone());
                 }
@@ -1040,12 +1039,29 @@ impl TypedCfgBuilder {
                  current_block_id, current_statements.len(), exit_id);
         if !all_blocks.iter().any(|b| b.id == current_block_id) {
             log::debug!("[CFG] End: creating final block with {} statements", current_statements.len());
+
+            // Special case: If the function body has exactly one statement and it's an expression,
+            // treat it as an implicit return. This handles cases like:
+            //   fn add(self, rhs: Tensor) -> Tensor { extern tensor_add(self, rhs) }
+            // where the single expression should be returned.
+            let (final_statements, terminator) = if current_statements.len() == 1 {
+                if let TypedStatement::Expression(expr) = &current_statements[0].node {
+                    // Single expression - implicitly return it
+                    (vec![], TypedTerminator::Return(Some(Box::new((**expr).clone()))))
+                } else {
+                    (current_statements, TypedTerminator::Unreachable)
+                }
+            } else {
+                // Multiple statements or no statements - keep as unreachable
+                (current_statements, TypedTerminator::Unreachable)
+            };
+
             all_blocks.push(TypedBasicBlock {
                 id: current_block_id,
                 label: None,
-                statements: current_statements,
-                terminator: TypedTerminator::Unreachable,
-            pattern_check: None,
+                statements: final_statements,
+                terminator,
+                pattern_check: None,
             });
             exit_id = current_block_id;
         } else {

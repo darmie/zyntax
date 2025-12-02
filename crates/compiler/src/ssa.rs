@@ -698,18 +698,19 @@ impl SsaBuilder {
             }
 
             TypedTerminator::Unreachable => {
-                // For void functions, convert Unreachable to Return(None)
-                // This handles functions that don't have an explicit return statement
-                let is_void_return = match &self.original_return_type {
-                    Some(Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit)) => true,
-                    None => false, // No return type info - keep as unreachable
-                    _ => false,
-                };
-
-                if is_void_return {
-                    HirTerminator::Return { values: vec![] }
-                } else {
-                    HirTerminator::Unreachable
+                // Handle implicit returns for functions without explicit return statements
+                match &self.original_return_type {
+                    Some(Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit)) | None => {
+                        // Void/Unit return or no return type specified - implicit void return
+                        HirTerminator::Return { values: vec![] }
+                    }
+                    Some(_return_ty) => {
+                        // Non-void function: check if last statement in the block is an expression to implicitly return
+                        // We need to look at the TypedBasicBlock to see if there's an expression statement at the end
+                        // that we should implicitly return
+                        // For now, keep as Unreachable - the type checker should catch missing returns
+                        HirTerminator::Unreachable
+                    }
                 }
             }
         };
