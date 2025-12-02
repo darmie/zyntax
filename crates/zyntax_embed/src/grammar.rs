@@ -275,6 +275,10 @@ impl LanguageGrammar {
         // Add source file for proper diagnostics
         program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
 
+        // Inject extern function declarations for all builtins from @builtin directive
+        // This ensures the type checker can find these symbols in scope
+        self.inject_builtin_externs(&mut program)?;
+
         Ok(program)
     }
 
@@ -340,6 +344,64 @@ impl LanguageGrammar {
             .map_err(|e| GrammarError::CompileError(format!("Failed to consume grammar rules: {:?}", e)))?;
 
         Ok(optimizer::optimize(ast))
+    }
+
+    /// Inject extern function declarations for all builtins from @builtin directive
+    ///
+    /// This creates TypedDeclaration::Function entries with is_external=true for each
+    /// builtin function so the type checker can find them in scope.
+    fn inject_builtin_externs(&self, program: &mut TypedProgram) -> GrammarResult<()> {
+        use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedFunction, TypedParameter};
+        use zyntax_typed_ast::type_registry::{Type, PrimitiveType};
+        use zyntax_typed_ast::{typed_node, Span, Visibility, CallingConvention, Mutability, InternedString};
+
+        eprintln!("[DEBUG inject_builtin_externs] Called with {} existing declarations", program.declarations.len());
+        eprintln!("[DEBUG inject_builtin_externs] Builtins.functions has {} entries", self.module.metadata.builtins.functions.len());
+
+        let span = Span::new(0, 0); // Synthetic span for injected declarations
+
+        // Iterate over all builtins from @builtin directive
+        for (source_name, target_symbol) in &self.module.metadata.builtins.functions {
+            // Get return type from @types.function_returns if available, otherwise use Any
+            // All return types in @types are extern/opaque types
+            let return_type = self.module.metadata.types.function_returns.get(source_name)
+                .map(|type_str| {
+                    Type::Extern {
+                        name: InternedString::new_global(type_str),
+                        layout: None,  // Layout determined by ZRTL at runtime
+                    }
+                })
+                .unwrap_or(Type::Any);
+
+            // Create extern function declaration
+            // We don't declare any parameters - the type checker will allow any arguments
+            // The actual signature is enforced by ZRTL at runtime
+            let extern_func = TypedFunction {
+                name: InternedString::new_global(target_symbol),
+                type_params: vec![],
+                params: vec![],  // No parameters - accept anything
+                return_type,
+                body: None,  // Extern functions have no body
+                visibility: Visibility::Public,
+                is_async: false,
+                is_external: true,  // Mark as external
+                calling_convention: CallingConvention::Cdecl, // Extern uses C calling convention
+                link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
+            };
+
+            // Add to program declarations
+            program.declarations.push(typed_node(
+                TypedDeclaration::Function(extern_func),
+                Type::Primitive(PrimitiveType::Unit),
+                span,
+            ));
+        }
+
+        eprintln!("[DEBUG inject_builtin_externs] Added {} extern declarations, total now: {}",
+            self.module.metadata.builtins.functions.len(),
+            program.declarations.len());
+
+        Ok(())
     }
 }
 
