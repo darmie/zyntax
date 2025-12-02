@@ -1,0 +1,20 @@
+// ZynML Example: Basic Tensor Operations
+// Run with: zynml run examples/basic_tensor.zynml
+
+fn main() {
+    // Create tensors
+    let a = tensor([1.0, 2.0, 3.0])
+    let b = tensor([4.0, 5.0, 6.0])
+
+    // Test addition with + operator (trait dispatch to $Tensor$add)
+    let c = a + b
+    extern tensor_println(c)  // Should print: [5.0, 7.0, 9.0]
+
+    // Test multiplication with * operator (trait dispatch to $Tensor$mul)
+    let d = a * b
+    extern tensor_println(d)  // Should print: [4.0, 10.0, 18.0]
+
+    // Test subtraction
+    let e = b - a
+    extern tensor_println(e)  // Should print: [3.0, 3.0, 3.0]
+}
