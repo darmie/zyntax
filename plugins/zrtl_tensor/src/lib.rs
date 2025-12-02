@@ -1632,6 +1632,232 @@ pub extern "C" fn tensor_to_string(tensor: TensorPtr) -> *mut u8 {
 }
 
 // ============================================================================
+// Arithmetic Operators (for trait dispatch)
+// ============================================================================
+
+/// Element-wise addition: a + b
+/// Broadcasts if shapes don't match
+#[no_mangle]
+pub extern "C" fn tensor_add(a: TensorPtr, b: TensorPtr) -> TensorPtr {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let ta = &*a;
+        let tb = &*b;
+
+        // Simple case: same shape
+        if ta.shape[..ta.ndim as usize] == tb.shape[..tb.ndim as usize] {
+            let result = tensor_clone(a);
+            let tr = &mut *result;
+
+            // F32 only for now
+            if ta.dtype == DType::F32 && tb.dtype == DType::F32 {
+                let numel = ta.numel();
+                let ra = tr.data as *mut f32;
+                let rb = tb.data as *const f32;
+                for i in 0..numel {
+                    *ra.add(i) += *rb.add(i);
+                }
+            }
+            result
+        } else {
+            // Broadcasting not yet implemented - return clone of a
+            tensor_clone(a)
+        }
+    }
+}
+
+/// Element-wise subtraction: a - b
+#[no_mangle]
+pub extern "C" fn tensor_sub(a: TensorPtr, b: TensorPtr) -> TensorPtr {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let ta = &*a;
+        let tb = &*b;
+
+        if ta.shape[..ta.ndim as usize] == tb.shape[..tb.ndim as usize] {
+            let result = tensor_clone(a);
+            let tr = &mut *result;
+
+            if ta.dtype == DType::F32 && tb.dtype == DType::F32 {
+                let numel = ta.numel();
+                let ra = tr.data as *mut f32;
+                let rb = tb.data as *const f32;
+                for i in 0..numel {
+                    *ra.add(i) -= *rb.add(i);
+                }
+            }
+            result
+        } else {
+            tensor_clone(a)
+        }
+    }
+}
+
+/// Element-wise multiplication: a * b
+#[no_mangle]
+pub extern "C" fn tensor_mul(a: TensorPtr, b: TensorPtr) -> TensorPtr {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let ta = &*a;
+        let tb = &*b;
+
+        if ta.shape[..ta.ndim as usize] == tb.shape[..tb.ndim as usize] {
+            let result = tensor_clone(a);
+            let tr = &mut *result;
+
+            if ta.dtype == DType::F32 && tb.dtype == DType::F32 {
+                let numel = ta.numel();
+                let ra = tr.data as *mut f32;
+                let rb = tb.data as *const f32;
+                for i in 0..numel {
+                    *ra.add(i) *= *rb.add(i);
+                }
+            }
+            result
+        } else {
+            tensor_clone(a)
+        }
+    }
+}
+
+/// Element-wise division: a / b
+#[no_mangle]
+pub extern "C" fn tensor_div(a: TensorPtr, b: TensorPtr) -> TensorPtr {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let ta = &*a;
+        let tb = &*b;
+
+        if ta.shape[..ta.ndim as usize] == tb.shape[..tb.ndim as usize] {
+            let result = tensor_clone(a);
+            let tr = &mut *result;
+
+            if ta.dtype == DType::F32 && tb.dtype == DType::F32 {
+                let numel = ta.numel();
+                let ra = tr.data as *mut f32;
+                let rb = tb.data as *const f32;
+                for i in 0..numel {
+                    let divisor = *rb.add(i);
+                    if divisor != 0.0 {
+                        *ra.add(i) /= divisor;
+                    } else {
+                        *ra.add(i) = f32::INFINITY;
+                    }
+                }
+            }
+            result
+        } else {
+            tensor_clone(a)
+        }
+    }
+}
+
+/// Unary negation: -a
+#[no_mangle]
+pub extern "C" fn tensor_neg(a: TensorPtr) -> TensorPtr {
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let ta = &*a;
+        let result = tensor_clone(a);
+        let tr = &mut *result;
+
+        if ta.dtype == DType::F32 {
+            let numel = ta.numel();
+            let ra = tr.data as *mut f32;
+            for i in 0..numel {
+                *ra.add(i) = -*ra.add(i);
+            }
+        }
+        result
+    }
+}
+
+/// Dot product / matrix multiplication: a @ b
+/// For 1D tensors: dot product (returns scalar)
+/// For 2D tensors: matrix multiplication
+#[no_mangle]
+pub extern "C" fn tensor_dot(a: TensorPtr, b: TensorPtr) -> f32 {
+    if a.is_null() || b.is_null() {
+        return 0.0;
+    }
+
+    unsafe {
+        let ta = &*a;
+        let tb = &*b;
+
+        // Only F32 supported
+        if ta.dtype != DType::F32 || tb.dtype != DType::F32 {
+            return 0.0;
+        }
+
+        // 1D dot product
+        let numel_a = ta.numel();
+        let numel_b = tb.numel();
+
+        if numel_a != numel_b {
+            return 0.0;
+        }
+
+        let pa = ta.data as *const f32;
+        let pb = tb.data as *const f32;
+
+        let mut sum = 0.0f32;
+        for i in 0..numel_a {
+            sum += (*pa.add(i)) * (*pb.add(i));
+        }
+        sum
+    }
+}
+
+/// Element-wise modulo: a % b
+#[no_mangle]
+pub extern "C" fn tensor_mod(a: TensorPtr, b: TensorPtr) -> TensorPtr {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        let ta = &*a;
+        let tb = &*b;
+
+        if ta.shape[..ta.ndim as usize] == tb.shape[..tb.ndim as usize] {
+            let result = tensor_clone(a);
+            let tr = &mut *result;
+
+            if ta.dtype == DType::F32 && tb.dtype == DType::F32 {
+                let numel = ta.numel();
+                let ra = tr.data as *mut f32;
+                let rb = tb.data as *const f32;
+                for i in 0..numel {
+                    let divisor = *rb.add(i);
+                    if divisor != 0.0 {
+                        *ra.add(i) %= divisor;
+                    }
+                }
+            }
+            result
+        } else {
+            tensor_clone(a)
+        }
+    }
+}
+
+// ============================================================================
 // Plugin Registration
 // ============================================================================
 
@@ -1692,6 +1918,15 @@ zrtl_plugin! {
         ("$Tensor$to_string", tensor_to_string),
         ("$Tensor$print", tensor_print),
         ("$Tensor$println", tensor_println),
+
+        // Arithmetic operator trait methods
+        ("$Tensor$add", tensor_add),
+        ("$Tensor$sub", tensor_sub),
+        ("$Tensor$mul", tensor_mul),
+        ("$Tensor$div", tensor_div),
+        ("$Tensor$mod", tensor_mod),
+        ("$Tensor$neg", tensor_neg),
+        ("$Tensor$matmul", tensor_dot),  // @ operator uses matmul method name
     ]
 }
 

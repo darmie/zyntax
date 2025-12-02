@@ -7,7 +7,7 @@ description = "Layered compilation system for Zyntax language"
 
 [dependencies]
 # Parser dependency
-zyntax_typed_ast = { path = "../typed_ast" }
+zyntax_typed_ast = { path = "../typed_ast", features = ["operator_traits"] }
 
 # Core data structures
 dashmap = { workspace = true }

@@ -27,6 +27,7 @@ derive_builder = { version = "0.20.2", optional = true }
 [features]
 default = []
 builders = ["derive_builder"]  # Enable builder pattern helpers
+operator_traits = []  # Enable built-in operator traits (Add, Sub, Mul, etc.)
 
 
 [[example]]

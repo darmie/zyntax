@@ -1378,7 +1378,13 @@ impl SsaBuilder {
                     return Ok(result);
                 }
 
-                // Regular binary operations
+                // Check if this is a non-primitive type that might use operator overloading
+                // For opaque/named types, try to dispatch to trait method
+                if let Some(trait_call) = self.try_operator_trait_dispatch(block_id, op, left, right, &expr.ty)? {
+                    return Ok(trait_call);
+                }
+
+                // Regular binary operations for primitive types
                 let left_val = self.translate_expression(block_id, left)?;
                 let right_val = self.translate_expression(block_id, right)?;
                 let result_type = self.convert_type(&expr.ty);
@@ -2984,14 +2990,143 @@ impl SsaBuilder {
     fn convert_unary_op(&self, op: &zyntax_typed_ast::typed_ast::UnaryOp) -> crate::hir::UnaryOp {
         use zyntax_typed_ast::typed_ast::UnaryOp as FrontendOp;
         use crate::hir::UnaryOp as HirOp;
-        
+
         match op {
             FrontendOp::Minus => HirOp::Neg,
             FrontendOp::Not => HirOp::Not,
             _ => HirOp::Neg, // Default
         }
     }
-    
+
+    /// Try to dispatch a binary operator to a trait method call.
+    /// Returns Some(result_value) if the operator should be dispatched via trait,
+    /// or None if the regular binary instruction should be used.
+    fn try_operator_trait_dispatch(
+        &mut self,
+        block_id: HirId,
+        op: &zyntax_typed_ast::typed_ast::BinaryOp,
+        left: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        right: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        result_type: &Type,
+    ) -> CompilerResult<Option<HirId>> {
+        use zyntax_typed_ast::typed_ast::BinaryOp as FrontendOp;
+
+        // Only consider trait dispatch for non-primitive types
+        let left_type = &left.ty;
+        if !self.is_trait_dispatchable_type(left_type) {
+            return Ok(None);
+        }
+
+        // Get the method name for this operator
+        let method_name = match op {
+            FrontendOp::Add => "add",
+            FrontendOp::Sub => "sub",
+            FrontendOp::Mul => "mul",
+            FrontendOp::Div => "div",
+            FrontendOp::Rem => "mod",
+            FrontendOp::Eq => "eq",
+            FrontendOp::Ne => "ne",
+            FrontendOp::Lt => "lt",
+            FrontendOp::Le => "le",
+            FrontendOp::Gt => "gt",
+            FrontendOp::Ge => "ge",
+            FrontendOp::BitAnd => "bitand",
+            FrontendOp::BitOr => "bitor",
+            FrontendOp::BitXor => "bitxor",
+            _ => return Ok(None), // No trait method for this operator
+        };
+
+        // Get the type name for constructing the method symbol
+        let type_name = self.get_type_symbol_prefix(left_type);
+        if type_name.is_none() {
+            return Ok(None);
+        }
+        let type_name = type_name.unwrap();
+
+        // Construct the method symbol name: $TypeName$method
+        let method_symbol = format!("${}${}", type_name, method_name);
+        log::debug!("[SSA] Operator trait dispatch: {} for type {}", method_symbol, type_name);
+
+        // Translate arguments
+        let left_val = self.translate_expression(block_id, left)?;
+        let right_val = self.translate_expression(block_id, right)?;
+        let hir_result_type = self.convert_type(result_type);
+
+        // Create call instruction to the trait method
+        let result = if hir_result_type != HirType::Void {
+            Some(self.create_value(hir_result_type.clone(), HirValueKind::Instruction))
+        } else {
+            None
+        };
+
+        let inst = HirInstruction::Call {
+            result,
+            callee: crate::hir::HirCallable::Symbol(method_symbol),
+            args: vec![left_val, right_val],
+            type_args: vec![],
+            const_args: vec![],
+            is_tail: false,
+        };
+
+        self.add_instruction(block_id, inst);
+        self.add_use(left_val, result.unwrap_or(left_val));
+        self.add_use(right_val, result.unwrap_or(right_val));
+
+        Ok(Some(result.unwrap_or_else(|| self.create_undef(HirType::Void))))
+    }
+
+    /// Check if a type should use trait dispatch for operators
+    fn is_trait_dispatchable_type(&self, ty: &Type) -> bool {
+        match ty {
+            // Named types - check if the HIR conversion results in an opaque type
+            Type::Named { id, .. } => {
+                // Convert to HIR type and check if it's opaque
+                let hir_ty = self.convert_type(ty);
+                matches!(hir_ty, HirType::Opaque(_))
+            }
+            // Primitive types - use built-in operations
+            Type::Primitive(_) => false,
+            // Other types - might need trait dispatch
+            _ => false,
+        }
+    }
+
+    /// Get the symbol prefix for a type (e.g., "Tensor" for $Tensor$add)
+    fn get_type_symbol_prefix(&self, ty: &Type) -> Option<String> {
+        match ty {
+            Type::Named { id, .. } => {
+                if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                    // Use the type name
+                    let name = type_def.name.resolve_global()
+                        .unwrap_or_else(|| {
+                            let arena = self.arena.lock().unwrap();
+                            arena.resolve_string(type_def.name)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        });
+                    Some(name)
+                } else {
+                    // If not in registry, try to get from HIR type
+                    let hir_ty = self.convert_type(ty);
+                    if let HirType::Opaque(name) = hir_ty {
+                        let name_str = name.resolve_global()
+                            .unwrap_or_else(|| {
+                                let arena = self.arena.lock().unwrap();
+                                arena.resolve_string(name)
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_default()
+                            });
+                        // Remove $ prefix if present
+                        Some(name_str.trim_start_matches('$').to_string())
+                    } else {
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// Translate literal to constant
     fn translate_literal(&self, lit: &zyntax_typed_ast::typed_ast::TypedLiteral) -> crate::hir::HirConstant {
         use zyntax_typed_ast::typed_ast::TypedLiteral;

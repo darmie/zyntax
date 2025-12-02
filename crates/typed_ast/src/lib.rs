@@ -110,6 +110,10 @@ pub use type_registry::{
     ConstBinaryOp, ConstUnaryOp, ConstVarId, Kind,
 };
 
+// Operator traits feature exports
+#[cfg(feature = "operator_traits")]
+pub use type_registry::BuiltinTraitIds;
+
 pub use typed_ast::{
     TypedNode, TypedProgram, TypedDeclaration, TypedFunction, TypedVariable,
     TypedStatement, TypedExpression, TypedLiteral, BinaryOp, UnaryOp,

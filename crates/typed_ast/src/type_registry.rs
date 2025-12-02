@@ -1334,3 +1334,750 @@ impl Default for TypeRegistry {
         Self::new()
     }
 }
+
+/// Well-known operator trait IDs for compiler dispatch
+#[cfg(feature = "operator_traits")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BuiltinTraitIds {
+    pub add: TypeId,
+    pub sub: TypeId,
+    pub mul: TypeId,
+    pub div: TypeId,
+    pub modulo: TypeId,
+    pub neg: TypeId,
+    pub matmul: TypeId,
+    pub eq: TypeId,
+    pub ord: TypeId,
+    pub bit_and: TypeId,
+    pub bit_or: TypeId,
+    pub bit_xor: TypeId,
+    pub not: TypeId,
+    pub index: TypeId,
+    pub index_mut: TypeId,
+    pub display: TypeId,
+    pub debug: TypeId,
+    pub clone: TypeId,
+    pub drop: TypeId,
+    pub iterator: TypeId,
+    pub into_iterator: TypeId,
+}
+
+#[cfg(feature = "operator_traits")]
+impl TypeRegistry {
+    /// Register all built-in operator traits and return their IDs
+    ///
+    /// This creates the standard operator traits that the compiler uses
+    /// for operator overloading. When seeing `a + b`, the compiler looks
+    /// for `Add` trait impl on the type of `a`.
+    pub fn register_builtin_traits(&mut self, arena: &mut crate::arena::AstArena) -> BuiltinTraitIds {
+        let span = Span::default();
+
+        // Create common type names
+        let self_name = arena.intern_string("Self");
+        let rhs_name = arena.intern_string("Rhs");
+        let output_name = arena.intern_string("Output");
+        let item_name = arena.intern_string("Item");
+
+        // Self type reference
+        let self_type = Type::TypeVar(TypeVar::unbound(self_name));
+
+        // --- Arithmetic Operators ---
+
+        // Add<Rhs> trait - enables a + b
+        let add_id = self.register_operator_trait(
+            arena, "Add", rhs_name, output_name, "add", &span
+        );
+
+        // Sub<Rhs> trait - enables a - b
+        let sub_id = self.register_operator_trait(
+            arena, "Sub", rhs_name, output_name, "sub", &span
+        );
+
+        // Mul<Rhs> trait - enables a * b
+        let mul_id = self.register_operator_trait(
+            arena, "Mul", rhs_name, output_name, "mul", &span
+        );
+
+        // Div<Rhs> trait - enables a / b
+        let div_id = self.register_operator_trait(
+            arena, "Div", rhs_name, output_name, "div", &span
+        );
+
+        // Mod<Rhs> trait - enables a % b
+        let modulo_id = self.register_operator_trait(
+            arena, "Mod", rhs_name, output_name, "mod", &span
+        );
+
+        // MatMul<Rhs> trait - enables a @ b (matrix multiplication)
+        let matmul_id = self.register_operator_trait(
+            arena, "MatMul", rhs_name, output_name, "matmul", &span
+        );
+
+        // Neg trait - enables -a (unary negation)
+        let neg_id = self.register_unary_operator_trait(
+            arena, "Neg", output_name, "neg", &span
+        );
+
+        // --- Comparison Operators ---
+
+        // Eq<Rhs> trait - enables a == b, a != b
+        let eq_id = {
+            let trait_name = arena.intern_string("Eq");
+            let eq_method = arena.intern_string("eq");
+            let ne_method = arena.intern_string("ne");
+            let id = TypeId::next();
+
+            let rhs_type = Type::TypeVar(TypeVar::unbound(rhs_name));
+            let bool_type = Type::Primitive(PrimitiveType::Bool);
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![TypeParam {
+                    name: rhs_name,
+                    bounds: vec![],
+                    variance: Variance::Invariant,
+                    default: Some(self_type.clone()),
+                    span,
+                }],
+                super_traits: vec![],
+                methods: vec![
+                    MethodSig {
+                        name: eq_method,
+                        type_params: vec![],
+                        params: vec![
+                            ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: false },
+                            ParamDef { name: rhs_name, ty: rhs_type.clone(), is_self: false, is_varargs: false, is_mut: false },
+                        ],
+                        return_type: bool_type.clone(),
+                        where_clause: vec![],
+                        is_static: false,
+                        is_async: false,
+                        visibility: Visibility::Public,
+                        span,
+                        is_extension: false,
+                    },
+                    MethodSig {
+                        name: ne_method,
+                        type_params: vec![],
+                        params: vec![
+                            ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: false },
+                            ParamDef { name: rhs_name, ty: rhs_type, is_self: false, is_varargs: false, is_mut: false },
+                        ],
+                        return_type: bool_type,
+                        where_clause: vec![],
+                        is_static: false,
+                        is_async: false,
+                        visibility: Visibility::Public,
+                        span,
+                        is_extension: false,
+                    },
+                ],
+                associated_types: vec![],
+                is_object_safe: true,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // Ord<Rhs> trait - enables a < b, a > b, a <= b, a >= b
+        let ord_id = {
+            let trait_name = arena.intern_string("Ord");
+            let lt_method = arena.intern_string("lt");
+            let gt_method = arena.intern_string("gt");
+            let le_method = arena.intern_string("le");
+            let ge_method = arena.intern_string("ge");
+            let id = TypeId::next();
+
+            let rhs_type = Type::TypeVar(TypeVar::unbound(rhs_name));
+            let bool_type = Type::Primitive(PrimitiveType::Bool);
+
+            let comparison_method = |name: InternedString| MethodSig {
+                name,
+                type_params: vec![],
+                params: vec![
+                    ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: false },
+                    ParamDef { name: rhs_name, ty: rhs_type.clone(), is_self: false, is_varargs: false, is_mut: false },
+                ],
+                return_type: bool_type.clone(),
+                where_clause: vec![],
+                is_static: false,
+                is_async: false,
+                visibility: Visibility::Public,
+                span,
+                is_extension: false,
+            };
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![TypeParam {
+                    name: rhs_name,
+                    bounds: vec![],
+                    variance: Variance::Invariant,
+                    default: Some(self_type.clone()),
+                    span,
+                }],
+                super_traits: vec![],
+                methods: vec![
+                    comparison_method(lt_method),
+                    comparison_method(gt_method),
+                    comparison_method(le_method),
+                    comparison_method(ge_method),
+                ],
+                associated_types: vec![],
+                is_object_safe: true,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // --- Bitwise Operators ---
+
+        // BitAnd<Rhs> trait - enables a & b
+        let bit_and_id = self.register_operator_trait(
+            arena, "BitAnd", rhs_name, output_name, "bitand", &span
+        );
+
+        // BitOr<Rhs> trait - enables a | b
+        let bit_or_id = self.register_operator_trait(
+            arena, "BitOr", rhs_name, output_name, "bitor", &span
+        );
+
+        // BitXor<Rhs> trait - enables a ^ b
+        let bit_xor_id = self.register_operator_trait(
+            arena, "BitXor", rhs_name, output_name, "bitxor", &span
+        );
+
+        // Not trait - enables !a (logical/bitwise not)
+        let not_id = self.register_unary_operator_trait(
+            arena, "Not", output_name, "not", &span
+        );
+
+        // --- Indexing Operators ---
+
+        // Index<Idx> trait - enables a[i] (read)
+        let index_id = {
+            let trait_name = arena.intern_string("Index");
+            let idx_name = arena.intern_string("Idx");
+            let index_method = arena.intern_string("index");
+            let id = TypeId::next();
+
+            let idx_type = Type::TypeVar(TypeVar::unbound(idx_name));
+            let output_type = Type::TypeVar(TypeVar::unbound(output_name));
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![TypeParam {
+                    name: idx_name,
+                    bounds: vec![],
+                    variance: Variance::Contravariant,
+                    default: None,
+                    span,
+                }],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: index_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: false },
+                        ParamDef { name: idx_name, ty: idx_type, is_self: false, is_varargs: false, is_mut: false },
+                    ],
+                    return_type: output_type,
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![AssociatedTypeDef {
+                    name: output_name,
+                    bounds: vec![],
+                    default: None,
+                }],
+                is_object_safe: false, // Associated type makes it non-object-safe
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // IndexMut<Idx> trait - enables a[i] = v (write)
+        let index_mut_id = {
+            let trait_name = arena.intern_string("IndexMut");
+            let idx_name = arena.intern_string("Idx");
+            let index_mut_method = arena.intern_string("index_mut");
+            let id = TypeId::next();
+
+            let idx_type = Type::TypeVar(TypeVar::unbound(idx_name));
+            let output_type = Type::TypeVar(TypeVar::unbound(output_name));
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![TypeParam {
+                    name: idx_name,
+                    bounds: vec![],
+                    variance: Variance::Contravariant,
+                    default: None,
+                    span,
+                }],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: index_mut_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: true },
+                        ParamDef { name: idx_name, ty: idx_type, is_self: false, is_varargs: false, is_mut: false },
+                    ],
+                    return_type: Type::Reference {
+                        ty: Box::new(output_type),
+                        mutability: Mutability::Mutable,
+                        lifetime: None,
+                        nullability: NullabilityKind::NonNull,
+                    },
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![AssociatedTypeDef {
+                    name: output_name,
+                    bounds: vec![],
+                    default: None,
+                }],
+                is_object_safe: false,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // --- Formatting Traits ---
+
+        // Display trait - enables to_string()
+        let display_id = {
+            let trait_name = arena.intern_string("Display");
+            let to_string_method = arena.intern_string("to_string");
+            let id = TypeId::next();
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: to_string_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: false },
+                    ],
+                    return_type: Type::Primitive(PrimitiveType::String),
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![],
+                is_object_safe: true,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // Debug trait - enables debug_string()
+        let debug_id = {
+            let trait_name = arena.intern_string("Debug");
+            let debug_string_method = arena.intern_string("debug_string");
+            let id = TypeId::next();
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: debug_string_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: false },
+                    ],
+                    return_type: Type::Primitive(PrimitiveType::String),
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![],
+                is_object_safe: true,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // --- Lifecycle Traits ---
+
+        // Clone trait - enables clone()
+        let clone_id = {
+            let trait_name = arena.intern_string("Clone");
+            let clone_method = arena.intern_string("clone");
+            let id = TypeId::next();
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: clone_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: false },
+                    ],
+                    return_type: self_type.clone(),
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![],
+                is_object_safe: false, // Returns Self
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // Drop trait - enables custom cleanup
+        let drop_id = {
+            let trait_name = arena.intern_string("Drop");
+            let drop_method = arena.intern_string("drop");
+            let id = TypeId::next();
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: drop_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: true },
+                    ],
+                    return_type: Type::Primitive(PrimitiveType::Unit),
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![],
+                is_object_safe: true,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // --- Iterator Traits ---
+
+        // Iterator trait - enables next()
+        let iterator_id = {
+            let trait_name = arena.intern_string("Iterator");
+            let next_method = arena.intern_string("next");
+            let id = TypeId::next();
+
+            let item_type = Type::TypeVar(TypeVar::unbound(item_name));
+
+            // Option<Item> for return type
+            let option_name = arena.intern_string("Option");
+            let option_type = Type::Named {
+                id: TypeId::next(), // This should be resolved to actual Option type
+                type_args: vec![item_type.clone()],
+                const_args: vec![],
+                variance: vec![],
+                nullability: NullabilityKind::default(),
+            };
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: next_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type.clone(), is_self: true, is_varargs: false, is_mut: true },
+                    ],
+                    return_type: option_type,
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![AssociatedTypeDef {
+                    name: item_name,
+                    bounds: vec![],
+                    default: None,
+                }],
+                is_object_safe: false,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        // IntoIterator trait - enables for loops
+        let into_iterator_id = {
+            let trait_name = arena.intern_string("IntoIterator");
+            let into_iter_method = arena.intern_string("into_iter");
+            let into_iter_name = arena.intern_string("IntoIter");
+            let id = TypeId::next();
+
+            let item_type = Type::TypeVar(TypeVar::unbound(item_name));
+            let into_iter_type = Type::TypeVar(TypeVar::unbound(into_iter_name));
+
+            let trait_def = TraitDef {
+                id,
+                name: trait_name,
+                type_params: vec![],
+                super_traits: vec![],
+                methods: vec![MethodSig {
+                    name: into_iter_method,
+                    type_params: vec![],
+                    params: vec![
+                        ParamDef { name: self_name, ty: self_type, is_self: true, is_varargs: false, is_mut: false },
+                    ],
+                    return_type: into_iter_type,
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: false,
+                    visibility: Visibility::Public,
+                    span,
+                    is_extension: false,
+                }],
+                associated_types: vec![
+                    AssociatedTypeDef {
+                        name: item_name,
+                        bounds: vec![],
+                        default: None,
+                    },
+                    AssociatedTypeDef {
+                        name: into_iter_name,
+                        bounds: vec![TypeBound::Trait {
+                            name: arena.intern_string("Iterator"),
+                            args: vec![],
+                        }],
+                        default: None,
+                    },
+                ],
+                is_object_safe: false,
+                span,
+            };
+            self.register_trait(trait_def)
+        };
+
+        BuiltinTraitIds {
+            add: add_id,
+            sub: sub_id,
+            mul: mul_id,
+            div: div_id,
+            modulo: modulo_id,
+            neg: neg_id,
+            matmul: matmul_id,
+            eq: eq_id,
+            ord: ord_id,
+            bit_and: bit_and_id,
+            bit_or: bit_or_id,
+            bit_xor: bit_xor_id,
+            not: not_id,
+            index: index_id,
+            index_mut: index_mut_id,
+            display: display_id,
+            debug: debug_id,
+            clone: clone_id,
+            drop: drop_id,
+            iterator: iterator_id,
+            into_iterator: into_iterator_id,
+        }
+    }
+
+    /// Helper to register a binary operator trait with associated Output type
+    fn register_operator_trait(
+        &mut self,
+        arena: &mut crate::arena::AstArena,
+        trait_name_str: &str,
+        rhs_param_name: InternedString,
+        output_name: InternedString,
+        method_name_str: &str,
+        span: &Span,
+    ) -> TypeId {
+        let trait_name = arena.intern_string(trait_name_str);
+        let method_name = arena.intern_string(method_name_str);
+        let self_name = arena.intern_string("Self");
+        let id = TypeId::next();
+
+        let self_type = Type::TypeVar(TypeVar::unbound(self_name));
+        let rhs_type = Type::TypeVar(TypeVar::unbound(rhs_param_name));
+        let output_type = Type::TypeVar(TypeVar::unbound(output_name));
+
+        let trait_def = TraitDef {
+            id,
+            name: trait_name,
+            type_params: vec![TypeParam {
+                name: rhs_param_name,
+                bounds: vec![],
+                variance: Variance::Invariant,
+                default: Some(self_type.clone()),
+                span: *span,
+            }],
+            super_traits: vec![],
+            methods: vec![MethodSig {
+                name: method_name,
+                type_params: vec![],
+                params: vec![
+                    ParamDef { name: self_name, ty: self_type, is_self: true, is_varargs: false, is_mut: false },
+                    ParamDef { name: rhs_param_name, ty: rhs_type, is_self: false, is_varargs: false, is_mut: false },
+                ],
+                return_type: output_type,
+                where_clause: vec![],
+                is_static: false,
+                is_async: false,
+                visibility: Visibility::Public,
+                span: *span,
+                is_extension: false,
+            }],
+            associated_types: vec![AssociatedTypeDef {
+                name: output_name,
+                bounds: vec![],
+                default: None,
+            }],
+            is_object_safe: false, // Associated type makes it non-object-safe
+            span: *span,
+        };
+
+        self.register_trait(trait_def)
+    }
+
+    /// Helper to register a unary operator trait with associated Output type
+    fn register_unary_operator_trait(
+        &mut self,
+        arena: &mut crate::arena::AstArena,
+        trait_name_str: &str,
+        output_name: InternedString,
+        method_name_str: &str,
+        span: &Span,
+    ) -> TypeId {
+        let trait_name = arena.intern_string(trait_name_str);
+        let method_name = arena.intern_string(method_name_str);
+        let self_name = arena.intern_string("Self");
+        let id = TypeId::next();
+
+        let self_type = Type::TypeVar(TypeVar::unbound(self_name));
+        let output_type = Type::TypeVar(TypeVar::unbound(output_name));
+
+        let trait_def = TraitDef {
+            id,
+            name: trait_name,
+            type_params: vec![],
+            super_traits: vec![],
+            methods: vec![MethodSig {
+                name: method_name,
+                type_params: vec![],
+                params: vec![
+                    ParamDef { name: self_name, ty: self_type, is_self: true, is_varargs: false, is_mut: false },
+                ],
+                return_type: output_type,
+                where_clause: vec![],
+                is_static: false,
+                is_async: false,
+                visibility: Visibility::Public,
+                span: *span,
+                is_extension: false,
+            }],
+            associated_types: vec![AssociatedTypeDef {
+                name: output_name,
+                bounds: vec![],
+                default: None,
+            }],
+            is_object_safe: false,
+            span: *span,
+        };
+
+        self.register_trait(trait_def)
+    }
+
+    /// Get the trait ID for a binary operator
+    pub fn get_operator_trait(&self, op: &str) -> Option<TypeId> {
+        let trait_name = match op {
+            "+" => "Add",
+            "-" => "Sub",
+            "*" => "Mul",
+            "/" => "Div",
+            "%" => "Mod",
+            "@" => "MatMul",
+            "==" | "!=" => "Eq",
+            "<" | ">" | "<=" | ">=" => "Ord",
+            "&" => "BitAnd",
+            "|" => "BitOr",
+            "^" => "BitXor",
+            _ => return None,
+        };
+
+        let interned = InternedString::new_global(trait_name);
+        self.trait_name_to_id.get(&interned).copied()
+    }
+
+    /// Get the trait ID for a unary operator
+    pub fn get_unary_operator_trait(&self, op: &str) -> Option<TypeId> {
+        let trait_name = match op {
+            "-" => "Neg",
+            "!" => "Not",
+            _ => return None,
+        };
+
+        let interned = InternedString::new_global(trait_name);
+        self.trait_name_to_id.get(&interned).copied()
+    }
+
+    /// Get the method name for a binary operator
+    pub fn get_operator_method(&self, op: &str) -> Option<&'static str> {
+        match op {
+            "+" => Some("add"),
+            "-" => Some("sub"),
+            "*" => Some("mul"),
+            "/" => Some("div"),
+            "%" => Some("mod"),
+            "@" => Some("matmul"),
+            "==" => Some("eq"),
+            "!=" => Some("ne"),
+            "<" => Some("lt"),
+            ">" => Some("gt"),
+            "<=" => Some("le"),
+            ">=" => Some("ge"),
+            "&" => Some("bitand"),
+            "|" => Some("bitor"),
+            "^" => Some("bitxor"),
+            _ => None,
+        }
+    }
+
+    /// Get the method name for a unary operator
+    pub fn get_unary_operator_method(&self, op: &str) -> Option<&'static str> {
+        match op {
+            "-" => Some("neg"),
+            "!" => Some("not"),
+            _ => None,
+        }
+    }
+}
