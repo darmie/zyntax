@@ -10,7 +10,7 @@ use crate::constraint_solver::{Constraint as SolverConstraint, ConstraintSolver}
 use crate::diagnostics::{codes, DiagnosticCollector};
 use crate::source::Span;
 use crate::type_inference::{InferenceContext, InferenceError};
-use crate::type_registry::{MethodSig, Mutability, ParamInfo, PrimitiveType, Type, TypeBound};
+use crate::type_registry::{CallingConvention, MethodSig, Mutability, ParamInfo, PrimitiveType, Type, TypeBound, Visibility};
 use crate::{typed_ast::*, AsyncKind};
 use std::collections::HashMap;
 use string_interner::Symbol as SymbolTrait;
@@ -650,10 +650,15 @@ impl TypeChecker {
                     self.emit_type_error(err, span);
                 }
             }
+            TypedDeclaration::Impl(impl_block) => {
+                // Type check impl block
+                if let Err(err) = self.check_impl_block(impl_block) {
+                    self.emit_type_error(err, span);
+                }
+            }
             // TODO: Implement other declaration types
             TypedDeclaration::Class(_)
             | TypedDeclaration::Interface(_)
-            | TypedDeclaration::Impl(_)
             | TypedDeclaration::Enum(_)
             | TypedDeclaration::TypeAlias(_)
             | TypedDeclaration::Module(_)
@@ -671,6 +676,43 @@ impl TypeChecker {
                 // their methods are resolved to runtime symbols
             }
         }
+    }
+
+    /// Type check an impl block
+    fn check_impl_block(&mut self, impl_block: &TypedTraitImpl) -> Result<(), TypeError> {
+        // Type check each method in the impl block
+        for method in &impl_block.methods {
+            // Convert method params to function params
+            let params: Vec<TypedParameter> = method.params.iter().map(|p| {
+                TypedParameter {
+                    name: p.name,
+                    ty: p.ty.clone(),
+                    mutability: p.mutability,
+                    kind: p.kind.clone(),
+                    default_value: p.default_value.clone(),
+                    attributes: p.attributes.clone(),
+                    span: p.span,
+                }
+            }).collect();
+
+            // Create a function-like structure from the method to reuse function checking
+            let func = TypedFunction {
+                name: method.name,
+                type_params: vec![],
+                params,
+                return_type: method.return_type.clone(),
+                body: method.body.clone(),
+                visibility: Visibility::Public,
+                is_async: method.is_async,
+                is_external: false,
+                calling_convention: CallingConvention::Default,
+                link_name: None,
+            };
+
+            self.check_function(&func)?;
+        }
+
+        Ok(())
     }
 
     /// Type check a function
