@@ -793,8 +793,8 @@ impl ZyntaxRuntime {
         grammar: &crate::grammar::LanguageGrammar,
         source: &str,
     ) -> RuntimeResult<()> {
-        // Parse source to TypedAST
-        let typed_program = grammar.parse(source)
+        // Parse source to TypedAST with plugin signatures for proper extern declarations
+        let typed_program = grammar.parse_with_signatures(source, "source.zynml", &self.plugin_signatures)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
         // Lower to HIR
@@ -888,9 +888,10 @@ impl ZyntaxRuntime {
 
                 // Find a grammar to parse the imported module
                 // Try each registered grammar until one succeeds
+                // Pass plugin signatures to ensure proper extern function declarations
                 let mut parsed_program = None;
                 for (_lang_name, grammar) in &self.grammars {
-                    match grammar.parse(&source) {
+                    match grammar.parse_with_signatures(&source, &module_name, &self.plugin_signatures) {
                         Ok(imported_program) => {
                             parsed_program = Some(imported_program);
                             break;
