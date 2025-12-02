@@ -448,6 +448,7 @@ impl LanguageGrammar {
             };
 
             // Create extern function declaration
+            eprintln!("[DEBUG inject_builtin_externs] Creating extern func {} with {} params", target_symbol, params.len());
             let extern_func = TypedFunction {
                 name: InternedString::new_global(target_symbol),
                 type_params: vec![],

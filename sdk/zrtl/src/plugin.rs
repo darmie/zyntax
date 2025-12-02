@@ -267,11 +267,15 @@ macro_rules! zrtl_symbol_sig {
     // Function with any params that returns opaque pointer
     // Match: (...) -> opaque where ... is anything
     ($name:expr, $func:ident, ($($param:tt)*) -> opaque) => {{
+        // Count and build param array
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
         static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
-            param_count: 0,  // We don't parse param types yet, just mark return as opaque
+            param_count: PARAM_COUNT,
             flags: $crate::ZrtlSigFlags::NONE,
             return_type: $crate::TypeTag::DYNAMIC_BOX,  // Mark as opaque
-            params: [$crate::TypeTag::VOID; $crate::MAX_PARAMS],
+            params: PARAM_ARRAY,
         };
         $crate::ZrtlSymbol::with_sig(
             concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
@@ -317,6 +321,95 @@ macro_rules! __zrtl_symbol_entry {
 macro_rules! __count_symbols {
     () => { 0 };
     (($($tt:tt)*) $($rest:tt)*) => { 1 + $crate::__count_symbols!($($rest)*) };
+}
+
+/// Internal helper to count parameters in a signature
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __count_params {
+    () => { 0 };
+    (f32) => { 1 };
+    (f64) => { 1 };
+    (i32) => { 1 };
+    (i64) => { 1 };
+    (u32) => { 1 };
+    (u64) => { 1 };
+    (bool) => { 1 };
+    (f32, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+    (f64, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+    (i32, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+    (i64, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+    (u32, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+    (u64, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+    (bool, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+}
+
+/// Internal helper to build parameter type array
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __build_param_array {
+    () => { [$crate::TypeTag::VOID; $crate::MAX_PARAMS] };
+    ($($param:tt)*) => {{
+        let mut params = [$crate::TypeTag::VOID; $crate::MAX_PARAMS];
+        $crate::__fill_param_array!(params, 0, $($param)*);
+        params
+    }};
+}
+
+/// Internal helper to fill parameter array
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __fill_param_array {
+    ($array:ident, $idx:expr,) => {};
+    ($array:ident, $idx:expr, f32) => {
+        $array[$idx] = $crate::TypeTag::F32;
+    };
+    ($array:ident, $idx:expr, f64) => {
+        $array[$idx] = $crate::TypeTag::F64;
+    };
+    ($array:ident, $idx:expr, i32) => {
+        $array[$idx] = $crate::TypeTag::I32;
+    };
+    ($array:ident, $idx:expr, i64) => {
+        $array[$idx] = $crate::TypeTag::I64;
+    };
+    ($array:ident, $idx:expr, u32) => {
+        $array[$idx] = $crate::TypeTag::U32;
+    };
+    ($array:ident, $idx:expr, u64) => {
+        $array[$idx] = $crate::TypeTag::U64;
+    };
+    ($array:ident, $idx:expr, bool) => {
+        $array[$idx] = $crate::TypeTag::BOOL;
+    };
+    ($array:ident, $idx:expr, f32, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::F32;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
+    ($array:ident, $idx:expr, f64, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::F64;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
+    ($array:ident, $idx:expr, i32, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::I32;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
+    ($array:ident, $idx:expr, i64, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::I64;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
+    ($array:ident, $idx:expr, u32, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::U32;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
+    ($array:ident, $idx:expr, u64, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::U64;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
+    ($array:ident, $idx:expr, bool, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::BOOL;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
 }
 
 /// Macro to define a complete ZRTL plugin
