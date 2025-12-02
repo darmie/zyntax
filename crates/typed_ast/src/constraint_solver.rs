@@ -248,7 +248,8 @@ impl Substitution {
             | Type::Any
             | Type::Error
             | Type::HigherKinded { .. }
-            | Type::Extern { .. } => ty.clone(),
+            | Type::Extern { .. }
+            | Type::Unresolved(_) => ty.clone(),
             Type::Nullable(inner_ty) => {
                 // For nullable types, substitute the inner type and maintain nullability
                 let substituted_inner = self.apply(inner_ty);
@@ -2644,6 +2645,10 @@ impl ConstraintSolver {
                 // Format extern/opaque type by name
                 name.resolve_global().unwrap_or_else(|| format!("extern_{}", name.symbol().to_usize()))
             }
+            Type::Unresolved(name) => {
+                // Format unresolved type by name
+                name.resolve_global().unwrap_or_else(|| format!("unresolved_{}", name.symbol().to_usize()))
+            }
         }
     }
 
@@ -3400,7 +3405,8 @@ impl ConstraintSolver {
             | Type::Error
             | Type::SelfType
             | Type::HigherKinded { .. }
-            | Type::Extern { .. } => ty.clone(),
+            | Type::Extern { .. }
+            | Type::Unresolved(_) => ty.clone(),
             Type::Nullable(inner_ty) => {
                 // For nullable types, substitute the inner type and maintain nullability
                 let substituted_inner = self.resolve_associated_types(inner_ty, receiver_type);
@@ -3458,7 +3464,7 @@ impl ConstraintSolver {
                 associated_types,
                 super_traits,
             } => todo!(),
-            Type::Extern { .. } => ty.clone(),
+            Type::Extern { .. } | Type::Unresolved(_) => ty.clone(),
         }
     }
 
@@ -3571,7 +3577,8 @@ impl ConstraintSolver {
             | Type::Error
             | Type::Associated { .. }
             | Type::HigherKinded { .. }
-            | Type::Extern { .. } => ty.clone(),
+            | Type::Extern { .. }
+            | Type::Unresolved(_) => ty.clone(),
             Type::Nullable(inner_ty) => {
                 // For nullable types, substitute the inner type and maintain nullability
                 let substituted_inner = self.substitute_self_type(inner_ty, receiver_type);

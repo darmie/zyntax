@@ -820,6 +820,11 @@ impl ZyntaxRuntime {
         // to ensure all opaque types are registered (needs &mut)
         self.process_extern_declarations_mut(&program, &mut type_registry)?;
 
+        // IMPORTANT: Resolve all Type::Unresolved in the TypedAST before lowering
+        // This mutates the program to replace Unresolved types with actual types from TypeRegistry
+        // The compiler's type checker and SSA builder need resolved types
+        self.resolve_unresolved_types(&mut program, &type_registry);
+
         // Wrap in Arc for sharing
         let type_registry = std::sync::Arc::new(type_registry);
 
@@ -919,6 +924,187 @@ impl ZyntaxRuntime {
         Ok(())
     }
 
+    /// Resolve all Type::Unresolved in the TypedProgram
+    ///
+    /// This walks the TypedAST and replaces Type::Unresolved(name) with the actual
+    /// type from TypeRegistry (e.g., Type::Extern for opaque types from imports).
+    /// This must be called AFTER process_imports_for_traits and process_extern_declarations_mut.
+    fn resolve_unresolved_types(
+        &self,
+        program: &mut zyntax_typed_ast::TypedProgram,
+        type_registry: &zyntax_typed_ast::TypeRegistry,
+    ) {
+        use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedNode};
+        use zyntax_typed_ast::type_registry::Type;
+
+        log::debug!("Resolving unresolved types in program with {} declarations", program.declarations.len());
+
+        // Walk all declarations and resolve types
+        for decl in &mut program.declarations {
+            Self::resolve_in_declaration(&mut decl.node, type_registry);
+            Self::resolve_in_type(&mut decl.ty, type_registry);
+        }
+    }
+
+    fn resolve_in_declaration(
+        decl: &mut zyntax_typed_ast::typed_ast::TypedDeclaration,
+        type_registry: &zyntax_typed_ast::TypeRegistry,
+    ) {
+        use zyntax_typed_ast::typed_ast::TypedDeclaration;
+
+        match decl {
+            TypedDeclaration::Function(func) => {
+                // Resolve parameter types
+                for param in &mut func.params {
+                    Self::resolve_in_type(&mut param.ty, type_registry);
+                }
+                // Resolve return type
+                Self::resolve_in_type(&mut func.return_type, type_registry);
+                // Resolve body expression types
+                if let Some(body) = &mut func.body {
+                    Self::resolve_in_block(body, type_registry);
+                }
+            }
+            TypedDeclaration::Impl(impl_block) => {
+                // Resolve trait type arguments
+                for trait_ty in &mut impl_block.trait_type_args {
+                    Self::resolve_in_type(trait_ty, type_registry);
+                }
+                // Resolve target type
+                Self::resolve_in_type(&mut impl_block.for_type, type_registry);
+                // Resolve method types
+                for method in &mut impl_block.methods {
+                    for param in &mut method.params {
+                        Self::resolve_in_type(&mut param.ty, type_registry);
+                    }
+                    Self::resolve_in_type(&mut method.return_type, type_registry);
+                    if let Some(body) = &mut method.body {
+                        Self::resolve_in_block(body, type_registry);
+                    }
+                }
+            }
+            _ => {
+                // Other declarations don't have types to resolve
+            }
+        }
+    }
+
+    fn resolve_in_block(
+        block: &mut zyntax_typed_ast::typed_ast::TypedBlock,
+        type_registry: &zyntax_typed_ast::TypeRegistry,
+    ) {
+        use zyntax_typed_ast::typed_ast::TypedStatement;
+
+        for stmt in &mut block.statements {
+            Self::resolve_in_stmt(stmt, type_registry);
+        }
+    }
+
+    fn resolve_in_stmt(
+        stmt: &mut zyntax_typed_ast::typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedStatement>,
+        type_registry: &zyntax_typed_ast::TypeRegistry,
+    ) {
+        use zyntax_typed_ast::typed_ast::TypedStatement;
+
+        // Resolve the statement's type annotation
+        Self::resolve_in_type(&mut stmt.ty, type_registry);
+
+        // Resolve types in the statement node
+        match &mut stmt.node {
+            TypedStatement::Expression(expr) => {
+                Self::resolve_in_expr(expr, type_registry);
+            }
+            TypedStatement::Let(let_stmt) => {
+                Self::resolve_in_type(&mut let_stmt.ty, type_registry);
+                if let Some(init) = &mut let_stmt.initializer {
+                    Self::resolve_in_expr(init, type_registry);
+                }
+            }
+            _ => {
+                // Other statement types
+            }
+        }
+    }
+
+    fn resolve_in_expr(
+        expr: &mut zyntax_typed_ast::typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        type_registry: &zyntax_typed_ast::TypeRegistry,
+    ) {
+        use zyntax_typed_ast::typed_ast::TypedExpression;
+
+        // Resolve the expression's type annotation
+        Self::resolve_in_type(&mut expr.ty, type_registry);
+
+        // Recursively resolve types in sub-expressions
+        match &mut expr.node {
+            TypedExpression::Binary(bin) => {
+                Self::resolve_in_expr(&mut bin.left, type_registry);
+                Self::resolve_in_expr(&mut bin.right, type_registry);
+            }
+            TypedExpression::Unary(un) => {
+                Self::resolve_in_expr(&mut un.operand, type_registry);
+            }
+            TypedExpression::Call(call) => {
+                Self::resolve_in_expr(&mut call.callee, type_registry);
+                for arg in &mut call.positional_args {
+                    Self::resolve_in_expr(arg, type_registry);
+                }
+                for named_arg in &mut call.named_args {
+                    Self::resolve_in_expr(&mut named_arg.value, type_registry);
+                }
+            }
+            TypedExpression::Block(block) => {
+                Self::resolve_in_block(block, type_registry);
+            }
+            _ => {
+                // Other expression types don't have nested expressions that need resolution
+                // TODO: Handle other expression types as needed
+            }
+        }
+    }
+
+    fn resolve_in_type(
+        ty: &mut zyntax_typed_ast::type_registry::Type,
+        type_registry: &zyntax_typed_ast::TypeRegistry,
+    ) {
+        use zyntax_typed_ast::type_registry::Type;
+
+        match ty {
+            Type::Unresolved(name) => {
+                // Look up in TypeRegistry aliases
+                if let Some(resolved) = type_registry.resolve_alias(*name) {
+                    log::debug!("Resolved type '{}' from Unresolved to {:?}",
+                        name.resolve_global().unwrap_or_default(), resolved);
+                    *ty = resolved.clone();
+                } else {
+                    log::warn!("Could not resolve type '{}'",
+                        name.resolve_global().unwrap_or_default());
+                }
+            }
+            // Recursively resolve nested types
+            Type::Reference { ty: inner, .. } => {
+                Self::resolve_in_type(inner, type_registry);
+            }
+            Type::Array { element_type, .. } => {
+                Self::resolve_in_type(element_type, type_registry);
+            }
+            Type::Function { params, return_type, .. } => {
+                for param in params {
+                    Self::resolve_in_type(&mut param.ty, type_registry);
+                }
+                Self::resolve_in_type(return_type, type_registry);
+            }
+            Type::Tuple(types) => {
+                for t in types {
+                    Self::resolve_in_type(t, type_registry);
+                }
+            }
+            _ => {
+                // Other types don't need resolution
+            }
+        }
+    }
+
     /// Process extern declarations to register opaque types in the TypeRegistry
     ///
     /// This scans the TypedProgram for Extern::Struct declarations (created by @opaque)
@@ -929,7 +1115,8 @@ impl ZyntaxRuntime {
         type_registry: &mut zyntax_typed_ast::TypeRegistry,
     ) -> RuntimeResult<()> {
         use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedExtern};
-        use zyntax_typed_ast::type_registry::{Type, ExternLayout};
+        use zyntax_typed_ast::type_registry::{Type, TypeDefinition, TypeKind, TypeMetadata};
+        use zyntax_typed_ast::TypeId;
 
         eprintln!("[DEBUG] process_extern_declarations_mut called with {} declarations", program.declarations.len());
 
@@ -941,23 +1128,40 @@ impl ZyntaxRuntime {
                 if let TypedExtern::Struct(extern_struct) = extern_decl {
                     eprintln!("[DEBUG] Found Extern::Struct!");
 
-                    // Register the extern type in the type registry
-                    // The type name (e.g., "Tensor") should resolve to Type::Extern with runtime_prefix (e.g., "$Tensor")
+                    // Register the extern type as a proper type in the type registry
+                    // This creates a Named type with a real TypeId
                     eprintln!("[DEBUG] Registering extern struct: name='{}', runtime_prefix='{}'",
                         extern_struct.name.resolve_global().unwrap_or_default(),
                         extern_struct.runtime_prefix.resolve_global().unwrap_or_default()
                     );
 
-                    // Create a Type::Extern for this opaque type
-                    let extern_type = Type::Extern {
-                        name: extern_struct.runtime_prefix,
-                        layout: None,  // Layout determined by ZRTL plugin at runtime
+                    // Create TypeDefinition for the extern/opaque type
+                    let type_id = TypeId::next();
+                    let type_def = TypeDefinition {
+                        id: type_id,
+                        name: extern_struct.name,
+                        kind: TypeKind::Atomic,  // Extern types are atomic/opaque
+                        type_params: vec![],
+                        constraints: vec![],
+                        fields: vec![],
+                        methods: vec![],
+                        constructors: vec![],
+                        metadata: TypeMetadata::default(),
+                        span: decl.span,
                     };
 
-                    // Register the type by name in the type registry using register_alias
-                    // This allows type resolution to find "Tensor" -> Type::Extern { name: "$Tensor" }
-                    type_registry.register_alias(extern_struct.name, extern_type.clone());
-                    eprintln!("[DEBUG] Registered extern type successfully");
+                    // Register the type definition
+                    type_registry.register_type(type_def);
+
+                    // ALSO register an alias mapping the name to Type::Extern
+                    // This allows the resolution pass to find the runtime name
+                    let extern_type = Type::Extern {
+                        name: extern_struct.runtime_prefix,
+                        layout: None,
+                    };
+                    type_registry.register_alias(extern_struct.name, extern_type);
+
+                    eprintln!("[DEBUG] Registered extern type with TypeId {:?}", type_id);
                 } else {
                     eprintln!("[DEBUG] Extern but not Struct: {:?}", std::mem::discriminant(extern_decl));
                 }

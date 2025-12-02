@@ -1113,6 +1113,9 @@ pub struct TypedAstBuilder {
     variable_types: HashMap<String, Type>,
     /// Enum type name to variant names (in order, for discriminant calculation)
     enum_types: HashMap<String, Vec<String>>,
+    /// Type declarations defined in the current file (name -> Type)
+    /// Tracks types from @opaque, struct, enum declarations so type references can be resolved
+    declared_types: HashMap<String, Type>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
     /// Current span being processed (start, end)
@@ -1145,6 +1148,7 @@ impl TypedAstBuilder {
             types: HashMap::new(),
             variable_types: HashMap::new(),
             enum_types: HashMap::new(),
+            declared_types: HashMap::new(),
             program_decls: Vec::new(),
             current_span: (0, 0),
         }
@@ -1606,6 +1610,14 @@ impl AstHostFunctions for TypedAstBuilder {
         // This declares a type like: extern struct Tensor (backed by $Tensor)
         let name_interned = self.inner.intern(name);
         let runtime_prefix = self.inner.intern(external_name);
+
+        // Register this extern type so type references can be resolved
+        let extern_type = Type::Extern {
+            name: runtime_prefix,
+            layout: None,
+        };
+        self.declared_types.insert(name.to_string(), extern_type);
+        eprintln!("[DEBUG create_opaque_type] Registered extern type '{}' -> Extern({})", name, external_name);
 
         let extern_struct = TypedExternStruct {
             name: name_interned,
@@ -2090,15 +2102,10 @@ impl AstHostFunctions for TypedAstBuilder {
             "bool" => Type::Primitive(PrimitiveType::Bool),
             "void" | "unit" => Type::Primitive(PrimitiveType::Unit),
             _ => {
-                // Unknown type - use Named with placeholder for compiler resolution
-                eprintln!("[DEBUG create_primitive_type] Unknown type '{}', creating Named with placeholder TypeId(0)", name);
-                Type::Named {
-                    id: zyntax_typed_ast::TypeId::new(0),
-                    type_args: vec![],
-                    const_args: vec![],
-                    variance: vec![],
-                    nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
-                }
+                // Unknown type - create unresolved for compiler resolution
+                eprintln!("[DEBUG create_primitive_type] Unknown type '{}', creating Unresolved", name);
+                let name_interned = self.inner.intern(name);
+                Type::Unresolved(name_interned)
             }
         };
         self.types.insert(handle, ty);
@@ -2124,16 +2131,16 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_named_type(&mut self, name: &str) -> NodeHandle {
         let handle = self.alloc_handle();
 
-        // Create a named type with placeholder ID (0)
-        // The compiler's type resolution phase will resolve this to the actual TypeId
-        // using the TypeRegistry
-        eprintln!("[DEBUG create_named_type] Creating named type '{}' with placeholder TypeId(0)", name);
-        let ty = Type::Named {
-            id: zyntax_typed_ast::TypeId::new(0),
-            type_args: vec![],
-            const_args: vec![],
-            variance: vec![],
-            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+        // Check if this type was declared in the current file (e.g., via @opaque, struct, enum)
+        let ty = if let Some(declared_ty) = self.declared_types.get(name) {
+            eprintln!("[DEBUG create_named_type] Found declared type '{}': {:?}", name, declared_ty);
+            declared_ty.clone()
+        } else {
+            // Type not found in current file - create unresolved for compiler resolution
+            // This handles types from imports or forward references
+            eprintln!("[DEBUG create_named_type] Creating unresolved type '{}'", name);
+            let name_interned = self.inner.intern(name);
+            Type::Unresolved(name_interned)
         };
 
         self.types.insert(handle, ty);

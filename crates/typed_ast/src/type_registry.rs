@@ -436,6 +436,11 @@ pub enum Type {
         name: InternedString,
         layout: Option<ExternLayout>,
     },
+
+    /// Unresolved type name (placeholder from parser, to be resolved by compiler)
+    /// The compiler's type resolution pass will look this up in TypeRegistry aliases
+    /// and replace it with the actual type (e.g., Type::Extern)
+    Unresolved(InternedString),
 }
 
 /// Layout information for extern types (optional)

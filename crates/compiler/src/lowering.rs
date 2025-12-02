@@ -966,6 +966,19 @@ impl LoweringContext {
                 HirType::Opaque(*name)
             }
 
+            Type::Unresolved(name) => {
+                // Look up the type in TypeRegistry aliases
+                eprintln!("[DEBUG convert_type] Resolving unresolved type '{}'", name.resolve_global().unwrap_or_default());
+                if let Some(resolved_type) = self.type_registry.resolve_alias(*name) {
+                    eprintln!("[DEBUG convert_type] Found alias for '{}': {:?}", name.resolve_global().unwrap_or_default(), resolved_type);
+                    // Recursively convert the resolved type
+                    self.convert_type(resolved_type)
+                } else {
+                    eprintln!("[WARN] Could not resolve type '{}', defaulting to I64", name.resolve_global().unwrap_or_default());
+                    HirType::I64 // Fallback
+                }
+            }
+
             Type::Named { id, .. } => {
                 // Look up type definition in registry
                 if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
