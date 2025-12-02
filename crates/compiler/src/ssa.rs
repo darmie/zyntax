@@ -1380,9 +1380,12 @@ impl SsaBuilder {
 
                 // Check if this is a non-primitive type that might use operator overloading
                 // For opaque/named types, try to dispatch to trait method
+                eprintln!("[DEBUG SSA] Binary op {:?}, left.ty={:?}, right.ty={:?}", op, left.ty, right.ty);
                 if let Some(trait_call) = self.try_operator_trait_dispatch(block_id, op, left, right, &expr.ty)? {
+                    eprintln!("[DEBUG SSA] Using trait dispatch for binary op");
                     return Ok(trait_call);
                 }
+                eprintln!("[DEBUG SSA] No trait dispatch, using native binary op");
 
                 // Regular binary operations for primitive types
                 let left_val = self.translate_expression(block_id, left)?;
@@ -3084,7 +3087,11 @@ impl SsaBuilder {
     /// Check if a type should use trait dispatch for operators
     fn is_trait_dispatchable_type(&self, ty: &Type) -> bool {
         match ty {
-            // Extern types - ZRTL-backed opaque types, always use trait dispatch
+            // Primitive types - use built-in operations, no trait dispatch
+            Type::Primitive(_) => false,
+
+            // All other types (Extern, Named, Unknown, etc.) should try trait dispatch
+            // This allows any type with an impl block to use operator overloading
             Type::Extern { name, .. } => {
                 let name_str = name.resolve_global()
                     .unwrap_or_else(|| {
@@ -3096,9 +3103,8 @@ impl SsaBuilder {
                 log::debug!("[trait_dispatch] Type::Extern name='{}' -> dispatchable", name_str);
                 true
             }
-            // Named types - check if it's a ZRTL-backed type (name starts with $)
             Type::Named { id, .. } => {
-                // Check the type name from registry
+                // Any named type can have trait impls
                 if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
                     let name = type_def.name.resolve_global()
                         .unwrap_or_else(|| {
@@ -3107,17 +3113,23 @@ impl SsaBuilder {
                                 .map(|s| s.to_string())
                                 .unwrap_or_default()
                         });
-                    // ZRTL opaque types start with $
-                    return name.starts_with('$');
+                    log::debug!("[trait_dispatch] Type::Named name='{}' -> dispatchable", name);
+                    return true;
                 }
                 // Also check HIR conversion
                 let hir_ty = self.convert_type(ty);
                 matches!(hir_ty, HirType::Opaque(_))
             }
-            // Primitive types - use built-in operations
-            Type::Primitive(_) => false,
-            // Other types - might need trait dispatch
-            _ => false,
+            // Unknown types - try trait dispatch (will use the type name)
+            Type::Unknown => {
+                log::debug!("[trait_dispatch] Type::Unknown -> try trait dispatch");
+                true
+            }
+            // Other types - try trait dispatch
+            _ => {
+                log::debug!("[trait_dispatch] Other type -> try trait dispatch");
+                true
+            }
         }
     }
 
@@ -3146,6 +3158,7 @@ impl SsaBuilder {
                                 .map(|s| s.to_string())
                                 .unwrap_or_default()
                         });
+                    log::debug!("[trait_dispatch] Type::Named prefix: '{}'", name);
                     Some(name)
                 } else {
                     // If not in registry, try to get from HIR type
@@ -3158,13 +3171,37 @@ impl SsaBuilder {
                                     .map(|s| s.to_string())
                                     .unwrap_or_default()
                             });
+                        log::debug!("[trait_dispatch] Type::Named (opaque) prefix: '{}'", name_str);
                         Some(name_str)
                     } else {
+                        log::debug!("[trait_dispatch] Type::Named (no registry) -> None");
                         None
                     }
                 }
             }
-            _ => None,
+            // Unknown types - use the HIR representation
+            Type::Unknown => {
+                // Convert to HIR and try to extract name
+                let hir_ty = self.convert_type(ty);
+                if let HirType::Opaque(name) = hir_ty {
+                    let name_str = name.resolve_global()
+                        .unwrap_or_else(|| {
+                            let arena = self.arena.lock().unwrap();
+                            arena.resolve_string(name)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        });
+                    log::debug!("[trait_dispatch] Type::Unknown converted to opaque prefix: '{}'", name_str);
+                    Some(name_str)
+                } else {
+                    log::debug!("[trait_dispatch] Type::Unknown (not opaque) -> None");
+                    None
+                }
+            }
+            _ => {
+                log::debug!("[trait_dispatch] Other type -> None");
+                None
+            }
         }
     }
 
