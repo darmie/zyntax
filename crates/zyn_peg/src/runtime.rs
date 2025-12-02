@@ -1113,8 +1113,6 @@ pub struct TypedAstBuilder {
     variable_types: HashMap<String, Type>,
     /// Enum type name to variant names (in order, for discriminant calculation)
     enum_types: HashMap<String, Vec<String>>,
-    /// Opaque/extern type name to external name mapping (e.g., "Tensor" -> "$Tensor")
-    opaque_types: HashMap<String, InternedString>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
     /// Current span being processed (start, end)
@@ -1147,7 +1145,6 @@ impl TypedAstBuilder {
             types: HashMap::new(),
             variable_types: HashMap::new(),
             enum_types: HashMap::new(),
-            opaque_types: HashMap::new(),
             program_decls: Vec::new(),
             current_span: (0, 0),
         }
@@ -1610,10 +1607,6 @@ impl AstHostFunctions for TypedAstBuilder {
         let name_interned = self.inner.intern(name);
         let runtime_prefix = self.inner.intern(external_name);
 
-        // Register the opaque type mapping for later type resolution
-        self.opaque_types.insert(name.to_string(), runtime_prefix);
-        eprintln!("[DEBUG create_opaque_type] Registered opaque type: '{}' -> '{}'", name, external_name);
-
         let extern_struct = TypedExternStruct {
             name: name_interned,
             runtime_prefix,
@@ -1720,17 +1713,10 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Look up the variable's actual type from our tracking map
-        // If not found, check opaque types, then default to I32
-        let var_type = if let Some(ty) = self.variable_types.get(name) {
-            ty.clone()
-        } else if let Some(runtime_prefix) = self.opaque_types.get(name) {
-            Type::Extern {
-                name: *runtime_prefix,
-                layout: None,
-            }
-        } else {
-            Type::Primitive(PrimitiveType::I32)
-        };
+        // If not found, default to I32
+        let var_type = self.variable_types.get(name)
+            .cloned()
+            .unwrap_or(Type::Primitive(PrimitiveType::I32));
 
         eprintln!("[DEBUG create_identifier] Variable '{}' has type {:?}", name, var_type);
         let expr = self.inner.variable(name, var_type, span);
@@ -2104,16 +2090,14 @@ impl AstHostFunctions for TypedAstBuilder {
             "bool" => Type::Primitive(PrimitiveType::Bool),
             "void" | "unit" => Type::Primitive(PrimitiveType::Unit),
             _ => {
-                // Check if this is a registered opaque/extern type
-                if let Some(runtime_prefix) = self.opaque_types.get(name) {
-                    eprintln!("[DEBUG create_primitive_type] Found opaque type '{}' -> '{}'", name, runtime_prefix.resolve_global().unwrap_or_default());
-                    Type::Extern {
-                        name: *runtime_prefix,
-                        layout: None,
-                    }
-                } else {
-                    eprintln!("[DEBUG create_primitive_type] Type '{}' not found in opaque types, defaulting to I32", name);
-                    Type::Primitive(PrimitiveType::I32) // Default to i32
+                // Unknown type - use Named with placeholder for compiler resolution
+                eprintln!("[DEBUG create_primitive_type] Unknown type '{}', creating Named with placeholder TypeId(0)", name);
+                Type::Named {
+                    id: zyntax_typed_ast::TypeId::new(0),
+                    type_args: vec![],
+                    const_args: vec![],
+                    variance: vec![],
+                    nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
                 }
             }
         };
@@ -2140,24 +2124,16 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_named_type(&mut self, name: &str) -> NodeHandle {
         let handle = self.alloc_handle();
 
-        // Check if this is a registered opaque/extern type
-        let ty = if let Some(runtime_prefix) = self.opaque_types.get(name) {
-            eprintln!("[DEBUG create_named_type] Found opaque type '{}' -> '{}'", name, runtime_prefix.resolve_global().unwrap_or_default());
-            Type::Extern {
-                name: *runtime_prefix,
-                layout: None,
-            }
-        } else {
-            eprintln!("[DEBUG create_named_type] Type '{}' not found in opaque types, using Named with placeholder ID", name);
-            // Create a named type with placeholder ID (0)
-            // Type inference will resolve this to the actual TypeId
-            Type::Named {
-                id: zyntax_typed_ast::TypeId::new(0),
-                type_args: vec![],
-                const_args: vec![],
-                variance: vec![],
-                nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
-            }
+        // Create a named type with placeholder ID (0)
+        // The compiler's type resolution phase will resolve this to the actual TypeId
+        // using the TypeRegistry
+        eprintln!("[DEBUG create_named_type] Creating named type '{}' with placeholder TypeId(0)", name);
+        let ty = Type::Named {
+            id: zyntax_typed_ast::TypeId::new(0),
+            type_args: vec![],
+            const_args: vec![],
+            variance: vec![],
+            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
         };
 
         self.types.insert(handle, ty);

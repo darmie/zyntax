@@ -13,7 +13,6 @@ use crate::type_inference::{InferenceContext, InferenceError};
 use crate::type_registry::{CallingConvention, MethodSig, Mutability, ParamInfo, PrimitiveType, Type, TypeBound, Visibility};
 use crate::{typed_ast::*, AsyncKind};
 use std::collections::HashMap;
-use string_interner::Symbol as SymbolTrait;
 
 /// Type checking context
 pub struct TypeChecker {
