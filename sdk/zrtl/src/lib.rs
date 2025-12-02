@@ -109,7 +109,10 @@ pub use dynamic_box::{DynamicBox, DropFn};
 pub use generic_box::{GenericBox, GenericTypeArgs, MAX_TYPE_ARGS};
 pub use string::{OwnedString, StringPtr, StringConstPtr, StringView};
 pub use array::{OwnedArray, ArrayPtr, ArrayConstPtr, ArrayIterator};
-pub use plugin::{ZrtlSymbol, ZrtlInfo, ZrtlSymbolEntry, ZrtlTyped, TypeInfo, ZRTL_VERSION};
+pub use plugin::{
+    ZrtlSymbol, ZrtlInfo, ZrtlSymbolEntry, ZrtlTyped, TypeInfo, ZRTL_VERSION,
+    ZrtlSymbolSig, ZrtlSigFlags, MAX_PARAMS,
+};
 
 // Re-export async types
 pub use async_support::{

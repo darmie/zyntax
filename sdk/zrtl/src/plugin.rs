@@ -3,9 +3,101 @@
 //! Types and macros for creating ZRTL plugins that can be loaded by the Zyntax runtime.
 
 use std::ffi::c_char;
+use crate::TypeTag;
 
 /// Current ZRTL format version
 pub const ZRTL_VERSION: u32 = 1;
+
+/// Maximum number of parameters in a function signature
+pub const MAX_PARAMS: usize = 16;
+
+/// Function signature for ZRTL symbols (C ABI compatible)
+///
+/// Describes parameter and return types for a plugin function.
+/// The compiler uses this to determine whether to auto-box arguments.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ZrtlSymbolSig {
+    /// Number of parameters
+    pub param_count: u8,
+    /// Flags for the function signature
+    pub flags: ZrtlSigFlags,
+    /// Return type (VOID if no return)
+    pub return_type: TypeTag,
+    /// Parameter types (up to MAX_PARAMS)
+    pub params: [TypeTag; MAX_PARAMS],
+}
+
+impl ZrtlSymbolSig {
+    /// Create an empty signature (no params, void return)
+    pub const fn empty() -> Self {
+        Self {
+            param_count: 0,
+            flags: ZrtlSigFlags::NONE,
+            return_type: TypeTag::VOID,
+            params: [TypeTag::VOID; MAX_PARAMS],
+        }
+    }
+
+    /// Create a signature with the given return type and parameters
+    pub const fn new(return_type: TypeTag, params: &[TypeTag]) -> Self {
+        let mut sig = Self::empty();
+        sig.return_type = return_type;
+        sig.param_count = params.len() as u8;
+        let mut i = 0;
+        while i < params.len() && i < MAX_PARAMS {
+            sig.params[i] = params[i];
+            i += 1;
+        }
+        sig
+    }
+
+    /// Check if parameter at index expects DynamicBox
+    pub fn param_is_dynamic(&self, index: usize) -> bool {
+        if index >= self.param_count as usize {
+            return false;
+        }
+        self.params[index].is_category(crate::TypeCategory::Opaque)
+            || self.flags.contains(ZrtlSigFlags::ALL_DYNAMIC)
+    }
+
+    /// Check if return type is DynamicBox
+    pub fn returns_dynamic(&self) -> bool {
+        self.return_type.is_category(crate::TypeCategory::Opaque)
+    }
+}
+
+/// Flags for function signatures
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZrtlSigFlags(pub u8);
+
+impl ZrtlSigFlags {
+    /// No flags
+    pub const NONE: Self = Self(0);
+    /// All parameters should be passed as DynamicBox
+    pub const ALL_DYNAMIC: Self = Self(1 << 0);
+    /// Function is variadic
+    pub const VARIADIC: Self = Self(1 << 1);
+    /// Function may have side effects
+    pub const EFFECTFUL: Self = Self(1 << 2);
+
+    /// Check if flag is set
+    pub const fn contains(self, flag: Self) -> bool {
+        (self.0 & flag.0) != 0
+    }
+
+    /// Combine flags
+    pub const fn with(self, flag: Self) -> Self {
+        Self(self.0 | flag.0)
+    }
+}
+
+/// Special TypeTag constant for DynamicBox parameter type
+impl TypeTag {
+    /// TypeTag indicating a DynamicBox parameter
+    pub const DYNAMIC_BOX: Self = Self::new(crate::TypeCategory::Opaque, 0xFFFF, crate::TypeFlags::NONE);
+}
 
 /// Symbol entry in the ZRTL symbol table (C ABI compatible)
 ///
@@ -17,6 +109,8 @@ pub struct ZrtlSymbol {
     pub name: *const c_char,
     /// Function pointer
     pub ptr: *const u8,
+    /// Optional pointer to function signature (null if not provided)
+    pub sig: *const ZrtlSymbolSig,
 }
 
 impl ZrtlSymbol {
@@ -25,12 +119,32 @@ impl ZrtlSymbol {
         Self {
             name: std::ptr::null(),
             ptr: std::ptr::null(),
+            sig: std::ptr::null(),
         }
     }
 
-    /// Create a new symbol
+    /// Create a new symbol without signature
     pub const fn new(name: *const c_char, ptr: *const u8) -> Self {
-        Self { name, ptr }
+        Self { name, ptr, sig: std::ptr::null() }
+    }
+
+    /// Create a new symbol with signature
+    pub const fn with_sig(name: *const c_char, ptr: *const u8, sig: *const ZrtlSymbolSig) -> Self {
+        Self { name, ptr, sig }
+    }
+
+    /// Check if this symbol has signature information
+    pub fn has_sig(&self) -> bool {
+        !self.sig.is_null()
+    }
+
+    /// Get the signature if available
+    pub unsafe fn get_sig(&self) -> Option<&ZrtlSymbolSig> {
+        if self.sig.is_null() {
+            None
+        } else {
+            Some(&*self.sig)
+        }
     }
 }
 
@@ -80,15 +194,12 @@ unsafe impl Send for ZrtlSymbolEntry {}
 // Register the inventory collector
 inventory::collect!(ZrtlSymbolEntry);
 
-/// Macro to define a ZRTL symbol table entry
+/// Macro to define a ZRTL symbol table entry (legacy, no signature)
 ///
 /// # Example
 ///
 /// ```ignore
-/// ZRTL_SYMBOLS_BEGIN
-///     zrtl_symbol!("$Array$push", array_push),
-///     zrtl_symbol!("$Array$pop", array_pop),
-/// ZRTL_SYMBOLS_END
+/// zrtl_symbol!("$Array$push", array_push)
 /// ```
 #[macro_export]
 macro_rules! zrtl_symbol {
@@ -100,11 +211,82 @@ macro_rules! zrtl_symbol {
     };
 }
 
+/// Macro to define a ZRTL symbol with signature
+///
+/// # Example
+///
+/// ```ignore
+/// // Function that takes DynamicBox and returns DynamicBox
+/// zrtl_symbol_sig!("$IO$print", io_print, dynamic(1) -> void)
+/// zrtl_symbol_sig!("$Math$add", math_add, (i32, i32) -> i32)
+/// ```
+#[macro_export]
+macro_rules! zrtl_symbol_sig {
+    // All-dynamic signature (all params are DynamicBox)
+    ($name:expr, $func:ident, dynamic($count:expr) -> void) => {{
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: $count,
+            flags: $crate::ZrtlSigFlags::ALL_DYNAMIC,
+            return_type: $crate::TypeTag::VOID,
+            params: [$crate::TypeTag::DYNAMIC_BOX; $crate::MAX_PARAMS],
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // All-dynamic signature with dynamic return
+    ($name:expr, $func:ident, dynamic($count:expr) -> dynamic) => {{
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: $count,
+            flags: $crate::ZrtlSigFlags::ALL_DYNAMIC,
+            return_type: $crate::TypeTag::DYNAMIC_BOX,
+            params: [$crate::TypeTag::DYNAMIC_BOX; $crate::MAX_PARAMS],
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Legacy: no signature (backwards compatible)
+    ($name:expr, $func:ident) => {
+        $crate::zrtl_symbol!($name, $func)
+    };
+}
+
+/// Internal helper to convert symbol entry to ZrtlSymbol
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __zrtl_symbol_entry {
+    // All-dynamic signature (all params are DynamicBox)
+    ($sym_name:expr, $func:ident, dynamic($count:expr) -> void) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, dynamic($count) -> void)
+    };
+    // All-dynamic signature with dynamic return
+    ($sym_name:expr, $func:ident, dynamic($count:expr) -> dynamic) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, dynamic($count) -> dynamic)
+    };
+    // No signature (backwards compatible)
+    ($sym_name:expr, $func:ident) => {
+        $crate::zrtl_symbol!($sym_name, $func)
+    };
+}
+
+/// Internal helper to count symbol entries
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __count_symbols {
+    () => { 0 };
+    (($($tt:tt)*) $($rest:tt)*) => { 1 + $crate::__count_symbols!($($rest)*) };
+}
+
 /// Macro to define a complete ZRTL plugin
 ///
 /// This creates both the symbol table and plugin info exports.
 ///
-/// # Example
+/// # Example (legacy, no signatures)
 ///
 /// ```ignore
 /// zrtl_plugin! {
@@ -115,9 +297,23 @@ macro_rules! zrtl_symbol {
 ///     ]
 /// }
 /// ```
+///
+/// # Example (with signatures for auto-boxing)
+///
+/// ```ignore
+/// zrtl_plugin! {
+///     name: "io_runtime",
+///     symbols: [
+///         ("$IO$print_str", io_print_str),                    // No signature (legacy)
+///         ("$IO$print", io_print, dynamic(1) -> void),        // All params are DynamicBox
+///         ("$IO$format", io_format, dynamic(1) -> dynamic),   // DynamicBox in and out
+///     ]
+/// }
+/// ```
 #[macro_export]
 macro_rules! zrtl_plugin {
-    (name: $name:expr, symbols: [$( ($sym_name:expr, $func:ident) ),* $(,)?]) => {
+    // New unified syntax that supports both legacy and signature forms
+    (name: $name:expr, symbols: [$( ($($entry:tt)*) ),* $(,)?]) => {
         // Plugin info export
         #[no_mangle]
         pub static _zrtl_info: $crate::ZrtlInfo = $crate::ZrtlInfo::new(
@@ -129,10 +325,10 @@ macro_rules! zrtl_plugin {
         #[no_mangle]
         pub static _zrtl_symbols: [$crate::ZrtlSymbol; {
             // Count symbols + 1 for sentinel
-            0 $(+ { let _ = stringify!($sym_name); 1 })* + 1
+            $crate::__count_symbols!($(($($entry)*))*)  + 1
         }] = [
             $(
-                $crate::zrtl_symbol!($sym_name, $func),
+                $crate::__zrtl_symbol_entry!($($entry)*),
             )*
             $crate::ZrtlSymbol::null(), // Sentinel
         ];
@@ -519,9 +715,10 @@ mod tests {
     #[test]
     fn test_symbol_layout() {
         // Verify C ABI compatibility
+        // ZrtlSymbol now has 3 pointer-sized fields: name, ptr, sig
         assert_eq!(
             std::mem::size_of::<ZrtlSymbol>(),
-            std::mem::size_of::<*const u8>() * 2
+            std::mem::size_of::<*const u8>() * 3
         );
     }
 

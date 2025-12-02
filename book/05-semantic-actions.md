@@ -443,6 +443,231 @@ typed_var_decl = { "const" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
   }
 ```
 
+## The `fold_left_ops` Command
+
+This command handles left-associative binary expressions where operators are interleaved with operands in the child list.
+
+### Difference from `fold_binary`
+
+While `fold_binary` expects named rules for operands and operators, `fold_left_ops` works with children in a flat pattern: `[operand, operator, operand, operator, operand, ...]`
+
+### Usage
+
+```zyn
+// Multiplication with operators in child list
+multiplicative_expr = { unary_expr ~ (multiplicative_op ~ unary_expr)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left_ops": true
+  }
+
+multiplicative_op = { "*" | "/" | "%" }
+  -> String {
+      "get_text": true
+  }
+```
+
+### How It Works
+
+For input `2 * 3 / 4`:
+
+1. Parse produces: `[unary(2), "*", unary(3), "/", unary(4)]`
+2. Start with first operand: `result = 2`
+3. Process pairs: `result = binary(*, result, 3)` → `(2 * 3)`
+4. Continue: `result = binary(/, result, 4)` → `((2 * 3) / 4)`
+
+### Important Notes
+
+- Requires `get_all_children: true` before `fold_left_ops`
+- Operators should be extracted as strings (use `get_text: true`)
+- Automatically unwraps nested single-element lists
+
+## The `apply_unary` Command
+
+This command handles optional unary prefix operators.
+
+### Problem It Solves
+
+When parsing unary expressions like `-x` or `!flag`, the unary operator is optional:
+- `-42` has a unary prefix
+- `42` has no unary prefix
+
+Without `apply_unary`, you'd need to split into separate rules.
+
+### Usage
+
+```zyn
+// Unary operators: -, !
+unary_expr = { unary_op? ~ postfix_expr }
+  -> TypedExpression {
+      "get_all_children": true,
+      "apply_unary": true
+  }
+
+unary_op = { "-" | "!" }
+  -> String {
+      "get_text": true
+  }
+```
+
+### How It Works
+
+1. Collects all children: `[operator?, operand]`
+2. If operator present: creates `unary(op, operand)`
+3. If no operator: passes through the operand unchanged
+4. Unwraps nested single-element lists from expression cascading
+
+## The `fold_left` Command
+
+This command provides custom left-folding behavior for special operators like the pipe operator.
+
+### Usage
+
+```zyn
+// Pipe operator: x |> f(args) |> g()
+// Transforms: a |> f(b) into f(a, b)
+pipe_expr = { or_expr ~ ("|>" ~ pipe_call)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left": {
+          "op": "pipe",
+          "transform": "prepend_arg"
+      }
+  }
+
+pipe_call = { identifier ~ "(" ~ call_args? ~ ")" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "pipe_target", "args": {
+              "callee": { "define": "variable", "args": { "name": "$1" } },
+              "args": "$2"
+          }}
+      ]
+  }
+```
+
+### Parameters
+
+- `op`: The operator name ("pipe", "||", "&&", etc.)
+- `transform` (optional): Special transformation to apply
+  - `"prepend_arg"`: For pipe operator, prepends left-hand side to function args
+
+### How It Works for Pipe Operator
+
+For input `data |> filter(pred) |> map(fn)`:
+
+1. Parse produces: `[data, pipe_call(filter, [pred]), pipe_call(map, [fn])]`
+2. Start with `result = data`
+3. Transform: `filter(result, pred)` (prepends result to args)
+4. Transform: `map(result2, fn)` (prepends to args)
+
+Result is equivalent to: `map(filter(data, pred), fn)`
+
+### Logical Operators
+
+For simple left-folding (like `||` and `&&`):
+
+```zyn
+or_expr = { and_expr ~ ("||" ~ and_expr)* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_left": { "op": "||" }
+  }
+```
+
+## The `fold_postfix` Command
+
+This command handles postfix operations like function calls, array indexing, and member access.
+
+### Problem It Solves
+
+Postfix expressions chain operations: `obj.field[0](arg)` needs to fold left-to-right into nested AST nodes.
+
+### Usage
+
+```zyn
+// Postfix: function calls, indexing, member access
+postfix_expr = { primary_expr ~ postfix_op* }
+  -> TypedExpression {
+      "get_all_children": true,
+      "fold_postfix": true
+  }
+
+postfix_op = { call_op | index_op | member_op }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Function call: f(args)
+call_op = { "(" ~ call_args? ~ ")" }
+  -> TypedExpression {
+      "get_child": { "index": 0 },
+      "define": "call_args",
+      "args": { "args": "$result" }
+  }
+
+// Indexing: x[i]
+index_op = { "[" ~ expr ~ "]" }
+  -> TypedExpression {
+      "define": "index",
+      "args": { "index": "$1" }
+  }
+
+// Member access: x.field
+member_op = { "." ~ identifier }
+  -> TypedExpression {
+      "define": "member",
+      "args": { "field": "$1" }
+  }
+```
+
+### How It Works
+
+For input `arr[0].length`:
+
+1. Parse produces: `[primary(arr), index_op(0), member_op(length)]`
+2. Start with `result = arr`
+3. Apply index: `result = index(result, 0)`
+4. Apply member: `result = field_access(result, "length")`
+
+### Postfix Operation Types
+
+Each postfix operation is wrapped with a marker so `fold_postfix` knows how to apply it:
+
+| Marker | Creates |
+|--------|---------|
+| `call_args` | Function call with args |
+| `index` | Array/map index access |
+| `member` | Field/property access |
+
+## Type Inference Markers
+
+When defining variables in dynamically-typed or type-inferred languages, use these special type markers:
+
+### The `infer_type` Define
+
+```zyn
+let_stmt = { "let" ~ identifier ~ "=" ~ expr }
+  -> TypedStatement {
+      "commands": [
+          { "define": "let_stmt", "args": {
+              "name": "$1",
+              "type": { "define": "infer_type" },
+              "init": "$2",
+              "is_const": false
+          }}
+      ]
+  }
+```
+
+The `infer_type` define returns a special null marker indicating the type should be inferred from the initializer expression by the type checker.
+
+### Aliases
+
+These aliases also work for type inference:
+- `"define": "auto"` - C++ style auto type
+- `"define": "var"` - TypeScript/C# style var
+
 ## Handling Optional Children
 
 When a child might be absent, the builder handles null/missing gracefully:

@@ -352,34 +352,42 @@ pub static _zrtl_symbols: [ZrtlSymbol; 8] = [
     ZrtlSymbol {
         name: b"$haxe$trace\0".as_ptr() as *const c_char,
         ptr: haxe_trace as *const u8,
+        sig: std::ptr::null(),
     },
     ZrtlSymbol {
         name: b"$haxe$trace$simple\0".as_ptr() as *const c_char,
         ptr: haxe_trace_simple as *const u8,
+        sig: std::ptr::null(),
     },
     ZrtlSymbol {
         name: b"$haxe$trace$int\0".as_ptr() as *const c_char,
         ptr: haxe_trace_int as *const u8,
+        sig: std::ptr::null(),
     },
     ZrtlSymbol {
         name: b"$haxe$trace$float\0".as_ptr() as *const c_char,
         ptr: haxe_trace_float as *const u8,
+        sig: std::ptr::null(),
     },
     ZrtlSymbol {
         name: b"$haxe$trace$bool\0".as_ptr() as *const c_char,
         ptr: haxe_trace_bool as *const u8,
+        sig: std::ptr::null(),
     },
     ZrtlSymbol {
         name: b"$haxe$trace$any\0".as_ptr() as *const c_char,
         ptr: haxe_trace_any as *const u8,
+        sig: std::ptr::null(),
     },
     ZrtlSymbol {
         name: b"$haxe$trace$any$simple\0".as_ptr() as *const c_char,
         ptr: haxe_trace_any_simple as *const u8,
+        sig: std::ptr::null(),
     },
     // Sentinel - null name indicates end of symbol table
     ZrtlSymbol {
         name: std::ptr::null(),
         ptr: std::ptr::null(),
+        sig: std::ptr::null(),
     },
 ];

@@ -1,0 +1,170 @@
+// ============================================================================
+// ZynML Standard Library - Tensor Module
+// ============================================================================
+//
+// Tensor type for multi-dimensional numerical arrays.
+// Wraps the zrtl_tensor plugin with a high-level ZynML interface.
+//
+// Builtin functions use the "extern" keyword to call ZRTL plugin functions.
+// Example: extern tensor_to_string(x) calls the builtin "tensor_to_string"
+//
+// ============================================================================
+
+// Tensor is an opaque type backed by zrtl_tensor plugin
+// The @opaque attribute tells the compiler this is a pointer to external data
+@opaque("$Tensor")
+type Tensor
+
+// Implement Display trait for Tensor
+impl Display for Tensor {
+    fn to_string(self) -> String {
+        extern tensor_to_string(self)
+    }
+}
+
+// Implement Clone trait for Tensor
+impl Clone for Tensor {
+    fn clone(self) -> Tensor {
+        extern tensor_clone(self)
+    }
+}
+
+// Implement Drop trait for Tensor
+impl Drop for Tensor {
+    fn drop(self) {
+        extern tensor_free(self)
+    }
+}
+
+// ============================================================================
+// Operator Trait Implementations
+// ============================================================================
+
+// Tensor + Tensor
+impl Add<Tensor> for Tensor {
+    type Output = Tensor
+    fn add(self, rhs: Tensor) -> Tensor {
+        extern tensor_add(self, rhs)
+    }
+}
+
+// Tensor - Tensor
+impl Sub<Tensor> for Tensor {
+    type Output = Tensor
+    fn sub(self, rhs: Tensor) -> Tensor {
+        extern tensor_sub(self, rhs)
+    }
+}
+
+// Tensor * Tensor (element-wise)
+impl Mul<Tensor> for Tensor {
+    type Output = Tensor
+    fn mul(self, rhs: Tensor) -> Tensor {
+        extern tensor_mul(self, rhs)
+    }
+}
+
+// Tensor / Tensor (element-wise)
+impl Div<Tensor> for Tensor {
+    type Output = Tensor
+    fn div(self, rhs: Tensor) -> Tensor {
+        extern tensor_div(self, rhs)
+    }
+}
+
+// Tensor @ Tensor (matrix multiplication / dot product)
+impl MatMul<Tensor> for Tensor {
+    type Output = f32  // Returns scalar for vector dot product
+    fn matmul(self, rhs: Tensor) -> f32 {
+        extern tensor_dot(self, rhs)
+    }
+}
+
+// Tensor negation (-x)
+impl Neg for Tensor {
+    type Output = Tensor
+    fn neg(self) -> Tensor {
+        extern tensor_neg(self)
+    }
+}
+
+// ============================================================================
+// Tensor Creation Functions
+// ============================================================================
+
+// Create tensor from array literal
+// Usage: Tensor.from_array([1.0, 2.0, 3.0])
+fn from_array(data: Array<f32>) -> Tensor {
+    extern tensor_from_array(data)
+}
+
+// Create tensor filled with zeros
+// Usage: Tensor.zeros([3, 4])  // 3x4 matrix of zeros
+fn zeros(shape: Array<i64>, dtype: i32) -> Tensor {
+    extern tensor_zeros(shape, dtype)
+}
+
+// Create tensor filled with ones
+// Usage: Tensor.ones([3, 4])
+fn ones(shape: Array<i64>, dtype: i32) -> Tensor {
+    extern tensor_ones(shape, dtype)
+}
+
+// Create tensor with values in range [start, end) with step
+// Usage: Tensor.arange(0.0, 10.0, 1.0)
+fn arange(start: f32, end: f32, step: f32) -> Tensor {
+    extern tensor_arange(start, end, step)
+}
+
+// Create tensor with n evenly spaced values between start and end
+// Usage: Tensor.linspace(0.0, 1.0, 100)
+fn linspace(start: f32, end: f32, n: i64) -> Tensor {
+    extern tensor_linspace(start, end, n)
+}
+
+// Create tensor with random values in [0, 1)
+// Usage: Tensor.rand([3, 4], seed)
+fn rand(shape: Array<i64>, seed: i64) -> Tensor {
+    extern tensor_rand(shape, seed)
+}
+
+// Create tensor with random normal values (mean=0, std=1)
+// Usage: Tensor.randn([3, 4], seed)
+fn randn(shape: Array<i64>, seed: i64) -> Tensor {
+    extern tensor_randn(shape, seed)
+}
+
+// ============================================================================
+// Tensor Methods (via method syntax extension)
+// ============================================================================
+
+// These are defined as @method to enable x.sum() syntax
+@method
+fn sum(self: Tensor) -> f32 {
+    extern tensor_sum(self)
+}
+
+@method
+fn mean(self: Tensor) -> f32 {
+    extern tensor_mean(self)
+}
+
+@method
+fn max(self: Tensor) -> f32 {
+    extern tensor_max(self)
+}
+
+@method
+fn min(self: Tensor) -> f32 {
+    extern tensor_min(self)
+}
+
+@method
+fn reshape(self: Tensor, shape: Array<i64>) -> Tensor {
+    extern tensor_reshape(self, shape)
+}
+
+@method
+fn transpose(self: Tensor, dim0: i32, dim1: i32) -> Tensor {
+    extern tensor_transpose(self, dim0, dim1)
+}

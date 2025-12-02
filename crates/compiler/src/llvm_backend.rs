@@ -74,6 +74,9 @@ pub struct LLVMBackend<'ctx> {
 
     /// Maps HIR global IDs to compiled LLVM global values (persists across functions)
     globals_map: IndexMap<HirId, BasicValueEnum<'ctx>>,
+
+    /// Symbol signatures for auto-boxing (symbol name → signature)
+    symbol_signatures: std::collections::HashMap<String, crate::zrtl::ZrtlSymbolSig>,
 }
 
 impl<'ctx> LLVMBackend<'ctx> {
@@ -97,7 +100,25 @@ impl<'ctx> LLVMBackend<'ctx> {
             phi_map: IndexMap::new(),
             current_function: None,
             globals_map: IndexMap::new(),
+            symbol_signatures: std::collections::HashMap::new(),
         }
+    }
+
+    /// Register symbol signatures for auto-boxing support
+    pub fn register_symbol_signatures(&mut self, symbols: &[crate::zrtl::RuntimeSymbolInfo]) {
+        for sym in symbols {
+            if let Some(sig) = &sym.sig {
+                self.symbol_signatures.insert(sym.name.to_string(), sig.clone());
+            }
+        }
+    }
+
+    /// Check if a symbol parameter expects DynamicBox
+    fn param_needs_boxing(&self, symbol_name: &str, param_index: usize) -> bool {
+        self.symbol_signatures
+            .get(symbol_name)
+            .map(|sig| sig.param_is_dynamic(param_index))
+            .unwrap_or(false)
     }
 
     /// Compile an entire HIR module to LLVM IR
@@ -2230,17 +2251,68 @@ impl<'ctx> LLVMBackend<'ctx> {
             }
             HirCallable::Symbol(symbol_name) => {
                 // Call external runtime symbol by name (e.g., "$haxe$trace$int")
+                // Check if any parameters need auto-boxing based on symbol signature
+                let sig_info = self.symbol_signatures.get(symbol_name).cloned();
+
                 // Compile arguments first to infer their types
-                let arg_values: Vec<BasicMetadataValueEnum> = args
+                let raw_arg_values: Vec<BasicValueEnum> = args
                     .iter()
-                    .map(|arg_id| {
-                        self.get_value(*arg_id)
-                            .map(|v| v.into())
-                    })
+                    .map(|arg_id| self.get_value(*arg_id))
                     .collect::<CompilerResult<Vec<_>>>()?;
 
-                // Infer parameter types from argument values
-                let param_types: Vec<BasicMetadataTypeEnum> = arg_values
+                // Process arguments - box if needed
+                let final_arg_values: Vec<BasicMetadataValueEnum> = if let Some(ref sig) = sig_info {
+                    raw_arg_values.iter().enumerate().map(|(i, &arg_val)| {
+                        if sig.param_is_dynamic(i) {
+                            // This argument needs to be boxed as DynamicBox
+                            // Determine which boxing function to call based on type
+                            let func_name = if arg_val.is_int_value() {
+                                let int_ty = arg_val.into_int_value().get_type();
+                                if int_ty == self.context.i32_type() {
+                                    "zyntax_box_i32"
+                                } else if int_ty == self.context.i64_type() {
+                                    "zyntax_box_i64"
+                                } else if int_ty == self.context.i8_type() {
+                                    "zyntax_box_bool"
+                                } else {
+                                    "zyntax_box_i64"
+                                }
+                            } else if arg_val.is_float_value() {
+                                let float_ty = arg_val.into_float_value().get_type();
+                                if float_ty == self.context.f32_type() {
+                                    "zyntax_box_f32"
+                                } else {
+                                    "zyntax_box_f64"
+                                }
+                            } else {
+                                // Pointers and other types
+                                "zyntax_box_ptr"
+                            };
+
+                            // Declare and call boxing function
+                            let box_fn_type = self.context.i64_type().fn_type(
+                                &[arg_val.get_type().into()],
+                                false
+                            );
+                            let box_fn = self.module.get_function(func_name).unwrap_or_else(|| {
+                                self.module.add_function(func_name, box_fn_type, None)
+                            });
+
+                            if let Ok(call_site) = self.builder.build_call(box_fn, &[arg_val.into()], "box") {
+                                call_site.try_as_basic_value().left().unwrap_or(arg_val).into()
+                            } else {
+                                arg_val.into()
+                            }
+                        } else {
+                            arg_val.into()
+                        }
+                    }).collect()
+                } else {
+                    raw_arg_values.iter().map(|&v| v.into()).collect()
+                };
+
+                // Infer parameter types from (potentially boxed) argument values
+                let param_types: Vec<BasicMetadataTypeEnum> = final_arg_values
                     .iter()
                     .map(|v| match v {
                         BasicMetadataValueEnum::IntValue(i) => i.get_type().into(),
@@ -2260,7 +2332,7 @@ impl<'ctx> LLVMBackend<'ctx> {
                 });
 
                 // Build call
-                self.builder.build_call(func, &arg_values, symbol_name)?;
+                self.builder.build_call(func, &final_arg_values, symbol_name)?;
 
                 // Return a dummy value (void functions don't return anything meaningful)
                 Ok(self.context.i32_type().const_zero().into())

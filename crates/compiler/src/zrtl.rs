@@ -146,6 +146,11 @@ impl TypeTag {
         TypeFlags(((self.0 >> 24) & 0xFF) as u8)
     }
 
+    /// Check if this matches a category
+    pub fn is_category(&self, category: TypeCategory) -> bool {
+        self.category() == category
+    }
+
     // Pre-defined type tags
     pub const VOID: Self = Self::new(TypeCategory::Void, 0, TypeFlags::NONE);
     pub const BOOL: Self = Self::new(TypeCategory::Bool, 0, TypeFlags::NONE);
@@ -784,6 +789,63 @@ pub const ZRTL_EXTENSION: &str = "zrtl";
 #[cfg(not(target_os = "windows"))]
 pub const ZRTL_EXTENSION: &str = "zrtl";
 
+/// Maximum number of parameters in a function signature
+pub const MAX_PARAMS: usize = 16;
+
+/// Function signature for ZRTL symbols (C ABI compatible)
+///
+/// Describes parameter and return types for a plugin function.
+/// The compiler uses this to determine whether to auto-box arguments.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct ZrtlSymbolSig {
+    /// Number of parameters
+    pub param_count: u8,
+    /// Flags for the function signature
+    pub flags: ZrtlSigFlags,
+    /// Return type (VOID if no return)
+    pub return_type: TypeTag,
+    /// Parameter types (up to MAX_PARAMS)
+    pub params: [TypeTag; MAX_PARAMS],
+}
+
+impl ZrtlSymbolSig {
+    /// Check if parameter at index expects DynamicBox
+    pub fn param_is_dynamic(&self, index: usize) -> bool {
+        if index >= self.param_count as usize {
+            return false;
+        }
+        self.params[index].is_category(TypeCategory::Opaque)
+            || self.flags.contains(ZrtlSigFlags::ALL_DYNAMIC)
+    }
+
+    /// Check if return type is DynamicBox
+    pub fn returns_dynamic(&self) -> bool {
+        self.return_type.is_category(TypeCategory::Opaque)
+    }
+}
+
+/// Flags for function signatures
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ZrtlSigFlags(pub u8);
+
+impl ZrtlSigFlags {
+    /// No flags
+    pub const NONE: Self = Self(0);
+    /// All parameters should be passed as DynamicBox
+    pub const ALL_DYNAMIC: Self = Self(1 << 0);
+    /// Function is variadic
+    pub const VARIADIC: Self = Self(1 << 1);
+    /// Function may have side effects
+    pub const EFFECTFUL: Self = Self(1 << 2);
+
+    /// Check if flag is set
+    pub const fn contains(self, flag: Self) -> bool {
+        (self.0 & flag.0) != 0
+    }
+}
+
 /// Symbol entry in the ZRTL symbol table (C ABI compatible)
 #[repr(C)]
 pub struct ZrtlSymbol {
@@ -792,11 +854,30 @@ pub struct ZrtlSymbol {
     pub name: *const std::ffi::c_char,
     /// Function pointer
     pub ptr: *const u8,
+    /// Optional pointer to function signature (null if not provided)
+    pub sig: *const ZrtlSymbolSig,
+}
+
+impl ZrtlSymbol {
+    /// Check if this symbol has signature information
+    pub fn has_sig(&self) -> bool {
+        !self.sig.is_null()
+    }
+
+    /// Get the signature if available
+    pub unsafe fn get_sig(&self) -> Option<&ZrtlSymbolSig> {
+        if self.sig.is_null() {
+            None
+        } else {
+            Some(&*self.sig)
+        }
+    }
 }
 
 // SAFETY: ZrtlSymbol contains only immutable pointers to static data:
 // - name: const pointer to static C string
 // - ptr: const pointer to static function
+// - sig: const pointer to static signature
 // These are inherently thread-safe as they cannot be modified.
 unsafe impl Sync for ZrtlSymbol {}
 unsafe impl Send for ZrtlSymbol {}
@@ -816,6 +897,21 @@ pub struct ZrtlInfo {
 unsafe impl Sync for ZrtlInfo {}
 unsafe impl Send for ZrtlInfo {}
 
+/// Symbol with optional signature information
+#[derive(Debug, Clone)]
+pub struct RuntimeSymbolInfo {
+    /// Symbol name
+    pub name: &'static str,
+    /// Function pointer
+    pub ptr: *const u8,
+    /// Optional signature (for auto-boxing support)
+    pub sig: Option<ZrtlSymbolSig>,
+}
+
+// SAFETY: RuntimeSymbolInfo contains only immutable pointers to static data
+unsafe impl Sync for RuntimeSymbolInfo {}
+unsafe impl Send for RuntimeSymbolInfo {}
+
 /// A loaded ZRTL plugin
 pub struct ZrtlPlugin {
     /// The loaded dynamic library (kept alive to prevent unloading)
@@ -823,7 +919,9 @@ pub struct ZrtlPlugin {
     library: libloading::Library,
     /// Plugin name
     name: String,
-    /// Collected symbols
+    /// Collected symbols with signature info
+    symbols_with_sig: Vec<RuntimeSymbolInfo>,
+    /// Legacy symbols list (for backwards compatibility)
     symbols: Vec<(&'static str, *const u8)>,
 }
 
@@ -896,6 +994,7 @@ impl ZrtlPlugin {
 
             // Collect symbols until sentinel (null name)
             let mut symbols = Vec::new();
+            let mut symbols_with_sig = Vec::new();
             let mut sym_ptr = *symbols_sym;
 
             while !(*sym_ptr).name.is_null() {
@@ -910,20 +1009,32 @@ impl ZrtlPlugin {
                 // This is intentional - symbols live for the program's lifetime
                 let static_name: &'static str = Box::leak(sym_name.to_string().into_boxed_str());
 
+                // Read signature if available
+                let sig = (*sym_ptr).get_sig().cloned();
+
                 symbols.push((static_name, (*sym_ptr).ptr));
+                symbols_with_sig.push(RuntimeSymbolInfo {
+                    name: static_name,
+                    ptr: (*sym_ptr).ptr,
+                    sig,
+                });
+
                 sym_ptr = sym_ptr.add(1);
             }
 
+            let sig_count = symbols_with_sig.iter().filter(|s| s.sig.is_some()).count();
             log::info!(
-                "Loaded ZRTL plugin '{}' with {} symbols from {}",
+                "Loaded ZRTL plugin '{}' with {} symbols ({} with signatures) from {}",
                 name,
                 symbols.len(),
+                sig_count,
                 path.display()
             );
 
             Ok(Self {
                 library,
                 name,
+                symbols_with_sig,
                 symbols,
             })
         }
@@ -939,9 +1050,34 @@ impl ZrtlPlugin {
         &self.symbols
     }
 
+    /// Get all symbols with signature information
+    pub fn symbols_with_signatures(&self) -> &[RuntimeSymbolInfo] {
+        &self.symbols_with_sig
+    }
+
+    /// Get signature for a specific symbol
+    pub fn get_signature(&self, name: &str) -> Option<&ZrtlSymbolSig> {
+        self.symbols_with_sig
+            .iter()
+            .find(|s| s.name == name)
+            .and_then(|s| s.sig.as_ref())
+    }
+
+    /// Check if a symbol expects DynamicBox for a parameter
+    pub fn param_is_dynamic(&self, symbol_name: &str, param_index: usize) -> bool {
+        self.get_signature(symbol_name)
+            .map(|sig| sig.param_is_dynamic(param_index))
+            .unwrap_or(false)
+    }
+
     /// Convert to RuntimePlugin symbols format
     pub fn runtime_symbols(&self) -> Vec<(&'static str, *const u8)> {
         self.symbols.clone()
+    }
+
+    /// Get runtime symbols with signature info
+    pub fn runtime_symbols_with_sig(&self) -> Vec<RuntimeSymbolInfo> {
+        self.symbols_with_sig.clone()
     }
 }
 
@@ -1451,9 +1587,10 @@ mod tests {
     #[test]
     fn test_zrtl_symbol_layout() {
         // Verify C ABI compatibility
+        // ZrtlSymbol now has 3 pointer-sized fields: name, ptr, sig
         assert_eq!(
             std::mem::size_of::<ZrtlSymbol>(),
-            std::mem::size_of::<*const u8>() * 2
+            std::mem::size_of::<*const u8>() * 3
         );
     }
 

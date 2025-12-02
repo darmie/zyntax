@@ -360,6 +360,459 @@ pub unsafe extern "C" fn io_string_free(s: StringPtr) {
 }
 
 // ============================================================================
+// Dynamic Print (DynamicBox) - Handles ALL known ZRTL types
+// ============================================================================
+
+use std::fmt::Write as FmtWrite;
+
+/// Format a DynamicBox value to a String (internal helper)
+///
+/// This handles ALL known ZRTL runtime types including:
+/// - Primitives: Void, Bool, Int, UInt, Float
+/// - String: ZRTL string format [i32 length][utf8 bytes]
+/// - Array: ZRTL array format [i32 cap][i32 len][elements]
+/// - Tuple: Sequence of DynamicBox values
+/// - Optional: None or Some(value)
+/// - Pointer: Raw pointer display
+/// - Struct/Class: Named struct with fields
+/// - Enum: Variant index + optional payload
+/// - Function: Function pointer
+/// - Map: Key-value pairs (simplified display)
+/// - TraitObject: Trait object (vtable + data)
+/// - Opaque/Custom: Hex dump for unknown types
+unsafe fn format_dynamic_box(value: &zrtl::DynamicBox, output: &mut String) {
+    use zrtl::TypeCategory;
+
+    if value.is_null() {
+        output.push_str("null");
+        return;
+    }
+
+    match value.category() {
+        TypeCategory::Void => {
+            output.push_str("void");
+        }
+
+        TypeCategory::Bool => {
+            if let Some(b) = value.as_ref::<bool>() {
+                let _ = write!(output, "{}", b);
+            } else if let Some(b) = value.as_ref::<u8>() {
+                let _ = write!(output, "{}", *b != 0);
+            }
+        }
+
+        TypeCategory::Int => {
+            match value.size {
+                1 => { if let Some(v) = value.as_ref::<i8>() { let _ = write!(output, "{}", v); } }
+                2 => { if let Some(v) = value.as_ref::<i16>() { let _ = write!(output, "{}", v); } }
+                4 => { if let Some(v) = value.as_ref::<i32>() { let _ = write!(output, "{}", v); } }
+                8 => { if let Some(v) = value.as_ref::<i64>() { let _ = write!(output, "{}", v); } }
+                16 => { if let Some(v) = value.as_ref::<i128>() { let _ = write!(output, "{}", v); } }
+                _ => { let _ = write!(output, "<int{}>", value.size * 8); }
+            }
+        }
+
+        TypeCategory::UInt => {
+            match value.size {
+                1 => { if let Some(v) = value.as_ref::<u8>() { let _ = write!(output, "{}", v); } }
+                2 => { if let Some(v) = value.as_ref::<u16>() { let _ = write!(output, "{}", v); } }
+                4 => { if let Some(v) = value.as_ref::<u32>() { let _ = write!(output, "{}", v); } }
+                8 => { if let Some(v) = value.as_ref::<u64>() { let _ = write!(output, "{}", v); } }
+                16 => { if let Some(v) = value.as_ref::<u128>() { let _ = write!(output, "{}", v); } }
+                _ => { let _ = write!(output, "<uint{}>", value.size * 8); }
+            }
+        }
+
+        TypeCategory::Float => {
+            match value.size {
+                4 => { if let Some(v) = value.as_ref::<f32>() { let _ = write!(output, "{}", v); } }
+                8 => { if let Some(v) = value.as_ref::<f64>() { let _ = write!(output, "{}", v); } }
+                _ => { let _ = write!(output, "<float{}>", value.size * 8); }
+            }
+        }
+
+        TypeCategory::String => {
+            // ZRTL string format: [i32 length][utf8 bytes]
+            let ptr = value.data as StringConstPtr;
+            if !ptr.is_null() {
+                let len = string_length(ptr) as usize;
+                let data = string_data(ptr);
+                if len > 0 && !data.is_null() {
+                    let bytes = std::slice::from_raw_parts(data, len);
+                    if let Ok(s) = std::str::from_utf8(bytes) {
+                        output.push_str(s);
+                    } else {
+                        let _ = write!(output, "<invalid utf8, {} bytes>", len);
+                    }
+                }
+            }
+        }
+
+        TypeCategory::Array => {
+            // ZRTL array format: [i32 capacity][i32 length][elements...]
+            let arr_ptr = value.data as zrtl::ArrayConstPtr;
+            if arr_ptr.is_null() {
+                output.push_str("[]");
+                return;
+            }
+
+            let len = zrtl::array_length(arr_ptr) as usize;
+            output.push('[');
+
+            // Determine element type from size (heuristic)
+            // For now, assume elements are same size as (total_size - 8) / len
+            let elem_size = if len > 0 && value.size > 8 {
+                ((value.size as usize) - 8) / len
+            } else {
+                4 // Default to 4 bytes (i32/f32)
+            };
+
+            // Try to print elements based on common element sizes
+            let data_ptr = zrtl::array_data::<u8>(arr_ptr);
+            for i in 0..len.min(10) { // Limit to 10 elements for display
+                if i > 0 { output.push_str(", "); }
+
+                match elem_size {
+                    4 => {
+                        // Could be i32 or f32, try f32 first for tensor arrays
+                        let elem = *(data_ptr.add(i * 4) as *const f32);
+                        if elem.is_finite() && elem.abs() < 1e10 {
+                            let _ = write!(output, "{}", elem);
+                        } else {
+                            let elem_i = *(data_ptr.add(i * 4) as *const i32);
+                            let _ = write!(output, "{}", elem_i);
+                        }
+                    }
+                    8 => {
+                        let elem = *(data_ptr.add(i * 8) as *const f64);
+                        if elem.is_finite() && elem.abs() < 1e15 {
+                            let _ = write!(output, "{}", elem);
+                        } else {
+                            let elem_i = *(data_ptr.add(i * 8) as *const i64);
+                            let _ = write!(output, "{}", elem_i);
+                        }
+                    }
+                    1 => {
+                        let elem = *data_ptr.add(i);
+                        let _ = write!(output, "{}", elem);
+                    }
+                    2 => {
+                        let elem = *(data_ptr.add(i * 2) as *const i16);
+                        let _ = write!(output, "{}", elem);
+                    }
+                    _ => {
+                        let _ = write!(output, "?");
+                    }
+                }
+            }
+
+            if len > 10 {
+                let _ = write!(output, ", ... ({} more)", len - 10);
+            }
+            output.push(']');
+        }
+
+        TypeCategory::Tuple => {
+            // Tuple is stored as consecutive DynamicBox values
+            // Size tells us total bytes, each DynamicBox is 24 bytes (on 64-bit)
+            let num_elements = value.size as usize / std::mem::size_of::<zrtl::DynamicBox>();
+            output.push('(');
+            let elements = value.data as *const zrtl::DynamicBox;
+            for i in 0..num_elements.min(10) {
+                if i > 0 { output.push_str(", "); }
+                let elem = &*elements.add(i);
+                format_dynamic_box(elem, output);
+            }
+            if num_elements > 10 {
+                let _ = write!(output, ", ... ({} more)", num_elements - 10);
+            }
+            output.push(')');
+        }
+
+        TypeCategory::Optional => {
+            // Optional: first byte is 0 (None) or 1 (Some), followed by value
+            if value.size == 0 || value.data.is_null() {
+                output.push_str("None");
+            } else {
+                let has_value = *value.data;
+                if has_value == 0 {
+                    output.push_str("None");
+                } else {
+                    output.push_str("Some(");
+                    // The actual value follows the discriminant
+                    // This is a simplified representation
+                    let _ = write!(output, "<{} bytes>", value.size - 1);
+                    output.push(')');
+                }
+            }
+        }
+
+        TypeCategory::Result => {
+            // Result: first byte is 0 (Ok) or 1 (Err), followed by value
+            if value.size == 0 || value.data.is_null() {
+                output.push_str("Result(?)");
+            } else {
+                let is_err = *value.data;
+                if is_err == 0 {
+                    output.push_str("Ok(...)");
+                } else {
+                    output.push_str("Err(...)");
+                }
+            }
+        }
+
+        TypeCategory::Pointer => {
+            let ptr_val = if value.size == 8 {
+                value.as_ref::<u64>().map(|p| *p as usize).unwrap_or(0)
+            } else {
+                value.as_ref::<u32>().map(|p| *p as usize).unwrap_or(0)
+            };
+            let _ = write!(output, "0x{:x}", ptr_val);
+        }
+
+        TypeCategory::Function => {
+            let _ = write!(output, "<fn@{:p}>", value.data);
+        }
+
+        TypeCategory::Struct | TypeCategory::Class => {
+            // For struct/class, we don't have field names, just show a generic representation
+            let _ = write!(output, "<struct {} bytes@{:p}>", value.size, value.data);
+        }
+
+        TypeCategory::Enum => {
+            // Enum: typically a tag byte followed by payload
+            if value.size > 0 && !value.data.is_null() {
+                let tag = *value.data;
+                let _ = write!(output, "<enum variant {}@{:p}>", tag, value.data);
+            } else {
+                output.push_str("<enum>");
+            }
+        }
+
+        TypeCategory::Union => {
+            let _ = write!(output, "<union {} bytes@{:p}>", value.size, value.data);
+        }
+
+        TypeCategory::Map => {
+            let _ = write!(output, "<map@{:p}>", value.data);
+        }
+
+        TypeCategory::TraitObject => {
+            let _ = write!(output, "<dyn trait@{:p}>", value.data);
+        }
+
+        TypeCategory::Opaque | TypeCategory::Custom => {
+            // For opaque/custom types, show hex dump of first few bytes
+            output.push_str("<opaque ");
+            let num_bytes = (value.size as usize).min(16);
+            for i in 0..num_bytes {
+                let byte = *value.data.add(i);
+                let _ = write!(output, "{:02x}", byte);
+            }
+            if value.size > 16 {
+                let _ = write!(output, "... ({} bytes total)", value.size);
+            }
+            output.push('>');
+        }
+    }
+}
+
+/// Print any DynamicBox value (inspects type tag to determine format)
+///
+/// Supports ALL known ZRTL runtime types including Array, Tuple, Optional, etc.
+///
+/// # Safety
+/// The DynamicBox must be valid
+#[no_mangle]
+pub unsafe extern "C" fn io_print_dynamic(value: zrtl::DynamicBox) {
+    let mut output = String::new();
+    format_dynamic_box(&value, &mut output);
+    print!("{}", output);
+}
+
+/// Print any DynamicBox value with newline
+#[no_mangle]
+pub unsafe extern "C" fn io_println_dynamic(value: zrtl::DynamicBox) {
+    let mut output = String::new();
+    format_dynamic_box(&value, &mut output);
+    println!("{}", output);
+}
+
+/// Print any DynamicBox value to stderr
+#[no_mangle]
+pub unsafe extern "C" fn io_eprint_dynamic(value: zrtl::DynamicBox) {
+    let mut output = String::new();
+    format_dynamic_box(&value, &mut output);
+    eprint!("{}", output);
+}
+
+/// Print any DynamicBox value to stderr with newline
+#[no_mangle]
+pub unsafe extern "C" fn io_eprintln_dynamic(value: zrtl::DynamicBox) {
+    let mut output = String::new();
+    format_dynamic_box(&value, &mut output);
+    eprintln!("{}", output);
+}
+
+/// Format a DynamicBox value to a ZRTL string
+///
+/// Returns a new ZRTL string that must be freed with string_free.
+#[no_mangle]
+pub unsafe extern "C" fn io_format_dynamic(value: zrtl::DynamicBox) -> StringPtr {
+    let mut output = String::new();
+    format_dynamic_box(&value, &mut output);
+    string_new(&output)
+}
+
+// ============================================================================
+// Array Print Functions (direct, without DynamicBox wrapper)
+// ============================================================================
+
+/// Print a ZRTL array of f32 values
+#[no_mangle]
+pub unsafe extern "C" fn io_print_array_f32(arr: zrtl::ArrayConstPtr) {
+    if arr.is_null() {
+        print!("[]");
+        return;
+    }
+
+    let len = zrtl::array_length(arr) as usize;
+    let data: *const f32 = zrtl::array_data(arr);
+
+    print!("[");
+    for i in 0..len.min(10) {
+        if i > 0 { print!(", "); }
+        print!("{}", *data.add(i));
+    }
+    if len > 10 { print!(", ... ({} more)", len - 10); }
+    print!("]");
+}
+
+/// Print a ZRTL array of i32 values
+#[no_mangle]
+pub unsafe extern "C" fn io_print_array_i32(arr: zrtl::ArrayConstPtr) {
+    if arr.is_null() {
+        print!("[]");
+        return;
+    }
+
+    let len = zrtl::array_length(arr) as usize;
+    let data: *const i32 = zrtl::array_data(arr);
+
+    print!("[");
+    for i in 0..len.min(10) {
+        if i > 0 { print!(", "); }
+        print!("{}", *data.add(i));
+    }
+    if len > 10 { print!(", ... ({} more)", len - 10); }
+    print!("]");
+}
+
+/// Print a ZRTL array of i64 values
+#[no_mangle]
+pub unsafe extern "C" fn io_print_array_i64(arr: zrtl::ArrayConstPtr) {
+    if arr.is_null() {
+        print!("[]");
+        return;
+    }
+
+    let len = zrtl::array_length(arr) as usize;
+    let data: *const i64 = zrtl::array_data(arr);
+
+    print!("[");
+    for i in 0..len.min(10) {
+        if i > 0 { print!(", "); }
+        print!("{}", *data.add(i));
+    }
+    if len > 10 { print!(", ... ({} more)", len - 10); }
+    print!("]");
+}
+
+/// Print a ZRTL array of f64 values
+#[no_mangle]
+pub unsafe extern "C" fn io_print_array_f64(arr: zrtl::ArrayConstPtr) {
+    if arr.is_null() {
+        print!("[]");
+        return;
+    }
+
+    let len = zrtl::array_length(arr) as usize;
+    let data: *const f64 = zrtl::array_data(arr);
+
+    print!("[");
+    for i in 0..len.min(10) {
+        if i > 0 { print!(", "); }
+        print!("{}", *data.add(i));
+    }
+    if len > 10 { print!(", ... ({} more)", len - 10); }
+    print!("]");
+}
+
+/// Print a ZRTL array with newline (f32)
+#[no_mangle]
+pub unsafe extern "C" fn io_println_array_f32(arr: zrtl::ArrayConstPtr) {
+    io_print_array_f32(arr);
+    println!();
+}
+
+/// Print a ZRTL array with newline (i32)
+#[no_mangle]
+pub unsafe extern "C" fn io_println_array_i32(arr: zrtl::ArrayConstPtr) {
+    io_print_array_i32(arr);
+    println!();
+}
+
+/// Print a ZRTL array with newline (i64)
+#[no_mangle]
+pub unsafe extern "C" fn io_println_array_i64(arr: zrtl::ArrayConstPtr) {
+    io_print_array_i64(arr);
+    println!();
+}
+
+/// Print a ZRTL array with newline (f64)
+#[no_mangle]
+pub unsafe extern "C" fn io_println_array_f64(arr: zrtl::ArrayConstPtr) {
+    io_print_array_f64(arr);
+    println!();
+}
+
+// ============================================================================
+// String Concatenation
+// ============================================================================
+
+/// Concatenate two ZRTL strings
+///
+/// Returns a new ZRTL string, caller must free with `string_free`.
+#[no_mangle]
+pub unsafe extern "C" fn io_string_concat(a: StringConstPtr, b: StringConstPtr) -> StringPtr {
+    let mut result = String::new();
+
+    if !a.is_null() {
+        let len_a = string_length(a) as usize;
+        let data_a = string_data(a);
+        if len_a > 0 && !data_a.is_null() {
+            let bytes = std::slice::from_raw_parts(data_a, len_a);
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                result.push_str(s);
+            }
+        }
+    }
+
+    if !b.is_null() {
+        let len_b = string_length(b) as usize;
+        let data_b = string_data(b);
+        if len_b > 0 && !data_b.is_null() {
+            let bytes = std::slice::from_raw_parts(data_b, len_b);
+            if let Ok(s) = std::str::from_utf8(bytes) {
+                result.push_str(s);
+            }
+        }
+    }
+
+    string_new(&result)
+}
+
+// ============================================================================
 // Plugin Export
 // ============================================================================
 
@@ -406,6 +859,27 @@ zrtl_plugin! {
 
         // Memory management
         ("$IO$string_free", io_string_free),
+
+        // Dynamic (DynamicBox) printing - handles ALL ZRTL types
+        // These functions expect DynamicBox, so compiler will auto-box arguments
+        ("$IO$print_dynamic", io_print_dynamic, dynamic(1) -> void),
+        ("$IO$println_dynamic", io_println_dynamic, dynamic(1) -> void),
+        ("$IO$eprint_dynamic", io_eprint_dynamic, dynamic(1) -> void),
+        ("$IO$eprintln_dynamic", io_eprintln_dynamic, dynamic(1) -> void),
+        ("$IO$format_dynamic", io_format_dynamic, dynamic(1) -> dynamic),
+
+        // Array printing (direct, type-specific)
+        ("$IO$print_array_f32", io_print_array_f32),
+        ("$IO$println_array_f32", io_println_array_f32),
+        ("$IO$print_array_i32", io_print_array_i32),
+        ("$IO$println_array_i32", io_println_array_i32),
+        ("$IO$print_array_i64", io_print_array_i64),
+        ("$IO$println_array_i64", io_println_array_i64),
+        ("$IO$print_array_f64", io_print_array_f64),
+        ("$IO$println_array_f64", io_println_array_f64),
+
+        // String operations
+        ("$IO$string_concat", io_string_concat),
     ]
 }
 

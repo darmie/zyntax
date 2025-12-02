@@ -1,0 +1,165 @@
+// ============================================================================
+// ZynML Standard Library - Prelude
+// ============================================================================
+//
+// Core traits and types that are automatically available in all ZynML programs.
+//
+// The compiler recognizes these standard traits and generates appropriate code:
+// - Display: enables println(x) to format any type
+// - Operator traits: enables operator overloading (+, -, *, /, @, etc.)
+//
+// ============================================================================
+
+// ============================================================================
+// Formatting Traits
+// ============================================================================
+
+// Display trait - types that can be converted to string representation
+// Types implementing Display can be used with println() and string interpolation
+trait Display {
+    fn to_string(self) -> String
+}
+
+// Debug trait - types with debug representation (more verbose than Display)
+trait Debug {
+    fn debug_string(self) -> String
+}
+
+// ============================================================================
+// Arithmetic Operator Traits
+// ============================================================================
+
+// Add trait - enables x + y
+trait Add<Rhs> {
+    type Output
+    fn add(self, rhs: Rhs) -> Output
+}
+
+// Sub trait - enables x - y
+trait Sub<Rhs> {
+    type Output
+    fn sub(self, rhs: Rhs) -> Output
+}
+
+// Mul trait - enables x * y
+trait Mul<Rhs> {
+    type Output
+    fn mul(self, rhs: Rhs) -> Output
+}
+
+// Div trait - enables x / y
+trait Div<Rhs> {
+    type Output
+    fn div(self, rhs: Rhs) -> Output
+}
+
+// Mod trait - enables x % y
+trait Mod<Rhs> {
+    type Output
+    fn mod(self, rhs: Rhs) -> Output
+}
+
+// MatMul trait - enables x @ y (matrix multiplication)
+trait MatMul<Rhs> {
+    type Output
+    fn matmul(self, rhs: Rhs) -> Output
+}
+
+// Neg trait - enables -x (unary negation)
+trait Neg {
+    type Output
+    fn neg(self) -> Output
+}
+
+// ============================================================================
+// Comparison Operator Traits
+// ============================================================================
+
+// Eq trait - enables x == y and x != y
+trait Eq<Rhs> {
+    fn eq(self, rhs: Rhs) -> bool
+    fn ne(self, rhs: Rhs) -> bool
+}
+
+// Ord trait - enables x < y, x > y, x <= y, x >= y
+trait Ord<Rhs> {
+    fn lt(self, rhs: Rhs) -> bool
+    fn gt(self, rhs: Rhs) -> bool
+    fn le(self, rhs: Rhs) -> bool
+    fn ge(self, rhs: Rhs) -> bool
+}
+
+// ============================================================================
+// Bitwise Operator Traits
+// ============================================================================
+
+// BitAnd trait - enables x & y
+trait BitAnd<Rhs> {
+    type Output
+    fn bitand(self, rhs: Rhs) -> Output
+}
+
+// BitOr trait - enables x | y
+trait BitOr<Rhs> {
+    type Output
+    fn bitor(self, rhs: Rhs) -> Output
+}
+
+// BitXor trait - enables x ^ y
+trait BitXor<Rhs> {
+    type Output
+    fn bitxor(self, rhs: Rhs) -> Output
+}
+
+// Not trait - enables !x (unary not)
+trait Not {
+    type Output
+    fn not(self) -> Output
+}
+
+// ============================================================================
+// Indexing Trait
+// ============================================================================
+
+// Index trait - enables x[i]
+trait Index<Idx> {
+    type Output
+    fn index(self, idx: Idx) -> Output
+}
+
+// IndexMut trait - enables x[i] = v
+trait IndexMut<Idx> {
+    type Output
+    fn index_mut(self, idx: Idx) -> Output
+}
+
+// ============================================================================
+// Lifecycle Traits
+// ============================================================================
+
+// Clone trait - types that can be deeply copied
+trait Clone {
+    fn clone(self) -> Self
+}
+
+// Drop trait - types with custom cleanup logic
+trait Drop {
+    fn drop(self)
+}
+
+// ============================================================================
+// Iterator Trait
+// ============================================================================
+
+// Iterator trait - enables for loops
+trait Iterator {
+    type Item
+    fn next(self) -> Option<Item>
+}
+
+// IntoIterator trait - types that can be converted to iterators
+trait IntoIterator {
+    type Item
+    type IntoIter: Iterator<Item>
+    fn into_iter(self) -> IntoIter
+}

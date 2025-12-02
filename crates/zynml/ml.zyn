@@ -30,6 +30,8 @@
 
 @builtin {
     // === Tensor Operations (zrtl_tensor) ===
+    tensor: "tensor_from_array",          // tensor([1.0, 2.0]) -> tensor_from_array([1.0, 2.0])
+    tensor_from_array: "$Tensor$from_array_f32",
     tensor_zeros: "$Tensor$zeros",
     tensor_ones: "$Tensor$ones",
     tensor_full: "$Tensor$full_f32",
@@ -44,6 +46,9 @@
     tensor_max: "$Tensor$max_f32",
     tensor_min: "$Tensor$min_f32",
     tensor_free: "$Tensor$free",
+    tensor_print: "$Tensor$print",
+    tensor_println: "$Tensor$println",
+    tensor_to_string: "$Tensor$to_string",
 
     // === Audio Operations (zrtl_audio) ===
     audio_load: "$Audio$load",
@@ -93,13 +98,90 @@
     simd_layer_norm: "$SIMD$layer_norm_f32",
 
     // === I/O Operations (zrtl_io) ===
-    print: "$IO$print",
-    println: "$IO$println",
+    // Universal print - uses DynamicBox for auto-formatting any type
+    // This is the default for ZynML - prints tensors, floats, ints, strings, etc.
+    print: "$IO$print_dynamic",
+    println: "$IO$println_dynamic",
+    eprint: "$IO$eprint_dynamic",
+    eprintln: "$IO$eprintln_dynamic",
+
+    // String-only output (for when you know it's a string)
+    print_str: "$IO$print",
+    println_str: "$IO$println",
+    eprint_str: "$IO$eprint",
+    eprintln_str: "$IO$eprintln",
+
+    // Integer output
+    print_i64: "$IO$print_i64",
+    println_i64: "$IO$println_i64",
+    print_u64: "$IO$print_u64",
+    println_u64: "$IO$println_u64",
+
+    // Float output
+    print_f64: "$IO$print_f64",
+    println_f64: "$IO$println_f64",
+
+    // Boolean output
+    print_bool: "$IO$print_bool",
+    println_bool: "$IO$println_bool",
+
+    // Character output
+    print_char: "$IO$print_char",
+    println_char: "$IO$println_char",
+
+    // Input
+    read_line: "$IO$read_line",
+    input: "$IO$input",
+
+    // Formatting
+    format_i64: "$IO$format_i64",
+    format_f64: "$IO$format_f64",
+    format_bool: "$IO$format_bool",
+
+    // Flushing
+    flush: "$IO$flush",
+    flush_stderr: "$IO$flush_stderr",
+
+    // Dynamic (any type) output - handles all ZRTL types
+    print_dynamic: "$IO$print_dynamic",
+    println_dynamic: "$IO$println_dynamic",
+    format_dynamic: "$IO$format_dynamic",
+
+    // Array output (type-specific)
+    print_array_f32: "$IO$print_array_f32",
+    println_array_f32: "$IO$println_array_f32",
+    print_array_i32: "$IO$print_array_i32",
+    println_array_i32: "$IO$println_array_i32",
+    print_array_i64: "$IO$print_array_i64",
+    println_array_i64: "$IO$println_array_i64",
+    print_array_f64: "$IO$print_array_f64",
+    println_array_f64: "$IO$println_array_f64",
+
+    // String operations
+    string_concat: "$IO$string_concat",
+    string_free: "$IO$string_free",
 
     // === File Operations (zrtl_fs) ===
     file_read: "$FS$read_string",
     file_write: "$FS$write_string",
     file_exists: "$FS$exists",
+
+    // === Method Mappings ===
+    // Syntax: x.method(args) -> builtin(x, args)
+    @sum: "tensor_sum",           // x.sum() -> tensor_sum(x)
+    @mean: "tensor_mean",         // x.mean() -> tensor_mean(x)
+    @max: "tensor_max",           // x.max() -> tensor_max(x)
+    @min: "tensor_min",           // x.min() -> tensor_min(x)
+    @reshape: "tensor_reshape",   // x.reshape(shape) -> tensor_reshape(x, shape)
+    @transpose: "tensor_transpose", // x.transpose() -> tensor_transpose(x)
+    @normalize: "vec_normalize",  // x.normalize() -> vec_normalize(x)
+    @dot: "vec_dot",              // x.dot(y) -> vec_dot(x, y)
+    @cosine: "vec_cosine",        // x.cosine(y) -> vec_cosine(x, y)
+
+    // === Operator Overloads ===
+    // Syntax: x op y -> builtin(x, y)
+    // Note: These apply globally - for type-aware overloading, use method syntax
+    $@: "vec_dot"                 // x @ y -> vec_dot(x, y) (matrix multiply, like Python)
 }
 
 // ============================================================================
@@ -118,7 +200,7 @@ top_level_items = { top_level_item* }
       "args": { "declarations": "$result" }
   }
 
-top_level_item = { fn_def | let_stmt | import_stmt | expr_stmt }
+top_level_item = { trait_def | impl_block | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -136,26 +218,323 @@ import_stmt = { "import" ~ identifier ~ ("," ~ identifier)* }
   }
 
 // ============================================================================
+// Trait Definition
+// ============================================================================
+
+// trait Display { fn to_string(self) -> String }
+// trait Iterator<T> { fn next(self) -> Option<T> }
+// trait Add<Rhs> { type Output; fn add(self, rhs: Rhs) -> Output }
+trait_def = { "trait" ~ identifier ~ type_params? ~ "{" ~ trait_item* ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "trait", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "items": "$3"
+          }}
+      ]
+  }
+
+// Trait item can be an associated type or a method
+trait_item = { associated_type | trait_method }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// Associated type: type Output
+// With bounds: type Item: Clone
+associated_type = { "type" ~ identifier ~ (":" ~ type_bounds)? }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "associated_type", "args": {
+              "name": "$1",
+              "bounds": "$2"
+          }}
+      ]
+  }
+
+trait_method = { "fn" ~ identifier ~ type_params? ~ "(" ~ trait_params? ~ ")" ~ ("->" ~ type_expr)? }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "trait_method", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "params": "$3",
+              "return_type": "$4"
+          }}
+      ]
+  }
+
+trait_params = { trait_param ~ ("," ~ trait_param)* }
+  -> List {
+      "get_all_children": true
+  }
+
+trait_param = { identifier ~ (":" ~ type_expr)? }
+  -> TypedParameter {
+      "commands": [
+          { "define": "param", "args": {
+              "name": "$1",
+              "type": "$2"
+          }}
+      ]
+  }
+
+// Type parameters: <T, U>
+// With bounds: <T: Display, U: Clone + Debug>
+type_params = { "<" ~ type_param ~ ("," ~ type_param)* ~ ">" }
+  -> List {
+      "get_all_children": true
+  }
+
+type_param = { identifier ~ (":" ~ type_bounds)? }
+  -> TypedTypeParam {
+      "commands": [
+          { "define": "type_param", "args": {
+              "name": "$1",
+              "bounds": "$2"
+          }}
+      ]
+  }
+
+type_bounds = { type_expr ~ ("+" ~ type_expr)* }
+  -> List {
+      "get_all_children": true
+  }
+
+// ============================================================================
+// Type Definition
+// ============================================================================
+
+// @opaque("$Tensor") type Tensor
+// type Point = { x: f32, y: f32 }
+type_def = { type_opaque | type_alias | type_struct }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// Opaque type wrapping external (ZRTL) type
+type_opaque = { "@opaque" ~ "(" ~ string_literal ~ ")" ~ "type" ~ identifier }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "opaque_type", "args": {
+              "name": "$2",
+              "external_name": "$1"
+          }}
+      ]
+  }
+
+// Type alias: type Scalar = f32
+type_alias = { "type" ~ identifier ~ "=" ~ type_expr }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "type_alias", "args": {
+              "name": "$1",
+              "target": "$2"
+          }}
+      ]
+  }
+
+// Struct type: type Point = { x: f32, y: f32 }
+type_struct = { "type" ~ identifier ~ "=" ~ "{" ~ struct_fields ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "struct_type", "args": {
+              "name": "$1",
+              "fields": "$2"
+          }}
+      ]
+  }
+
+struct_fields = { struct_field ~ ("," ~ struct_field)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+struct_field = { identifier ~ ":" ~ type_expr }
+  -> TypedParameter {
+      "commands": [
+          { "define": "field", "args": {
+              "name": "$1",
+              "type": "$2"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Impl Block (Trait Implementation)
+// ============================================================================
+
+// impl Display for Tensor { fn to_string(self) -> String { ... } }
+// impl Add<Tensor> for Tensor { type Output = Tensor; fn add(...) { ... } }
+impl_block = { "impl" ~ identifier ~ type_args_angle? ~ "for" ~ identifier ~ "{" ~ impl_item* ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_block", "args": {
+              "trait_name": "$1",
+              "trait_args": "$2",
+              "type_name": "$3",
+              "items": "$4"
+          }}
+      ]
+  }
+
+impl_item = { impl_assoc_type | impl_method }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// type Output = Tensor
+impl_assoc_type = { "type" ~ identifier ~ "=" ~ type_expr }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_assoc_type", "args": {
+              "name": "$1",
+              "type": "$2"
+          }}
+      ]
+  }
+
+impl_method = { fn_def }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// Type arguments in angle brackets (for trait impl)
+type_args_angle = { "<" ~ type_args ~ ">" }
+  -> List {
+      "get_child": { "index": 0 }
+  }
+
+// ============================================================================
+// Type Expressions
+// ============================================================================
+
+type_expr = { generic_type | array_type | simple_type }
+  -> TypedType {
+      "get_child": { "index": 0 }
+  }
+
+simple_type = { identifier }
+  -> TypedType {
+      "get_text": true,
+      "define": "named_type",
+      "args": { "name": "$result" }
+  }
+
+array_type = { "Array" ~ "<" ~ type_expr ~ ">" }
+  -> TypedType {
+      "commands": [
+          { "define": "array_type", "args": {
+              "element_type": "$1"
+          }}
+      ]
+  }
+
+generic_type = { identifier ~ "<" ~ type_args ~ ">" }
+  -> TypedType {
+      "commands": [
+          { "define": "generic_type", "args": {
+              "name": "$1",
+              "type_args": "$2"
+          }}
+      ]
+  }
+
+type_args = { type_expr ~ ("," ~ type_expr)* }
+  -> List {
+      "get_all_children": true
+  }
+
+// ============================================================================
 // Function Definition
 // ============================================================================
 
-// fn main() { ... }
-// fn process(x, y) { ... }
-fn_def = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ block }
+// Function definitions - split by presence of type params, params, and return type
+// to ensure predictable child indices (PEG doesn't emit placeholders for missing optionals)
+fn_def = { fn_def_generic_return | fn_def_generic | fn_def_return | fn_def_params | fn_def_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// fn map<T, U>(items) -> ReturnType { ... }
+fn_def_generic_return = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "params": "$3",
+              "return_type": "$4",
+              "body": "$5"
+          }}
+      ]
+  }
+
+// fn process<T>(x) { ... }
+fn_def_generic = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "params": "$3",
+              "return_type": "void",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// fn process(x, y) -> ReturnType { ... }
+fn_def_return = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
   -> TypedDeclaration {
       "commands": [
           { "define": "function", "args": {
               "name": "$1",
               "params": "$2",
-              "return_type": "auto",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// fn process(x, y) { ... } - with params, no return type
+fn_def_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "void",
               "body": "$3"
           }}
       ]
   }
 
-fn_params = { identifier ~ ("," ~ identifier)* }
+// fn main() { ... } - no params, no return type
+fn_def_simple = { "fn" ~ identifier ~ "(" ~ ")" ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "void",
+              "body": "$2"
+          }}
+      ]
+  }
+
+fn_params = { fn_param ~ ("," ~ fn_param)* }
   -> List {
       "get_all_children": true
+  }
+
+// Parameter is just identifier for now (dynamic typing)
+fn_param = { identifier }
+  -> TypedParameter {
+      "get_text": true,
+      "define": "param",
+      "args": { "name": "$result", "type": { "define": "primitive_type", "args": { "name": "i64" } } }
   }
 
 // ============================================================================
@@ -332,7 +711,8 @@ multiplicative_expr = { unary_expr ~ (multiplicative_op ~ unary_expr)* }
       "fold_left_ops": true
   }
 
-multiplicative_op = { "*" | "/" | "%" }
+// Note: "@" in quotes is a literal character, not the pest atomic rule marker
+multiplicative_op = { "@" | "*" | "/" | "%" }
   -> String {
       "get_text": true
   }
@@ -390,6 +770,7 @@ member_op = { "." ~ identifier }
 
 // Primary expressions
 primary_expr = {
+    extern_call |
     tensor_literal |
     array_literal |
     float_literal |
@@ -401,6 +782,19 @@ primary_expr = {
 }
   -> TypedExpression {
       "get_child": { "index": 0 }
+  }
+
+// Extern function call: extern name(args)
+// The extern keyword explicitly marks this as a call to a ZRTL builtin
+// The name is resolved via @builtin mappings (e.g., tensor_to_string -> $Tensor$to_string)
+extern_call = { "extern" ~ identifier ~ "(" ~ call_args? ~ ")" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "call", "args": {
+              "callee": { "define": "variable", "args": { "name": "$1" } },
+              "args": "$2"
+          }}
+      ]
   }
 
 // Grouped expression: (expr)
@@ -423,12 +817,13 @@ var_expr = { identifier }
 
 // Tensor literal: tensor([1.0, 2.0, 3.0])
 // Shape inference: tensor([[1, 2], [3, 4]]) -> shape [2, 2]
+// Uses standard call pattern - zyntax_embed handles builtin resolution
 tensor_literal = { "tensor" ~ "(" ~ array_literal ~ ")" }
   -> TypedExpression {
       "commands": [
-          { "define": "tensor_literal", "args": {
-              "data": "$1",
-              "dtype": "f32"
+          { "define": "call", "args": {
+              "callee": { "define": "variable", "args": { "name": "tensor_from_array" } },
+              "args": ["$1"]
           }}
       ]
   }

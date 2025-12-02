@@ -65,13 +65,29 @@ error_field = {
 format_expr = { "format!" ~ "(" ~ string_literal ~ ("," ~ rust_expr)* ~ ")" }
 
 // @builtin { trace: "$haxe$trace$int", print: "$io$print" }
-// Simple function name -> runtime symbol mappings for built-in functions
+// Supports three types of mappings:
+// - Functions (default): `println: "$IO$println"`
+// - Methods (prefix @): `@sum: "tensor_sum"` transforms x.sum() -> tensor_sum(x)
+// - Operators (prefix $): `$*: "vec_dot"` transforms x * y -> vec_dot(x, y)
 builtin_directive = {
     "@builtin" ~ "{" ~ builtin_def* ~ "}"
 }
 
 builtin_def = {
-    identifier ~ ":" ~ string_literal ~ ","?
+    builtin_name ~ ":" ~ string_literal ~ ","?
+}
+
+// Builtin name can be: identifier, @identifier (method), or $op (operator)
+builtin_name = @{
+    "@" ~ identifier   // Method: @sum, @mean, @reshape
+  | "$" ~ operator     // Operator: $*, $+, $-, $/, $==, $!=
+  | identifier         // Function: println, tensor_sum
+}
+
+// Operators that can be overloaded
+operator = @{
+    "==" | "!=" | "<=" | ">=" | "&&" | "||"  // Multi-char first
+  | "+" | "-" | "*" | "/" | "%" | "<" | ">" | "&" | "|" | "^" | "@"
 }
 
 // ===== Rule Definitions =====

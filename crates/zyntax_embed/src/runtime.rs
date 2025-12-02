@@ -804,8 +804,6 @@ impl ZyntaxRuntime {
     /// This performs the lowering pass to convert the TypedAST to HIR,
     /// which can then be compiled to machine code.
     fn lower_typed_program(&self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
-        eprintln!("[DEBUG] lower_typed_program: {:?}", serde_json::to_string_pretty(&program).unwrap_or_else(|_| "error".to_string()));
-
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
         use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry};
 
@@ -857,11 +855,24 @@ impl ZyntaxRuntime {
 
     /// Call a function and get the raw ZyntaxValue result
     ///
-    /// Note: This uses dynamic calling convention. For native (i32, i64) functions,
+    /// Note: This uses the stored function signature to determine the calling convention.
+    /// For void functions, it uses a void-returning call. For native (i32, i64) functions,
     /// use `call_native` with a signature instead.
     pub fn call_raw(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxValue> {
         let ptr = self.get_function_ptr(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+
+        // Check if this is a void function using the stored signature
+        if let Some(sig) = self.function_signatures.get(name) {
+            if sig.ret == NativeType::Void {
+                // For void functions, use the native calling convention
+                // SAFETY: We trust the function signature is correct
+                unsafe {
+                    call_native_with_signature(ptr, args, sig)?;
+                }
+                return Ok(ZyntaxValue::Void);
+            }
+        }
 
         // Convert arguments to DynamicValues
         let dynamic_args: Vec<DynamicValue> = args.iter()
@@ -1196,7 +1207,7 @@ impl ZyntaxRuntime {
     pub fn register_grammar(&mut self, language: &str, grammar: LanguageGrammar) {
         // Register builtin aliases from the grammar
         // This maps DSL-friendly names (e.g., "image_load") to plugin symbols (e.g., "$Image$load")
-        for (alias, target) in grammar.builtins() {
+        for (alias, target) in &grammar.builtins().functions {
             // If the target symbol is registered, create an alias for it
             if let Some(ext_func) = self.external_functions.get(target).cloned() {
                 self.external_functions.insert(alias.clone(), ext_func);
@@ -1625,6 +1636,18 @@ impl TieredRuntime {
 
         let ptr = self.backend.get_function_pointer(*func_id)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
+
+        // Check if this is a void function using the stored signature
+        if let Some(sig) = self.function_signatures.get(name) {
+            if sig.ret == NativeType::Void {
+                // For void functions, use the native calling convention
+                // SAFETY: We trust the function signature is correct
+                unsafe {
+                    call_native_with_signature(ptr, args, sig)?;
+                }
+                return Ok(ZyntaxValue::Void);
+            }
+        }
 
         // Convert arguments to DynamicValues
         let dynamic_args: Vec<DynamicValue> = args.iter()

@@ -78,11 +78,22 @@ pub struct TypeHelpers {
 }
 
 /// Built-in function mapping from @builtin directive
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct BuiltinMappings {
     /// Map of function name -> runtime symbol name
     /// e.g., "trace" -> "$haxe$trace$int"
+    #[serde(default)]
     pub functions: std::collections::HashMap<String, String>,
+    /// Map of method name -> list of builtin function names
+    /// e.g., "sum" -> ["tensor_sum", "audio_sum"] (receiver becomes first arg)
+    /// Used to transform `x.sum()` into `tensor_sum(x)` or `audio_sum(x)`
+    /// At runtime, the first matching function that accepts the receiver type is used
+    #[serde(default)]
+    pub methods: std::collections::HashMap<String, Vec<String>>,
+    /// Map of operator -> list of builtin function names for operator overloading
+    /// e.g., "*" -> ["vec_dot", "matrix_mul"] transforms `x * y` into the appropriate call
+    #[serde(default)]
+    pub operators: std::collections::HashMap<String, Vec<String>>,
 }
 
 /// A parsed .zyn grammar file

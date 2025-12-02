@@ -50,6 +50,9 @@ pub struct LLVMJitBackend<'ctx> {
     /// Runtime symbols to register with the execution engine
     /// Maps function name to function pointer address
     runtime_symbols: IndexMap<String, usize>,
+
+    /// Symbol signatures for auto-boxing (symbol name → signature)
+    symbol_signatures: Vec<crate::zrtl::RuntimeSymbolInfo>,
 }
 
 impl<'ctx> LLVMJitBackend<'ctx> {
@@ -73,7 +76,13 @@ impl<'ctx> LLVMJitBackend<'ctx> {
             function_pointers: IndexMap::new(),
             opt_level,
             runtime_symbols: IndexMap::new(),
+            symbol_signatures: Vec::new(),
         })
+    }
+
+    /// Register symbol signatures for auto-boxing support
+    pub fn register_symbol_signatures(&mut self, symbols: &[crate::zrtl::RuntimeSymbolInfo]) {
+        self.symbol_signatures.extend(symbols.iter().cloned());
     }
 
     /// Register a runtime symbol that will be available to JIT-compiled code
@@ -100,6 +109,10 @@ impl<'ctx> LLVMJitBackend<'ctx> {
     pub fn compile_module(&mut self, hir_module: &HirModule) -> CompilerResult<()> {
         // Step 1: Create backend and compile HIR → LLVM IR
         let mut backend = LLVMBackend::new(self.context, "zyntax_jit");
+
+        // Register symbol signatures for auto-boxing
+        backend.register_symbol_signatures(&self.symbol_signatures);
+
         let _llvm_ir = backend.compile_module(hir_module)?;
 
         // Step 2: Collect external function declarations from the module BEFORE consuming it

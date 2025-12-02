@@ -414,6 +414,65 @@ pub extern "C" fn tensor_full_f32(
     tensor
 }
 
+/// Create a tensor from a raw f32 pointer and count
+///
+/// # Arguments
+/// * `data` - Pointer to f32 array data
+/// * `count` - Number of elements
+///
+/// # Returns
+/// A 1D tensor containing a copy of the data
+///
+/// # Safety
+/// The caller must ensure `data` points to at least `count` f32 values
+#[no_mangle]
+pub extern "C" fn tensor_from_raw_f32(data: *const f32, count: usize) -> TensorPtr {
+    if data.is_null() || count == 0 {
+        return TENSOR_NULL;
+    }
+
+    unsafe {
+        let shape = [count];
+        let tensor = tensor_new(shape.as_ptr(), 1, DType::F32 as u8);
+        if tensor.is_null() {
+            return TENSOR_NULL;
+        }
+
+        let t = &*tensor;
+        std::ptr::copy_nonoverlapping(data, t.data as *mut f32, count);
+
+        tensor
+    }
+}
+
+/// Create a tensor from a ZRTL array of f32
+///
+/// # Arguments
+/// * `arr` - ZRTL array pointer (format: [i32 cap][i32 len][f32...])
+///
+/// # Returns
+/// A 1D tensor containing a copy of the array data
+#[no_mangle]
+pub extern "C" fn tensor_from_array_f32(arr: zrtl::ArrayConstPtr) -> TensorPtr {
+    if arr.is_null() {
+        return TENSOR_NULL;
+    }
+
+    unsafe {
+        let len = zrtl::array_length(arr) as usize;
+        if len == 0 {
+            return TENSOR_NULL;
+        }
+
+        let data_ptr: *const f32 = zrtl::array_data(arr);
+        if data_ptr.is_null() {
+            return TENSOR_NULL;
+        }
+
+        tensor_from_raw_f32(data_ptr, len)
+    }
+}
+
 /// Create a tensor with values from 0 to n-1
 #[no_mangle]
 pub extern "C" fn tensor_arange_f32(start: f32, end: f32, step: f32) -> TensorPtr {
@@ -1385,6 +1444,194 @@ pub extern "C" fn tensor_contiguous(tensor: TensorPtr) -> TensorPtr {
 }
 
 // ============================================================================
+// Display / Printing Functions
+// ============================================================================
+
+/// Print tensor contents to stdout
+/// Format: tensor([1.0, 2.0, 3.0], shape=[3], dtype=f32)
+#[no_mangle]
+pub extern "C" fn tensor_print(tensor: TensorPtr) {
+    use std::io::Write;
+
+    if tensor.is_null() {
+        print!("tensor(null)");
+        return;
+    }
+
+    unsafe {
+        let t = &*tensor;
+        let numel = t.numel();
+        let shape = &t.shape[..t.ndim as usize];
+
+        print!("tensor([");
+
+        // Print elements (limit to first 10 for readability)
+        let max_print = 10.min(numel);
+        for i in 0..max_print {
+            if i > 0 {
+                print!(", ");
+            }
+
+            // Get element value based on dtype
+            match t.dtype {
+                DType::F32 => {
+                    let val = *(t.data as *const f32).add(i);
+                    if val.fract() == 0.0 && val.abs() < 1e6 {
+                        print!("{:.1}", val);
+                    } else {
+                        print!("{:.6}", val);
+                    }
+                }
+                DType::F64 => {
+                    let val = *(t.data as *const f64).add(i);
+                    if val.fract() == 0.0 && val.abs() < 1e6 {
+                        print!("{:.1}", val);
+                    } else {
+                        print!("{:.6}", val);
+                    }
+                }
+                DType::I32 => print!("{}", *(t.data as *const i32).add(i)),
+                DType::I64 => print!("{}", *(t.data as *const i64).add(i)),
+                _ => print!("?"),
+            }
+        }
+
+        if numel > max_print {
+            print!(", ... ({} more)", numel - max_print);
+        }
+
+        print!("], shape=[");
+        for (i, &dim) in shape.iter().enumerate() {
+            if i > 0 {
+                print!(", ");
+            }
+            print!("{}", dim);
+        }
+        print!("]");
+
+        // Print dtype
+        match t.dtype {
+            DType::F32 => print!(", dtype=f32"),
+            DType::F64 => print!(", dtype=f64"),
+            DType::I32 => print!(", dtype=i32"),
+            DType::I64 => print!(", dtype=i64"),
+            _ => print!(", dtype=?"),
+        }
+
+        print!(")");
+        std::io::stdout().flush().ok();
+    }
+}
+
+/// Print tensor contents to stdout with newline
+#[no_mangle]
+pub extern "C" fn tensor_println(tensor: TensorPtr) {
+    tensor_print(tensor);
+    println!();
+}
+
+/// Convert tensor to string representation (for Display trait)
+/// Returns a ZRTL string (heap-allocated, caller takes ownership)
+/// Format: tensor([1.0, 2.0, 3.0], shape=[3], dtype=f32)
+#[no_mangle]
+pub extern "C" fn tensor_to_string(tensor: TensorPtr) -> *mut u8 {
+    let result = if tensor.is_null() {
+        "tensor(null)".to_string()
+    } else {
+        unsafe {
+            let t = &*tensor;
+            let numel = t.numel();
+            let shape = &t.shape[..t.ndim as usize];
+
+            let mut s = String::with_capacity(128);
+            s.push_str("tensor([");
+
+            // Format elements (limit to first 10 for readability)
+            let max_print = 10.min(numel);
+            for i in 0..max_print {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+
+                // Get element value based on dtype
+                match t.dtype {
+                    DType::F32 => {
+                        let val = *(t.data as *const f32).add(i);
+                        if val.fract() == 0.0 && val.abs() < 1e6 {
+                            s.push_str(&format!("{:.1}", val));
+                        } else {
+                            s.push_str(&format!("{:.6}", val));
+                        }
+                    }
+                    DType::F64 => {
+                        let val = *(t.data as *const f64).add(i);
+                        if val.fract() == 0.0 && val.abs() < 1e6 {
+                            s.push_str(&format!("{:.1}", val));
+                        } else {
+                            s.push_str(&format!("{:.6}", val));
+                        }
+                    }
+                    DType::I32 => s.push_str(&format!("{}", *(t.data as *const i32).add(i))),
+                    DType::I64 => s.push_str(&format!("{}", *(t.data as *const i64).add(i))),
+                    _ => s.push('?'),
+                }
+            }
+
+            if numel > max_print {
+                s.push_str(&format!(", ... ({} more)", numel - max_print));
+            }
+
+            s.push_str("], shape=[");
+            for (i, &dim) in shape.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&format!("{}", dim));
+            }
+            s.push(']');
+
+            // Add dtype
+            match t.dtype {
+                DType::F32 => s.push_str(", dtype=f32"),
+                DType::F64 => s.push_str(", dtype=f64"),
+                DType::I32 => s.push_str(", dtype=i32"),
+                DType::I64 => s.push_str(", dtype=i64"),
+                _ => s.push_str(", dtype=?"),
+            }
+
+            s.push(')');
+            s
+        }
+    };
+
+    // Convert to ZRTL string (null-terminated, heap-allocated)
+    let bytes = result.as_bytes();
+    let len = bytes.len();
+
+    // Allocate: [i32 cap][i32 len][bytes...][null]
+    let total_size = 8 + len + 1;
+    let layout = std::alloc::Layout::from_size_align(total_size, 4).unwrap();
+    let ptr = unsafe { std::alloc::alloc(layout) };
+
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    unsafe {
+        // Write capacity
+        *(ptr as *mut i32) = (len + 1) as i32;
+        // Write length
+        *(ptr.add(4) as *mut i32) = len as i32;
+        // Copy string data
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(8), len);
+        // Null terminate
+        *ptr.add(8 + len) = 0;
+    }
+
+    ptr
+}
+
+// ============================================================================
 // Plugin Registration
 // ============================================================================
 
@@ -1396,6 +1643,8 @@ zrtl_plugin! {
         ("$Tensor$zeros", tensor_zeros),
         ("$Tensor$ones", tensor_ones),
         ("$Tensor$full_f32", tensor_full_f32),
+        ("$Tensor$from_array_f32", tensor_from_array_f32),
+        ("$Tensor$from_raw_f32", tensor_from_raw_f32),
         ("$Tensor$arange_f32", tensor_arange_f32),
         ("$Tensor$linspace_f32", tensor_linspace_f32),
         ("$Tensor$rand_f32", tensor_rand_f32),
@@ -1438,6 +1687,11 @@ zrtl_plugin! {
 
         // Type conversion
         ("$Tensor$to_dtype", tensor_to_dtype),
+
+        // Display trait implementation
+        ("$Tensor$to_string", tensor_to_string),
+        ("$Tensor$print", tensor_print),
+        ("$Tensor$println", tensor_println),
     ]
 }
 

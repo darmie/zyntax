@@ -159,6 +159,13 @@ fn build_type_helpers(pair: Pair<Rule>) -> Result<TypeHelpers, String> {
 }
 
 /// Parse @builtin { name: "symbol", ... } directive
+///
+/// Supports three types of mappings:
+/// - Functions (default): `println: "$IO$println"` - direct function name mapping
+/// - Methods (prefix @): `@sum: "tensor_sum"` - `x.sum()` becomes `tensor_sum(x)`
+///   Multiple targets for same method: `@sum: "audio_sum"` adds to the list
+/// - Operators (prefix $): `$*: "vec_dot"` - `x * y` becomes `vec_dot(x, y)`
+///   Multiple targets for same operator: `$*: "matrix_mul"` adds to the list
 fn build_builtins(pair: Pair<Rule>) -> Result<BuiltinMappings, String> {
     let mut builtins = BuiltinMappings::default();
 
@@ -170,7 +177,26 @@ fn build_builtins(pair: Pair<Rule>) -> Result<BuiltinMappings, String> {
                 let name = name_pair.as_str().to_string();
                 if let Some(symbol_pair) = parts.next() {
                     let symbol = extract_string_value(&symbol_pair);
-                    builtins.functions.insert(name, symbol);
+
+                    // Check for method prefix (@) or operator prefix ($)
+                    if let Some(method_name) = name.strip_prefix('@') {
+                        // Method mapping: @sum -> tensor_sum means x.sum() -> tensor_sum(x)
+                        // Multiple definitions accumulate into a list for type-based dispatch
+                        builtins.methods
+                            .entry(method_name.to_string())
+                            .or_insert_with(Vec::new)
+                            .push(symbol);
+                    } else if let Some(op) = name.strip_prefix('$') {
+                        // Operator mapping: $* -> vec_dot means x * y -> vec_dot(x, y)
+                        // Multiple definitions accumulate into a list for type-based dispatch
+                        builtins.operators
+                            .entry(op.to_string())
+                            .or_insert_with(Vec::new)
+                            .push(symbol);
+                    } else {
+                        // Regular function mapping (single target)
+                        builtins.functions.insert(name, symbol);
+                    }
                 }
             }
         }

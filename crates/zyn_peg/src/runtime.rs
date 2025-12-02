@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::{Result, ZynPegError};
-use crate::ZynGrammar;
+use crate::{ZynGrammar, BuiltinMappings};
 
 // Re-export types from typed_ast for host function implementations
 pub use zyntax_typed_ast::{
@@ -82,10 +82,12 @@ pub struct ZpegMetadata {
     pub entry_point: Option<String>,
     /// ZynPEG version used to compile
     pub zpeg_version: String,
-    /// Built-in function mappings (function name -> runtime symbol)
-    /// e.g., "trace" -> "$haxe$trace$int"
+    /// Built-in mappings (functions, methods, and operators)
+    /// - Functions: "println" -> "$IO$println"
+    /// - Methods: "@sum" -> "tensor_sum" (x.sum() -> tensor_sum(x))
+    /// - Operators: "$*" -> "vec_dot" (x * y -> vec_dot(x, y))
     #[serde(default)]
-    pub builtins: HashMap<String, String>,
+    pub builtins: BuiltinMappings,
 }
 
 /// Commands for a single grammar rule
@@ -143,6 +145,18 @@ pub enum AstCommand {
     /// Fold postfix operations (primary followed by zero or more postfix ops)
     /// e.g., {"fold_postfix": true}
     FoldPostfix,
+    /// Apply unary operator to operand (handles optional unary prefix)
+    /// e.g., {"apply_unary": true}
+    ApplyUnary,
+    /// Fold left for binary operations with operators in the child list
+    /// e.g., {"fold_left_ops": true}
+    FoldLeftOps,
+    /// Fold left with custom operation (for pipe operator, etc.)
+    /// e.g., {"fold_left": {"op": "pipe", "transform": "prepend_arg"}}
+    FoldLeft {
+        op: String,
+        transform: Option<String>,
+    },
     /// Iterate over all children matching a rule
     /// e.g., {"type": "map_children", "rule": "statement", "commands": [...]}
     MapChildren {
@@ -289,17 +303,17 @@ pub trait AstHostFunctions {
     fn create_call(&mut self, callee: NodeHandle, args: Vec<NodeHandle>) -> NodeHandle;
 
     /// Create a function call expression with builtin resolution
-    /// If the callee is a simple identifier matching a builtin, use the runtime symbol instead
+    /// If the callee is a simple identifier matching a builtin function, use the runtime symbol instead
     fn create_call_with_builtin_resolution(
         &mut self,
         callee: NodeHandle,
         args: Vec<NodeHandle>,
-        builtins: &std::collections::HashMap<String, String>,
+        builtins: &BuiltinMappings,
     ) -> NodeHandle {
-        // Check if callee is an identifier that matches a builtin
+        // Check if callee is an identifier that matches a builtin function
         if let Some(name) = self.get_identifier_name(callee) {
-            log::trace!("[builtin resolution] callee name='{}', checking {} builtins", name, builtins.len());
-            if let Some(symbol) = builtins.get(&name) {
+            log::trace!("[builtin resolution] callee name='{}', checking {} builtins", name, builtins.functions.len());
+            if let Some(symbol) = builtins.functions.get(&name) {
                 log::trace!("[builtin resolution] found builtin '{}' -> '{}'", name, symbol);
                 // Create a new identifier with the runtime symbol name
                 let resolved_callee = self.create_identifier(symbol);
@@ -528,7 +542,7 @@ impl ZpegCompiler {
             file_extensions: grammar.language.file_extensions.clone(),
             entry_point: grammar.language.entry_point.clone(),
             zpeg_version: env!("CARGO_PKG_VERSION").to_string(),
-            builtins: grammar.builtins.functions.clone(),
+            builtins: grammar.builtins.clone(),
         };
 
         // Generate pest grammar
@@ -752,6 +766,28 @@ impl ZpegCompiler {
             // "fold_postfix": true
             if map.get("fold_postfix").is_some() {
                 commands.push(AstCommand::FoldPostfix);
+            }
+
+            // "apply_unary": true
+            if map.get("apply_unary").is_some() {
+                commands.push(AstCommand::ApplyUnary);
+            }
+
+            // "fold_left_ops": true
+            if map.get("fold_left_ops").is_some() {
+                commands.push(AstCommand::FoldLeftOps);
+            }
+
+            // "fold_left": { "op": "pipe", "transform": "prepend_arg" }
+            if let Some(val) = map.get("fold_left") {
+                let op = val.get("op")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let transform = val.get("transform")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                commands.push(AstCommand::FoldLeft { op, transform });
             }
         }
 
@@ -1223,7 +1259,7 @@ impl AstHostFunctions for TypedAstBuilder {
         &mut self,
         name: &str,
         params: Vec<NodeHandle>,
-        _return_type: NodeHandle,
+        return_type: NodeHandle,
         body: NodeHandle,
     ) -> NodeHandle {
         let span = self.default_span();
@@ -1251,10 +1287,15 @@ impl AstHostFunctions for TypedAstBuilder {
             TypedBlock { statements: vec![], span }
         };
 
+        // Get return type from handle, default to Unit (void)
+        let ret_type = self.types.get(&return_type)
+            .cloned()
+            .unwrap_or(Type::Primitive(PrimitiveType::Unit));
+
         let func = self.inner.function(
             name,
             typed_params,
-            Type::Primitive(PrimitiveType::I32),
+            ret_type,
             body_block,
             Visibility::Public,
             false,
@@ -1268,7 +1309,7 @@ impl AstHostFunctions for TypedAstBuilder {
         &mut self,
         name: &str,
         params: Vec<NodeHandle>,
-        _return_type: NodeHandle,
+        return_type: NodeHandle,
     ) -> NodeHandle {
         let span = self.default_span();
 
@@ -1284,11 +1325,16 @@ impl AstHostFunctions for TypedAstBuilder {
             })
             .collect();
 
+        // Get return type from handle, default to Unit (void)
+        let ret_type = self.types.get(&return_type)
+            .cloned()
+            .unwrap_or(Type::Primitive(PrimitiveType::Unit));
+
         // Create extern function (no body, is_external = true)
         let func = self.inner.extern_function(
             name,
             typed_params,
-            Type::Primitive(PrimitiveType::I32),
+            ret_type,
             Visibility::Public,
             span,
         );
@@ -1300,7 +1346,7 @@ impl AstHostFunctions for TypedAstBuilder {
         &mut self,
         name: &str,
         params: Vec<NodeHandle>,
-        _return_type: NodeHandle,
+        return_type: NodeHandle,
         body: NodeHandle,
     ) -> NodeHandle {
         let span = self.default_span();
@@ -1328,11 +1374,16 @@ impl AstHostFunctions for TypedAstBuilder {
             TypedBlock { statements: vec![], span }
         };
 
+        // Get return type from handle, default to Unit (void)
+        let ret_type = self.types.get(&return_type)
+            .cloned()
+            .unwrap_or(Type::Primitive(PrimitiveType::Unit));
+
         // Create async function (is_async = true)
         let func = self.inner.function(
             name,
             typed_params,
-            Type::Primitive(PrimitiveType::I32),
+            ret_type,
             body_block,
             Visibility::Public,
             true,  // is_async = true
@@ -2714,11 +2765,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
     /// Look up a builtin function by name, returning the runtime symbol if found
     pub fn lookup_builtin(&self, name: &str) -> Option<&str> {
-        self.module.metadata.builtins.get(name).map(|s| s.as_str())
+        self.module.metadata.builtins.functions.get(name).map(|s| s.as_str())
     }
 
     /// Get all builtin mappings
-    pub fn builtins(&self) -> &HashMap<String, String> {
+    pub fn builtins(&self) -> &BuiltinMappings {
         &self.module.metadata.builtins
     }
 
@@ -2942,12 +2993,30 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // For now, just pass through the first child (primary)
                 // If there are postfix ops, apply them left-to-right
 
-                let mut children: Vec<RuntimeValue> = Vec::new();
-                let mut i = 1;
-                while let Some(val) = self.variables.get(&format!("${}", i)) {
-                    children.push(val.clone());
-                    i += 1;
+                // Helper to unwrap nested single-element lists
+                fn unwrap_nested_list(val: RuntimeValue) -> RuntimeValue {
+                    match val {
+                        RuntimeValue::List(list) if list.len() == 1 => {
+                            unwrap_nested_list(list.into_iter().next().unwrap())
+                        }
+                        other => other,
+                    }
                 }
+
+                // First check value stack (from get_all_children)
+                let children: Vec<RuntimeValue> = if let Some(RuntimeValue::List(list)) = self.value_stack.pop() {
+                    // Flatten nested single-element lists
+                    list.into_iter().map(unwrap_nested_list).collect()
+                } else {
+                    // Fallback: collect from $N variables directly
+                    let mut children: Vec<RuntimeValue> = Vec::new();
+                    let mut i = 1;
+                    while let Some(val) = self.variables.get(&format!("${}", i)) {
+                        children.push(val.clone());
+                        i += 1;
+                    }
+                    children
+                };
                 log::trace!("[FoldPostfix] children.len()={}, children={:?}", children.len(), children);
 
                 if children.is_empty() {
@@ -2959,8 +3028,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     // Apply postfix ops left-to-right
                     // children[0] is primary, children[1..] are postfix ops
                     let mut result = children[0].clone();
+                    let postfix_ops = &children[1..];
+                    let mut idx = 0;
 
-                    for postfix_op in &children[1..] {
+                    while idx < postfix_ops.len() {
+                        let postfix_op = &postfix_ops[idx];
                         // Each postfix_op was created by call_postfix/field_postfix/index_postfix
                         // and has info stored in self.variables
                         if let (RuntimeValue::Node(base_h), RuntimeValue::Node(op_h)) = (&result, postfix_op) {
@@ -2991,28 +3063,361 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                                     log::trace!("[FoldPostfix] creating call with {} args", call_args.len());
                                     // Use builtin resolution to map function names to runtime symbols
                                     let new_node = self.host.create_call_with_builtin_resolution(
-                                        *base_h,
+                                        base_h.clone(),
                                         call_args,
                                         &self.module.metadata.builtins,
                                     );
                                     result = RuntimeValue::Node(new_node);
                                 } else if op_info.starts_with("field:") {
                                     let field_name = op_info.strip_prefix("field:").unwrap_or("");
-                                    let new_node = self.host.create_field_access(*base_h, field_name);
-                                    result = RuntimeValue::Node(new_node);
+
+                                    // Check if this is a method call: field access followed by call
+                                    // and the method name is in the methods map
+                                    let next_is_call = if idx + 1 < postfix_ops.len() {
+                                        if let RuntimeValue::Node(next_op_h) = &postfix_ops[idx + 1] {
+                                            let next_key = format!("$postfix_{}", next_op_h.0);
+                                            self.variables.get(&next_key)
+                                                .map(|v| matches!(v, RuntimeValue::String(s) if s.starts_with("call:")))
+                                                .unwrap_or(false)
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    };
+
+                                    // Check if this method name has a builtin mapping
+                                    if next_is_call {
+                                        if let Some(builtin_names) = self.module.metadata.builtins.methods.get(field_name) {
+                                            // Method mapping found! Transform x.method(args) -> builtin(x, args)
+                                            // Use the first builtin in the list (type-based dispatch can be added later)
+                                            let builtin_name = &builtin_names[0];
+                                            let next_op_h = if let RuntimeValue::Node(h) = &postfix_ops[idx + 1] { h } else { unreachable!() };
+                                            let args_key = format!("$postfix_{}_args", next_op_h.0);
+                                            let call_args: Vec<NodeHandle> = self.variables.get(&args_key)
+                                                .and_then(|v| match v {
+                                                    RuntimeValue::List(list) => Some(
+                                                        list.iter()
+                                                            .filter_map(|v| match v {
+                                                                RuntimeValue::Node(h) => Some(*h),
+                                                                _ => None,
+                                                            })
+                                                            .collect()
+                                                    ),
+                                                    _ => None,
+                                                })
+                                                .unwrap_or_default();
+
+                                            // Resolve the builtin name through function mappings (e.g., vec_dot -> $Vector$dot_product)
+                                            let resolved_name = self.module.metadata.builtins.functions.get(builtin_name)
+                                                .map(|s| s.clone())
+                                                .unwrap_or_else(|| builtin_name.to_string());
+
+                                            // Create call with receiver as first argument
+                                            let base_h_copy = base_h.clone();
+                                            let mut all_args = vec![base_h_copy];
+                                            all_args.extend(call_args);
+
+                                            // Create callee identifier for the resolved builtin
+                                            let callee = self.host.create_identifier(&resolved_name);
+                                            let new_node = self.host.create_call(callee, all_args);
+                                            log::trace!("[FoldPostfix] Method mapping: {}.{}() -> {}() [resolved: {}]",
+                                                base_h.0, field_name, builtin_name, resolved_name);
+                                            result = RuntimeValue::Node(new_node);
+
+                                            // Skip the next postfix op (the call) since we consumed it
+                                            idx += 1;
+                                            log::trace!("[FoldPostfix] Method mapping: {}.{}() -> {}()", field_name, field_name, builtin_name);
+                                        } else {
+                                            // No method mapping, create normal field access
+                                            let new_node = self.host.create_field_access(base_h.clone(), field_name);
+                                            result = RuntimeValue::Node(new_node);
+                                        }
+                                    } else {
+                                        // Not a method call, just field access
+                                        let new_node = self.host.create_field_access(base_h.clone(), field_name);
+                                        result = RuntimeValue::Node(new_node);
+                                    }
                                 } else if op_info.starts_with("index:") {
                                     let index_key = format!("$postfix_{}_index", op_h.0);
                                     if let Some(RuntimeValue::Node(index_h)) = self.variables.get(&index_key) {
-                                        let new_node = self.host.create_index(*base_h, *index_h);
+                                        let new_node = self.host.create_index(base_h.clone(), index_h.clone());
                                         result = RuntimeValue::Node(new_node);
                                     }
                                 }
                             } else {
                                 // Fallback to apply_postfix (original behavior)
-                                let new_node = self.host.apply_postfix(*base_h, *op_h);
+                                let new_node = self.host.apply_postfix(base_h.clone(), op_h.clone());
                                 result = RuntimeValue::Node(new_node);
                             }
                         }
+                        idx += 1;
+                    }
+
+                    self.value_stack.push(result);
+                }
+            }
+
+            AstCommand::ApplyUnary => {
+                // Apply unary operator: children = [op?, operand]
+                // If there's one child, it's just the operand - pass through
+                // If there are two children, first is operator string, second is operand
+                let mut children: Vec<RuntimeValue> = Vec::new();
+                let mut i = 1;
+                while let Some(val) = self.variables.get(&format!("${}", i)) {
+                    children.push(val.clone());
+                    i += 1;
+                }
+                log::trace!("[ApplyUnary] children.len()={}, children={:?}", children.len(), children);
+
+                // Helper to convert RuntimeValue to NodeHandle
+                let value_to_node = |host: &mut H, val: &RuntimeValue| -> Option<NodeHandle> {
+                    match val {
+                        RuntimeValue::Node(h) => Some(*h),
+                        RuntimeValue::Int(n) => Some(host.create_int_literal(*n)),
+                        RuntimeValue::Float(f) => Some(host.create_float_literal(*f)),
+                        RuntimeValue::Bool(b) => Some(host.create_bool_literal(*b)),
+                        RuntimeValue::String(s) => Some(host.create_variable(s)),
+                        RuntimeValue::List(list) => {
+                            // Unwrap single-element lists
+                            if list.len() == 1 {
+                                match &list[0] {
+                                    RuntimeValue::Node(h) => Some(*h),
+                                    RuntimeValue::Int(n) => Some(host.create_int_literal(*n)),
+                                    RuntimeValue::Float(f) => Some(host.create_float_literal(*f)),
+                                    RuntimeValue::Bool(b) => Some(host.create_bool_literal(*b)),
+                                    RuntimeValue::String(s) => Some(host.create_variable(s)),
+                                    _ => None,
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                };
+
+                // Helper to recursively unwrap nested single-element lists
+                fn unwrap_nested_list(val: RuntimeValue) -> RuntimeValue {
+                    match val {
+                        RuntimeValue::List(list) if list.len() == 1 => {
+                            unwrap_nested_list(list.into_iter().next().unwrap())
+                        }
+                        other => other,
+                    }
+                }
+
+                if children.is_empty() {
+                    self.value_stack.push(RuntimeValue::Null);
+                } else if children.len() == 1 {
+                    // No unary operator - pass through, unwrapping nested lists
+                    let result = unwrap_nested_list(children.into_iter().next().unwrap());
+                    self.value_stack.push(result);
+                } else {
+                    // First child is operator, second is operand
+                    let op_str = match &children[0] {
+                        RuntimeValue::String(s) => s.clone(),
+                        _ => "-".to_string(),
+                    };
+                    let operand = unwrap_nested_list(children[1].clone());
+                    if let Some(operand_h) = value_to_node(&mut self.host, &operand) {
+                        let new_node = self.host.create_unary_op(&op_str, operand_h);
+                        self.value_stack.push(RuntimeValue::Node(new_node));
+                    } else {
+                        self.value_stack.push(RuntimeValue::Null);
+                    }
+                }
+            }
+
+            AstCommand::FoldLeftOps => {
+                // Fold binary operations with operators interleaved
+                // children = [operand, op, operand, op, operand, ...]
+                // Same as FoldBinary but doesn't use named rules
+                let mut children: Vec<RuntimeValue> = Vec::new();
+                let mut i = 1;
+                while let Some(val) = self.variables.get(&format!("${}", i)) {
+                    children.push(val.clone());
+                    i += 1;
+                }
+                log::trace!("[FoldLeftOps] children.len()={}, children={:?}", children.len(), children);
+
+                // Helper to recursively unwrap nested single-element lists
+                fn unwrap_nested_list(val: RuntimeValue) -> RuntimeValue {
+                    match val {
+                        RuntimeValue::List(list) if list.len() == 1 => {
+                            unwrap_nested_list(list.into_iter().next().unwrap())
+                        }
+                        other => other,
+                    }
+                }
+
+                let value_to_node = |host: &mut H, val: &RuntimeValue| -> Option<NodeHandle> {
+                    let unwrapped = unwrap_nested_list(val.clone());
+                    match unwrapped {
+                        RuntimeValue::Node(h) => Some(h),
+                        RuntimeValue::Int(n) => Some(host.create_int_literal(n)),
+                        RuntimeValue::Float(f) => Some(host.create_float_literal(f)),
+                        RuntimeValue::Bool(b) => Some(host.create_bool_literal(b)),
+                        RuntimeValue::String(s) => {
+                            // If it looks like a number, parse it
+                            if let Ok(n) = s.parse::<i64>() {
+                                Some(host.create_int_literal(n))
+                            } else if let Ok(f) = s.parse::<f64>() {
+                                Some(host.create_float_literal(f))
+                            } else {
+                                Some(host.create_variable(&s))
+                            }
+                        }
+                        _ => None,
+                    }
+                };
+
+                if children.is_empty() {
+                    self.value_stack.push(RuntimeValue::Null);
+                } else if children.len() == 1 {
+                    // Single operand - unwrap and pass through
+                    let result = unwrap_nested_list(children.into_iter().next().unwrap());
+                    self.value_stack.push(result);
+                } else {
+                    // Fold: operand op operand op ...
+                    let first_val = unwrap_nested_list(children[0].clone());
+                    let mut result = if let Some(h) = value_to_node(&mut self.host, &first_val) {
+                        RuntimeValue::Node(h)
+                    } else {
+                        first_val
+                    };
+
+                    let mut idx = 1;
+                    while idx + 1 < children.len() {
+                        let op = &children[idx];
+                        let right = unwrap_nested_list(children[idx + 1].clone());
+
+                        let op_str = match op {
+                            RuntimeValue::String(s) => s.clone(),
+                            _ => "+".to_string(),
+                        };
+
+                        let right_node = value_to_node(&mut self.host, &right);
+
+                        if let (RuntimeValue::Node(left_h), Some(right_h)) = (&result, right_node) {
+                            let left_h = *left_h; // Copy to avoid borrow
+                            // Check if this operator has a builtin overload
+                            if let Some(builtin_names) = self.module.metadata.builtins.operators.get(&op_str) {
+                                // Operator overload found! Transform x op y -> builtin(x, y)
+                                // Use the first builtin in the list (type-based dispatch can be added later)
+                                let builtin_name = &builtin_names[0];
+                                // Resolve the builtin name through function mappings (e.g., vec_dot -> $Vector$dot_product)
+                                let resolved_name = self.module.metadata.builtins.functions.get(builtin_name)
+                                    .map(|s| s.as_str())
+                                    .unwrap_or(builtin_name);
+                                let callee = self.host.create_identifier(resolved_name);
+                                let new_node = self.host.create_call(callee, vec![left_h, right_h]);
+                                result = RuntimeValue::Node(new_node);
+                                log::trace!("[FoldLeftOps] Operator overload: {} {} {} -> {}({}, {}) [resolved: {}]",
+                                    left_h.0, op_str, right_h.0, builtin_name, left_h.0, right_h.0, resolved_name);
+                            } else {
+                                // No overload, use standard binary op
+                                let new_node = self.host.create_binary_op(&op_str, left_h, right_h);
+                                result = RuntimeValue::Node(new_node);
+                            }
+                        }
+
+                        idx += 2;
+                    }
+
+                    self.value_stack.push(result);
+                }
+            }
+
+            AstCommand::FoldLeft { op, transform } => {
+                // Fold left with custom operation
+                // For pipes: a |> f(b) |> g() becomes g(f(a, b))
+                let mut children: Vec<RuntimeValue> = Vec::new();
+                let mut i = 1;
+                while let Some(val) = self.variables.get(&format!("${}", i)) {
+                    children.push(val.clone());
+                    i += 1;
+                }
+                log::trace!("[FoldLeft] op={:?}, transform={:?}, children.len()={}, children={:?}", op, transform, children.len(), children);
+
+                // Helper to recursively unwrap nested single-element lists
+                fn unwrap_nested_list(val: RuntimeValue) -> RuntimeValue {
+                    match val {
+                        RuntimeValue::List(list) if list.len() == 1 => {
+                            unwrap_nested_list(list.into_iter().next().unwrap())
+                        }
+                        other => other,
+                    }
+                }
+
+                let value_to_node = |host: &mut H, val: &RuntimeValue| -> Option<NodeHandle> {
+                    let unwrapped = unwrap_nested_list(val.clone());
+                    match unwrapped {
+                        RuntimeValue::Node(h) => Some(h),
+                        RuntimeValue::Int(n) => Some(host.create_int_literal(n)),
+                        RuntimeValue::Float(f) => Some(host.create_float_literal(f)),
+                        RuntimeValue::Bool(b) => Some(host.create_bool_literal(b)),
+                        RuntimeValue::String(s) => Some(host.create_variable(&s)),
+                        _ => None,
+                    }
+                };
+
+                if children.is_empty() {
+                    self.value_stack.push(RuntimeValue::Null);
+                } else if children.len() == 1 {
+                    let result = unwrap_nested_list(children.into_iter().next().unwrap());
+                    self.value_stack.push(result);
+                } else if op == "pipe" {
+                    // Pipe transform: a |> f(b) becomes f(a, b)
+                    // children[0] is the initial value
+                    // children[1..] are pipe targets with callee and args
+                    let first_val = unwrap_nested_list(children[0].clone());
+                    let mut result = if let Some(h) = value_to_node(&mut self.host, &first_val) {
+                        RuntimeValue::Node(h)
+                    } else {
+                        first_val
+                    };
+
+                    for pipe_target in &children[1..] {
+                        // pipe_target should be a PipeTarget node with callee and args
+                        // For now, handle it as a call where we prepend the current result
+                        if let RuntimeValue::Node(target_h) = pipe_target {
+                            // Get the target info from variables
+                            let target_key = format!("$pipe_target_{}", target_h.0);
+                            if let Some(info) = self.variables.get(&target_key) {
+                                log::trace!("[FoldLeft] pipe target info: {:?}", info);
+                            }
+                            // For now, apply as a function call with result prepended
+                            if let RuntimeValue::Node(res_h) = &result {
+                                // Use apply_postfix for now
+                                let new_node = self.host.apply_postfix(*res_h, *target_h);
+                                result = RuntimeValue::Node(new_node);
+                            }
+                        }
+                    }
+
+                    self.value_stack.push(result);
+                } else {
+                    // Generic fold_left for logical operators (||, &&)
+                    let first_val = unwrap_nested_list(children[0].clone());
+                    let mut result = if let Some(h) = value_to_node(&mut self.host, &first_val) {
+                        RuntimeValue::Node(h)
+                    } else {
+                        first_val
+                    };
+
+                    // For ||, &&: children alternate between operands
+                    let mut idx = 1;
+                    while idx < children.len() {
+                        let right = unwrap_nested_list(children[idx].clone());
+                        let right_node = value_to_node(&mut self.host, &right);
+
+                        if let (RuntimeValue::Node(left_h), Some(right_h)) = (&result, right_node) {
+                            let new_node = self.host.create_binary_op(&op, *left_h, right_h);
+                            result = RuntimeValue::Node(new_node);
+                        }
+
+                        idx += 1;
                     }
 
                     self.value_stack.push(result);
@@ -3278,7 +3683,12 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => self.host.create_block(vec![]),
                 };
 
-                let return_type = self.host.create_primitive_type("i32");
+                // Get return type from args, default to void for ZynML-style dynamic functions
+                let return_type = match args.get("return_type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    Some(RuntimeValue::String(s)) => self.host.create_primitive_type(s),
+                    _ => self.host.create_primitive_type("void"),
+                };
                 let handle = self.host.create_function(&name, params, return_type, body);
                 Ok(RuntimeValue::Node(handle))
             }
@@ -3307,7 +3717,12 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => self.host.create_block(vec![]),
                 };
 
-                let return_type = self.host.create_primitive_type("i32");
+                // Get return type from args, default to void
+                let return_type = match args.get("return_type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    Some(RuntimeValue::String(s)) => self.host.create_primitive_type(s),
+                    _ => self.host.create_primitive_type("void"),
+                };
                 let handle = self.host.create_async_function(&name, params, return_type, body);
                 Ok(RuntimeValue::Node(handle))
             }
@@ -3513,6 +3928,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            // Type inference marker - tells type checker to infer the type
+            "infer_type" | "auto" | "var" => {
+                // Return None/null to indicate type should be inferred
+                // The type checker will infer the type from the initializer
+                Ok(RuntimeValue::Null)
+            }
+
             // ===== ADDITIONAL EXPRESSIONS =====
 
             "char_literal" => {
@@ -3654,7 +4076,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             // Postfix operation markers - store info for later application in apply_postfix
             // These are handled specially since they need to interact with TypedAstBuilder's postfix_ops
-            "call_postfix" => {
+            // "call_args" is an alias used in ZynML grammar
+            "call_postfix" | "call_args" => {
                 // Extract call arguments
                 let call_args: Vec<NodeHandle> = match args.get("args") {
                     Some(RuntimeValue::List(list)) => {
@@ -3689,7 +4112,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
-            "field_postfix" => {
+            // "member" is an alias used in ZynML grammar for field access
+            "field_postfix" | "member" => {
                 let field_name = match args.get("field") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     Some(RuntimeValue::Node(h)) => {
@@ -3712,10 +4136,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
-            "index_postfix" => {
+            // "index" is an alias used in ZynML grammar
+            "index_postfix" | "index" => {
                 let index = match args.get("index") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("index_postfix: missing index".into())),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("index_postfix/index: missing index".into())),
                 };
                 log::trace!("[define_node] index_postfix with index={:?}", index);
                 let handle = self.host.create_int_literal(0); // Marker placeholder

@@ -205,7 +205,7 @@ impl LanguageGrammar {
     }
 
     /// Get the builtin function mappings
-    pub fn builtins(&self) -> &HashMap<String, String> {
+    pub fn builtins(&self) -> &zyn_peg::BuiltinMappings {
         &self.module.metadata.builtins
     }
 

@@ -412,6 +412,38 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_minimal_function() {
+        // Enable logging for this test
+        let _ = env_logger::builder().is_test(true).filter_level(log::LevelFilter::Trace).try_init();
+
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
+
+        // Print the generated pest grammar for debugging
+        println!("=== Generated Pest Grammar ===");
+        let pest_grammar = grammar.pest_grammar();
+        // Print block-related rules
+        for line in pest_grammar.lines() {
+            if line.contains("block") || line.contains("statement") || line.contains("fn_def") {
+                println!("{}", line);
+            }
+        }
+        println!("=== End relevant pest grammar ===\n");
+
+        // Parse the simplest possible function
+        let source = r#"fn main() { let x = 42 }"#;
+
+        let result = grammar.parse_to_json(source);
+        assert!(result.is_ok(), "Should parse minimal function: {:?}", result.err());
+
+        // Pretty-print the JSON AST for debugging
+        let json = result.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let pretty = serde_json::to_string_pretty(&parsed).unwrap();
+        println!("=== Minimal Function AST ===");
+        println!("{}", pretty);
+    }
+
+    #[test]
     fn test_parse_hello_example() {
         let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).unwrap();
 
@@ -439,6 +471,13 @@ mod tests {
 
         let result = grammar.parse_to_json(source);
         assert!(result.is_ok(), "Should parse hello example: {:?}", result.err());
+
+        // Pretty-print the JSON AST for debugging
+        let json = result.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let pretty = serde_json::to_string_pretty(&parsed).unwrap();
+        println!("=== Hello Example AST ===");
+        println!("{}", pretty);
     }
 
     #[test]

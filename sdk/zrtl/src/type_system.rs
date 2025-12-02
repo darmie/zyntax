@@ -96,6 +96,8 @@ impl TypeFlags {
     pub const ARC: Self = Self(0x08);
     pub const WEAK: Self = Self(0x10);
     pub const PINNED: Self = Self(0x20);
+    /// Type implements Display trait (has to_string function)
+    pub const DISPLAY: Self = Self(0x40);
 
     /// Check if a flag is set
     #[inline]
@@ -137,6 +139,12 @@ impl TypeFlags {
     #[inline]
     pub fn is_arc(&self) -> bool {
         self.contains(Self::ARC)
+    }
+
+    /// Check if type implements Display (has to_string function)
+    #[inline]
+    pub fn implements_display(&self) -> bool {
+        self.contains(Self::DISPLAY)
     }
 }
 
@@ -237,6 +245,18 @@ impl TypeTag {
         Self::new(self.category(), self.type_id(), self.flags().with(TypeFlags::NULLABLE))
     }
 
+    /// Create a version with Display trait
+    #[inline]
+    pub fn with_display(self) -> Self {
+        Self::new(self.category(), self.type_id(), self.flags().with(TypeFlags::DISPLAY))
+    }
+
+    /// Check if type implements Display
+    #[inline]
+    pub fn implements_display(&self) -> bool {
+        self.flags().implements_display()
+    }
+
     // Pre-defined type tags for primitives
     pub const VOID: Self = Self::new(TypeCategory::Void, 0, TypeFlags::NONE);
     pub const BOOL: Self = Self::new(TypeCategory::Bool, 0, TypeFlags::NONE);
@@ -313,6 +333,22 @@ mod tests {
         let without_nullable = flags.without(TypeFlags::NULLABLE);
         assert!(!without_nullable.is_nullable());
         assert!(without_nullable.is_mutable());
+    }
+
+    #[test]
+    fn test_display_flag() {
+        let flags = TypeFlags::DISPLAY;
+        assert!(flags.implements_display());
+        assert!(!TypeFlags::NONE.implements_display());
+
+        // Test with_display on TypeTag
+        let opaque_tag = TypeTag::new(TypeCategory::Opaque, 1, TypeFlags::NONE);
+        assert!(!opaque_tag.implements_display());
+
+        let displayable = opaque_tag.with_display();
+        assert!(displayable.implements_display());
+        assert_eq!(displayable.category(), TypeCategory::Opaque);
+        assert_eq!(displayable.type_id(), 1);
     }
 
     #[test]

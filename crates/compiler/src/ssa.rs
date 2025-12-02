@@ -698,7 +698,19 @@ impl SsaBuilder {
             }
 
             TypedTerminator::Unreachable => {
-                HirTerminator::Unreachable
+                // For void functions, convert Unreachable to Return(None)
+                // This handles functions that don't have an explicit return statement
+                let is_void_return = match &self.original_return_type {
+                    Some(Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit)) => true,
+                    None => false, // No return type info - keep as unreachable
+                    _ => false,
+                };
+
+                if is_void_return {
+                    HirTerminator::Return { values: vec![] }
+                } else {
+                    HirTerminator::Unreachable
+                }
             }
         };
 
@@ -1668,37 +1680,89 @@ impl SsaBuilder {
             }
 
             TypedExpression::Array(elements) => {
-                // Create array type
+                // Create ZRTL array format: [i32 capacity][i32 length][elements...]
+                // This format allows plugins to safely read array length
                 let elem_ty = if let Type::Array { element_type, .. } = &expr.ty {
                     self.convert_type(element_type)
                 } else {
                     HirType::I64 // Fallback
                 };
 
-                let array_ty = HirType::Array(Box::new(elem_ty.clone()), elements.len() as u64);
-                let alloc_result = self.create_value(array_ty.clone(), HirValueKind::Instruction);
+                // Calculate element size based on type
+                let elem_size = match &elem_ty {
+                    HirType::I8 | HirType::U8 | HirType::Bool => 1,
+                    HirType::I16 | HirType::U16 => 2,
+                    HirType::I32 | HirType::U32 | HirType::F32 => 4,
+                    HirType::I64 | HirType::U64 | HirType::F64 | HirType::Ptr(_) => 8,
+                    HirType::I128 | HirType::U128 => 16,
+                    _ => 8, // Default for complex types
+                };
+                let num_elements = elements.len();
+
+                // ZRTL array header: 8 bytes (capacity i32 + length i32)
+                const ZRTL_HEADER_BYTES: usize = 8;
+                let total_size = ZRTL_HEADER_BYTES + num_elements * elem_size;
+
+                // Allocate raw bytes for the entire ZRTL array
+                let alloc_ty = HirType::Array(Box::new(HirType::U8), total_size as u64);
+                let alloc_result = self.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
 
                 self.add_instruction(block_id, HirInstruction::Alloca {
                     result: alloc_result,
-                    ty: array_ty.clone(),
+                    ty: alloc_ty,
                     count: None,
                     align: 8,
                 });
 
-                // Initialize each element
+                // Store capacity at offset 0 (i32)
+                let cap_const = self.create_value(HirType::I32, HirValueKind::Constant(crate::hir::HirConstant::I32(num_elements as i32)));
+                self.add_instruction(block_id, HirInstruction::Store {
+                    value: cap_const,
+                    ptr: alloc_result,
+                    align: 4,
+                    volatile: false,
+                });
+
+                // Store length at offset 4 (i32) - need to calculate ptr + 4
+                let len_const = self.create_value(HirType::I32, HirValueKind::Constant(crate::hir::HirConstant::I32(num_elements as i32)));
+                let offset_4 = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(4)));
+                let len_ptr = self.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
+                self.add_instruction(block_id, HirInstruction::GetElementPtr {
+                    result: len_ptr,
+                    ty: HirType::U8, // Base type for byte offset calculation
+                    ptr: alloc_result,
+                    indices: vec![offset_4],
+                });
+                self.add_instruction(block_id, HirInstruction::Store {
+                    value: len_const,
+                    ptr: len_ptr,
+                    align: 4,
+                    volatile: false,
+                });
+
+                // Store each element starting at offset 8
                 for (i, elem_expr) in elements.iter().enumerate() {
                     let elem_val = self.translate_expression(block_id, elem_expr)?;
 
-                    let insert_result = self.create_value(array_ty.clone(), HirValueKind::Instruction);
-                    self.add_instruction(block_id, HirInstruction::InsertValue {
-                        result: insert_result,
-                        ty: array_ty.clone(),
-                        aggregate: alloc_result,
+                    let offset = ZRTL_HEADER_BYTES + i * elem_size;
+                    let offset_const = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(offset as i64)));
+                    let elem_ptr = self.create_value(HirType::Ptr(Box::new(elem_ty.clone())), HirValueKind::Instruction);
+                    self.add_instruction(block_id, HirInstruction::GetElementPtr {
+                        result: elem_ptr,
+                        ty: HirType::U8, // Base type for byte offset calculation
+                        ptr: alloc_result,
+                        indices: vec![offset_const],
+                    });
+
+                    self.add_instruction(block_id, HirInstruction::Store {
                         value: elem_val,
-                        indices: vec![i as u32],
+                        ptr: elem_ptr,
+                        align: elem_size.min(8) as u32,
+                        volatile: false,
                     });
                 }
 
+                // Return pointer to the ZRTL array header
                 Ok(alloc_result)
             }
 
