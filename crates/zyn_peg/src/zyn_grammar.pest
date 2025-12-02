@@ -12,6 +12,7 @@ directive = {
   | type_helpers_directive
   | error_messages_directive
   | builtin_directive
+  | types_directive
 }
 
 // @language { name: "Zig", version: "0.11", file_extensions: [".zig", ".zyn"] }
@@ -89,6 +90,21 @@ operator = @{
     "==" | "!=" | "<=" | ">=" | "&&" | "||"  // Multi-char first
   | "+" | "-" | "*" | "/" | "%" | "<" | ">" | "&" | "|" | "^" | "@"
 }
+
+// @types { opaque: [$Tensor, $Audio], returns: { tensor: $Tensor, audio_load: $Audio } }
+// Declares opaque types and function return types for trait dispatch
+types_directive = {
+    "@types" ~ "{" ~ types_def* ~ "}"
+}
+
+types_def = {
+    "opaque" ~ ":" ~ "[" ~ type_name ~ ("," ~ type_name)* ~ "]" ~ ","?
+  | "returns" ~ ":" ~ "{" ~ return_def ~ ("," ~ return_def)* ~ ","? ~ "}" ~ ","?
+}
+
+return_def = { identifier ~ ":" ~ type_name }
+
+type_name = @{ "$"? ~ identifier }
 
 // ===== Rule Definitions =====
 

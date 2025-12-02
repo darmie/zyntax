@@ -2956,6 +2956,11 @@ impl SsaBuilder {
                     packed: false,
                 })
             },
+            Type::Extern { name, .. } => {
+                // Extern/Opaque types are pointers to opaque structs at the HIR level
+                // The name is used for trait dispatch (e.g., $Tensor -> $Tensor$add)
+                HirType::Ptr(Box::new(HirType::Opaque(*name)))
+            },
             _ => HirType::I64, // Default for complex types
         }
     }
@@ -3044,7 +3049,8 @@ impl SsaBuilder {
         let type_name = type_name.unwrap();
 
         // Construct the method symbol name: $TypeName$method
-        let method_symbol = format!("${}${}", type_name, method_name);
+        // Note: type_name already includes the $ prefix (e.g., "$Tensor")
+        let method_symbol = format!("{}${}", type_name, method_name);
         log::debug!("[SSA] Operator trait dispatch: {} for type {}", method_symbol, type_name);
 
         // Translate arguments
@@ -3078,9 +3084,33 @@ impl SsaBuilder {
     /// Check if a type should use trait dispatch for operators
     fn is_trait_dispatchable_type(&self, ty: &Type) -> bool {
         match ty {
-            // Named types - check if the HIR conversion results in an opaque type
+            // Extern types - ZRTL-backed opaque types, always use trait dispatch
+            Type::Extern { name, .. } => {
+                let name_str = name.resolve_global()
+                    .unwrap_or_else(|| {
+                        let arena = self.arena.lock().unwrap();
+                        arena.resolve_string(*name)
+                            .map(|s| s.to_string())
+                            .unwrap_or_default()
+                    });
+                log::debug!("[trait_dispatch] Type::Extern name='{}' -> dispatchable", name_str);
+                true
+            }
+            // Named types - check if it's a ZRTL-backed type (name starts with $)
             Type::Named { id, .. } => {
-                // Convert to HIR type and check if it's opaque
+                // Check the type name from registry
+                if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                    let name = type_def.name.resolve_global()
+                        .unwrap_or_else(|| {
+                            let arena = self.arena.lock().unwrap();
+                            arena.resolve_string(type_def.name)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        });
+                    // ZRTL opaque types start with $
+                    return name.starts_with('$');
+                }
+                // Also check HIR conversion
                 let hir_ty = self.convert_type(ty);
                 matches!(hir_ty, HirType::Opaque(_))
             }
@@ -3091,9 +3121,21 @@ impl SsaBuilder {
         }
     }
 
-    /// Get the symbol prefix for a type (e.g., "Tensor" for $Tensor$add)
+    /// Get the symbol prefix for a type (e.g., "$Tensor" for $Tensor$add)
     fn get_type_symbol_prefix(&self, ty: &Type) -> Option<String> {
         match ty {
+            // Extern types have the name directly
+            Type::Extern { name, .. } => {
+                let name_str = name.resolve_global()
+                    .unwrap_or_else(|| {
+                        let arena = self.arena.lock().unwrap();
+                        arena.resolve_string(*name)
+                            .map(|s| s.to_string())
+                            .unwrap_or_default()
+                    });
+                log::debug!("[trait_dispatch] Type::Extern prefix: '{}'", name_str);
+                Some(name_str)
+            }
             Type::Named { id, .. } => {
                 if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
                     // Use the type name
@@ -3116,8 +3158,7 @@ impl SsaBuilder {
                                     .map(|s| s.to_string())
                                     .unwrap_or_default()
                             });
-                        // Remove $ prefix if present
-                        Some(name_str.trim_start_matches('$').to_string())
+                        Some(name_str)
                     } else {
                         None
                     }

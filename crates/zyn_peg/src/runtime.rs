@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::{Result, ZynPegError};
-use crate::{ZynGrammar, BuiltinMappings};
+use crate::{ZynGrammar, BuiltinMappings, TypeDeclarations};
 
 // Re-export types from typed_ast for host function implementations
 pub use zyntax_typed_ast::{
@@ -88,6 +88,10 @@ pub struct ZpegMetadata {
     /// - Operators: "$*" -> "vec_dot" (x * y -> vec_dot(x, y))
     #[serde(default)]
     pub builtins: BuiltinMappings,
+    /// Type declarations for opaque types and function return types
+    /// Used for proper type tracking during lowering for operator trait dispatch
+    #[serde(default)]
+    pub types: TypeDeclarations,
 }
 
 /// Commands for a single grammar rule
@@ -302,23 +306,42 @@ pub trait AstHostFunctions {
     /// Create a function call expression
     fn create_call(&mut self, callee: NodeHandle, args: Vec<NodeHandle>) -> NodeHandle;
 
-    /// Create a function call expression with builtin resolution
+    /// Create a function call expression with explicit return type
+    /// Used when we know the return type from @types directive
+    fn create_call_with_return_type(&mut self, callee: NodeHandle, args: Vec<NodeHandle>, return_type: Option<&str>) -> NodeHandle {
+        // Default implementation ignores return type
+        self.create_call(callee, args)
+    }
+
+    /// Create a function call expression with builtin and type resolution
     /// If the callee is a simple identifier matching a builtin function, use the runtime symbol instead
+    /// Also looks up return types from @types directive for proper opaque type tracking
     fn create_call_with_builtin_resolution(
         &mut self,
         callee: NodeHandle,
         args: Vec<NodeHandle>,
         builtins: &BuiltinMappings,
+        types: &TypeDeclarations,
     ) -> NodeHandle {
         // Check if callee is an identifier that matches a builtin function
         if let Some(name) = self.get_identifier_name(callee) {
             log::trace!("[builtin resolution] callee name='{}', checking {} builtins", name, builtins.functions.len());
+
+            // Look up return type from @types directive
+            let return_type = types.function_returns.get(&name).map(|s| s.as_str());
+            if return_type.is_some() {
+                log::trace!("[builtin resolution] found return type for '{}': {:?}", name, return_type);
+            }
+
             if let Some(symbol) = builtins.functions.get(&name) {
                 log::trace!("[builtin resolution] found builtin '{}' -> '{}'", name, symbol);
                 // Create a new identifier with the runtime symbol name
                 let resolved_callee = self.create_identifier(symbol);
-                return self.create_call(resolved_callee, args);
+                return self.create_call_with_return_type(resolved_callee, args, return_type);
             }
+
+            // Not a builtin, but might have return type info
+            return self.create_call_with_return_type(callee, args, return_type);
         } else {
             log::trace!("[builtin resolution] callee is not an identifier");
         }
@@ -543,6 +566,7 @@ impl ZpegCompiler {
             entry_point: grammar.language.entry_point.clone(),
             zpeg_version: env!("CARGO_PKG_VERSION").to_string(),
             builtins: grammar.builtins.clone(),
+            types: grammar.types.clone(),
         };
 
         // Generate pest grammar
@@ -1483,6 +1507,10 @@ impl AstHostFunctions for TypedAstBuilder {
     }
 
     fn create_call(&mut self, callee: NodeHandle, args: Vec<NodeHandle>) -> NodeHandle {
+        self.create_call_with_return_type(callee, args, None)
+    }
+
+    fn create_call_with_return_type(&mut self, callee: NodeHandle, args: Vec<NodeHandle>, return_type: Option<&str>) -> NodeHandle {
         let span = self.default_span();
 
         let callee_expr = self.get_expr(callee)
@@ -1492,7 +1520,35 @@ impl AstHostFunctions for TypedAstBuilder {
             .filter_map(|h| self.get_expr(*h))
             .collect();
 
-        let expr = self.inner.call_positional(callee_expr, arg_exprs, Type::Primitive(PrimitiveType::I32), span);
+        // Convert return type string to Type
+        // Opaque types (starting with $) become Extern types which are pointers at the HIR level
+        let ty = match return_type {
+            Some(type_name) if type_name.starts_with('$') => {
+                // This is an opaque type - create an Extern type
+                // The type name without $ is used as the extern type name
+                log::trace!("[create_call] opaque return type: {}", type_name);
+                Type::Extern {
+                    name: InternedString::new_global(type_name),
+                    layout: None,
+                }
+            }
+            Some(type_name) => {
+                // Regular named type - try to parse it
+                log::trace!("[create_call] named return type: {}", type_name);
+                match type_name {
+                    "i32" | "I32" => Type::Primitive(PrimitiveType::I32),
+                    "i64" | "I64" => Type::Primitive(PrimitiveType::I64),
+                    "f32" | "F32" => Type::Primitive(PrimitiveType::F32),
+                    "f64" | "F64" => Type::Primitive(PrimitiveType::F64),
+                    "bool" | "Bool" => Type::Primitive(PrimitiveType::Bool),
+                    "void" | "Void" | "()" => Type::Primitive(PrimitiveType::Unit),
+                    _ => Type::Primitive(PrimitiveType::I32), // Default for unknown types
+                }
+            }
+            None => Type::Primitive(PrimitiveType::I32), // Default when no return type specified
+        };
+
+        let expr = self.inner.call_positional(callee_expr, arg_exprs, ty, span);
         self.store_expr(expr)
     }
 
@@ -3066,6 +3122,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                                         base_h.clone(),
                                         call_args,
                                         &self.module.metadata.builtins,
+                                        &self.module.metadata.types,
                                     );
                                     result = RuntimeValue::Node(new_node);
                                 } else if op_info.starts_with("field:") {
@@ -3983,6 +4040,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     callee,
                     call_args,
                     &self.module.metadata.builtins,
+                    &self.module.metadata.types,
                 );
                 Ok(RuntimeValue::Node(handle))
             }

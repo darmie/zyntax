@@ -185,6 +185,54 @@
 }
 
 // ============================================================================
+// Type Declarations for Opaque Types and Return Type Tracking
+// ============================================================================
+// Declares opaque types (ZRTL-backed pointer types) and function return types
+// so the compiler can properly track types for operator trait dispatch.
+
+@types {
+    // Opaque types - these are pointer types backed by ZRTL plugins
+    opaque: [$Tensor, $Audio, $Model, $Vector, $Text, $BPETokenizer, $FlatIndex, $HNSWIndex],
+
+    // Function return types - tells the compiler what type each function returns
+    returns: {
+        // Tensor operations return $Tensor
+        tensor: $Tensor,
+        tensor_from_array: $Tensor,
+        tensor_zeros: $Tensor,
+        tensor_ones: $Tensor,
+        tensor_full: $Tensor,
+        tensor_arange: $Tensor,
+        tensor_linspace: $Tensor,
+        tensor_rand: $Tensor,
+        tensor_randn: $Tensor,
+        tensor_reshape: $Tensor,
+        tensor_transpose: $Tensor,
+
+        // Audio operations return $Audio
+        audio_load: $Audio,
+        audio_resample: $Audio,
+        audio_to_mono: $Audio,
+        audio_normalize: $Audio,
+        audio_trim_silence: $Audio,
+        audio_stft: $Tensor,
+        audio_mel_spectrogram: $Tensor,
+
+        // Text operations
+        bpe_create: $BPETokenizer,
+        bpe_encode: $Tensor,
+
+        // Vector operations
+        flat_create: $FlatIndex,
+        hnsw_create: $HNSWIndex,
+
+        // Model operations
+        model_load: $Model,
+        model_get_tensor: $Tensor
+    }
+}
+
+// ============================================================================
 // Program Structure
 // ============================================================================
 

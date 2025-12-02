@@ -429,6 +429,20 @@ pub enum Type {
         associated_types: Vec<(InternedString, Type)>,
         super_traits: Vec<Type>,
     },
+
+    /// External/Opaque type (for FFI, ZRTL plugins)
+    /// At the HIR level, this becomes a pointer to an opaque type
+    Extern {
+        name: InternedString,
+        layout: Option<ExternLayout>,
+    },
+}
+
+/// Layout information for extern types (optional)
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExternLayout {
+    pub size: usize,
+    pub align: usize,
 }
 
 /// Type variable for inference

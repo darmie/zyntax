@@ -96,6 +96,21 @@ pub struct BuiltinMappings {
     pub operators: std::collections::HashMap<String, Vec<String>>,
 }
 
+/// Type declarations from @types directive
+/// Declares opaque types and function return types for proper type tracking
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TypeDeclarations {
+    /// List of opaque type names (ZRTL-backed types)
+    /// e.g., ["$Tensor", "$Audio"] - these are pointer types backed by plugins
+    #[serde(default)]
+    pub opaque_types: Vec<String>,
+    /// Map of function name -> return type
+    /// e.g., "tensor" -> "$Tensor", "audio_load" -> "$Audio"
+    /// Used during lowering to assign correct types to call expressions
+    #[serde(default)]
+    pub function_returns: std::collections::HashMap<String, String>,
+}
+
 /// A parsed .zyn grammar file
 #[derive(Debug, Clone, Default)]
 pub struct ZynGrammar {
@@ -105,6 +120,8 @@ pub struct ZynGrammar {
     pub type_helpers: TypeHelpers,
     /// Built-in function mappings from @builtin directive
     pub builtins: BuiltinMappings,
+    /// Type declarations from @types directive
+    pub types: TypeDeclarations,
     pub rules: Vec<RuleDef>,
 }
 

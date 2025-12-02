@@ -1,7 +1,7 @@
 //! AST types for parsed .zyn grammar files
 
 use pest::iterators::Pair;
-use crate::{Rule, ZynGrammar, LanguageInfo, Imports, ContextVar, TypeHelpers, BuiltinMappings, RuleDef, RuleModifier, ActionBlock, ActionField};
+use crate::{Rule, ZynGrammar, LanguageInfo, Imports, ContextVar, TypeHelpers, BuiltinMappings, TypeDeclarations, RuleDef, RuleModifier, ActionBlock, ActionField};
 
 /// Build a ZynGrammar from parsed pest pairs
 pub fn build_grammar(pairs: pest::iterators::Pairs<Rule>) -> Result<ZynGrammar, String> {
@@ -39,6 +39,7 @@ fn process_top_level(grammar: &mut ZynGrammar, pair: Pair<Rule>) -> Result<(), S
         Rule::context_directive => grammar.context = build_context(pair)?,
         Rule::type_helpers_directive => grammar.type_helpers = build_type_helpers(pair)?,
         Rule::builtin_directive => grammar.builtins = build_builtins(pair)?,
+        Rule::types_directive => grammar.types = build_types(pair)?,
         Rule::EOI => {}
         _ => {}
     }
@@ -53,6 +54,7 @@ fn process_directive(grammar: &mut ZynGrammar, pair: Pair<Rule>) -> Result<(), S
             Rule::context_directive => grammar.context = build_context(inner)?,
             Rule::type_helpers_directive => grammar.type_helpers = build_type_helpers(inner)?,
             Rule::builtin_directive => grammar.builtins = build_builtins(inner)?,
+            Rule::types_directive => grammar.types = build_types(inner)?,
             Rule::error_messages_directive => {
                 // TODO: Parse error messages
             }
@@ -203,6 +205,45 @@ fn build_builtins(pair: Pair<Rule>) -> Result<BuiltinMappings, String> {
     }
 
     Ok(builtins)
+}
+
+/// Parse @types { opaque: [$Tensor, $Audio], returns: { tensor: $Tensor } } directive
+///
+/// Declares:
+/// - opaque: List of opaque type names that are pointer types backed by ZRTL plugins
+/// - returns: Map of function name -> return type for proper type tracking
+fn build_types(pair: Pair<Rule>) -> Result<TypeDeclarations, String> {
+    let mut types = TypeDeclarations::default();
+
+    for inner in pair.into_inner() {
+        if inner.as_rule() == Rule::types_def {
+            let def_text = inner.as_str().trim();
+
+            if def_text.starts_with("opaque") {
+                // Parse opaque type list: opaque: [$Tensor, $Audio]
+                for type_inner in inner.into_inner() {
+                    if type_inner.as_rule() == Rule::type_name {
+                        let type_name = type_inner.as_str().to_string();
+                        types.opaque_types.push(type_name);
+                    }
+                }
+            } else if def_text.starts_with("returns") {
+                // Parse return type mapping: returns: { tensor: $Tensor, audio_load: $Audio }
+                for return_inner in inner.into_inner() {
+                    if return_inner.as_rule() == Rule::return_def {
+                        let mut parts = return_inner.into_inner();
+                        if let (Some(fn_name), Some(type_name)) = (parts.next(), parts.next()) {
+                            let fn_name_str = fn_name.as_str().to_string();
+                            let type_name_str = type_name.as_str().to_string();
+                            types.function_returns.insert(fn_name_str, type_name_str);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(types)
 }
 
 fn build_rule_def(pair: Pair<Rule>) -> Result<RuleDef, String> {

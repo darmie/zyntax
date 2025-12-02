@@ -247,7 +247,8 @@ impl Substitution {
             | Type::Never
             | Type::Any
             | Type::Error
-            | Type::HigherKinded { .. } => ty.clone(),
+            | Type::HigherKinded { .. }
+            | Type::Extern { .. } => ty.clone(),
             Type::Nullable(inner_ty) => {
                 // For nullable types, substitute the inner type and maintain nullability
                 let substituted_inner = self.apply(inner_ty);
@@ -2639,6 +2640,10 @@ impl ConstraintSolver {
                 associated_types,
                 super_traits,
             } => todo!(),
+            Type::Extern { name, .. } => {
+                // Format extern/opaque type by name
+                name.resolve_global().unwrap_or_else(|| format!("extern_{}", name.symbol().to_usize()))
+            }
         }
     }
 
@@ -3394,7 +3399,8 @@ impl ConstraintSolver {
             | Type::Any
             | Type::Error
             | Type::SelfType
-            | Type::HigherKinded { .. } => ty.clone(),
+            | Type::HigherKinded { .. }
+            | Type::Extern { .. } => ty.clone(),
             Type::Nullable(inner_ty) => {
                 // For nullable types, substitute the inner type and maintain nullability
                 let substituted_inner = self.resolve_associated_types(inner_ty, receiver_type);
@@ -3452,6 +3458,7 @@ impl ConstraintSolver {
                 associated_types,
                 super_traits,
             } => todo!(),
+            Type::Extern { .. } => ty.clone(),
         }
     }
 
@@ -3563,7 +3570,8 @@ impl ConstraintSolver {
             | Type::Any
             | Type::Error
             | Type::Associated { .. }
-            | Type::HigherKinded { .. } => ty.clone(),
+            | Type::HigherKinded { .. }
+            | Type::Extern { .. } => ty.clone(),
             Type::Nullable(inner_ty) => {
                 // For nullable types, substitute the inner type and maintain nullability
                 let substituted_inner = self.substitute_self_type(inner_ty, receiver_type);
