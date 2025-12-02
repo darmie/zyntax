@@ -811,12 +811,14 @@ impl ZyntaxRuntime {
         let module_name = InternedString::new_global("main");
         let mut type_registry = TypeRegistry::new();
 
-        // Process extern declarations to register opaque types (needs &mut)
-        self.process_extern_declarations_mut(&program, &mut type_registry)?;
-
-        // Process imports to load stdlib traits and impls BEFORE lowering
-        // This must happen before wrapping type_registry in Arc since it needs &mut
+        // Process imports FIRST to load stdlib traits and impls
+        // This merges declarations from imported modules into the program
+        // and registers their opaque types in the type registry
         self.process_imports_for_traits(&mut program, &mut type_registry)?;
+
+        // Now process extern declarations from the merged program (main + imports)
+        // to ensure all opaque types are registered (needs &mut)
+        self.process_extern_declarations_mut(&program, &mut type_registry)?;
 
         // Wrap in Arc for sharing
         let type_registry = std::sync::Arc::new(type_registry);
