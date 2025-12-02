@@ -997,6 +997,89 @@ impl TypedASTBuilder {
         )
     }
 
+    /// Build trait declaration
+    ///
+    /// # Arguments
+    /// * `name` - The trait name (e.g., "Display", "Add")
+    /// * `type_params` - Type parameters for generic traits (e.g., <Rhs> in Add<Rhs>)
+    /// * `methods` - Trait method signatures
+    /// * `associated_types` - Associated types (e.g., type Output)
+    /// * `span` - Source span for error reporting
+    ///
+    /// # Example
+    /// ```ignore
+    /// // trait Display { fn to_string(self) -> String }
+    /// builder.trait_def("Display", vec![], methods, vec![], span)
+    /// ```
+    pub fn trait_def(
+        &mut self,
+        name: &str,
+        type_params: Vec<TypedTypeParam>,
+        methods: Vec<TypedMethodSignature>,
+        associated_types: Vec<TypedAssociatedType>,
+        span: Span,
+    ) -> TypedNode<TypedDeclaration> {
+        use crate::typed_ast::TypedInterface;
+
+        let trait_name = self.intern(name);
+
+        typed_node(
+            TypedDeclaration::Interface(TypedInterface {
+                name: trait_name,
+                type_params,
+                extends: vec![],
+                methods,
+                associated_types,
+                visibility: Visibility::Public,
+                span,
+            }),
+            Type::Never, // Traits don't have a value type
+            span,
+        )
+    }
+
+    /// Build trait implementation block
+    ///
+    /// # Arguments
+    /// * `trait_name` - The trait being implemented (e.g., "Add")
+    /// * `trait_type_args` - Type arguments for the trait (e.g., <Tensor> in Add<Tensor>)
+    /// * `for_type` - The type implementing the trait (e.g., Tensor)
+    /// * `methods` - Method implementations
+    /// * `associated_types` - Associated type definitions
+    /// * `span` - Source span for error reporting
+    ///
+    /// # Example
+    /// ```ignore
+    /// // impl Add<Tensor> for Tensor { ... }
+    /// builder.impl_block("Add", vec![tensor_type], tensor_type, methods, assoc_types, span)
+    /// ```
+    pub fn impl_block(
+        &mut self,
+        trait_name: &str,
+        trait_type_args: Vec<Type>,
+        for_type: Type,
+        methods: Vec<TypedMethod>,
+        associated_types: Vec<TypedImplAssociatedType>,
+        span: Span,
+    ) -> TypedNode<TypedDeclaration> {
+        use crate::typed_ast::TypedTraitImpl;
+
+        let trait_name_interned = self.intern(trait_name);
+
+        typed_node(
+            TypedDeclaration::Impl(TypedTraitImpl {
+                trait_name: trait_name_interned,
+                trait_type_args,
+                for_type: for_type.clone(),
+                methods,
+                associated_types,
+                span,
+            }),
+            Type::Never, // Impls don't have a value type
+            span,
+        )
+    }
+
     // ====== COROUTINE AND ASYNC BUILDERS ======
 
     /// Build coroutine statement

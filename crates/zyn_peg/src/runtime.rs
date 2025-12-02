@@ -274,6 +274,17 @@ pub trait AstHostFunctions {
     /// Create an import declaration
     fn create_import(&mut self, module_name: &str) -> NodeHandle;
 
+    /// Create a trait declaration
+    fn create_trait(&mut self, name: &str, methods: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create a trait implementation block
+    fn create_impl_block(
+        &mut self,
+        trait_name: &str,
+        for_type_name: &str,
+        methods: Vec<NodeHandle>,
+    ) -> NodeHandle;
+
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
 
@@ -1427,6 +1438,54 @@ impl AstHostFunctions for TypedAstBuilder {
         let import_decl = self.inner.import(module_name, span);
 
         self.store_decl(import_decl)
+    }
+
+    fn create_trait(&mut self, name: &str, methods: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // For now, create a simple trait with no type params or associated types
+        // Methods will be empty vec - full implementation needs method signature handling
+        let trait_decl = self.inner.trait_def(
+            name,
+            vec![], // type_params
+            vec![], // methods (TODO: convert handles to TypedMethodSignature)
+            vec![], // associated_types
+            span,
+        );
+
+        self.store_decl(trait_decl)
+    }
+
+    fn create_impl_block(
+        &mut self,
+        trait_name: &str,
+        for_type_name: &str,
+        methods: Vec<NodeHandle>,
+    ) -> NodeHandle {
+        let span = self.default_span();
+
+        // TODO: Properly resolve the type by name from type registry
+        // For now, use a placeholder type ID
+        let for_type = Type::Named {
+            id: zyntax_typed_ast::TypeId::new(0),
+            type_args: vec![],
+            const_args: vec![],
+            variance: vec![],
+            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+        };
+
+        // For now, create impl with empty methods
+        // Full implementation needs method body handling
+        let impl_decl = self.inner.impl_block(
+            trait_name,
+            vec![], // trait_type_args (TODO: handle generic trait args)
+            for_type,
+            vec![], // methods (TODO: convert handles to TypedMethod)
+            vec![], // associated_types
+            span,
+        );
+
+        self.store_decl(impl_decl)
     }
 
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
@@ -5017,6 +5076,39 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 }
 
                 let handle = self.host.create_import(&module_name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "trait" => {
+                // Trait declaration (e.g., "trait Display { ... }")
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("trait: missing name".into())),
+                };
+
+                // TODO: Handle type_params and items (methods/associated types)
+                let methods = vec![];
+
+                let handle = self.host.create_trait(&name, methods);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "impl_block" => {
+                // Trait implementation (e.g., "impl Add<Tensor> for Tensor { ... }")
+                let trait_name = match args.get("trait_name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing trait_name".into())),
+                };
+
+                let for_type = match args.get("type_name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing type_name".into())),
+                };
+
+                // TODO: Handle trait_args and items (methods/associated types)
+                let methods = vec![];
+
+                let handle = self.host.create_impl_block(&trait_name, &for_type, methods);
                 Ok(RuntimeValue::Node(handle))
             }
 
