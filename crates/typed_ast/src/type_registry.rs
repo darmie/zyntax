@@ -1004,13 +1004,13 @@ impl TypeRegistry {
     pub fn register_implementation(&mut self, impl_def: ImplDef) {
         let trait_id = impl_def.trait_id;
         let for_type = impl_def.for_type.clone();
-        
+
         // Add to implementations list
         self.implementations.entry(trait_id).or_insert_with(Vec::new).push(impl_def.clone());
-        
+
         // Add to cache for fast lookup
         self.impl_cache.insert((trait_id, for_type.clone()), impl_def);
-        
+
         // Update type implementations tracking
         if let Type::Named { id: type_id, .. } = &for_type {
             self.type_implementations.entry(*type_id)
@@ -1018,7 +1018,61 @@ impl TypeRegistry {
                 .insert(trait_id);
         }
     }
-    
+
+    /// Merge types, traits, and implementations from another TypeRegistry
+    pub fn merge_from(&mut self, other: &TypeRegistry) {
+        // Merge type definitions
+        for (type_id, type_def) in &other.types {
+            self.types.insert(*type_id, type_def.clone());
+            self.name_to_id.insert(type_def.name, *type_id);
+        }
+
+        // Merge type aliases
+        for (name, alias_type) in &other.aliases {
+            self.aliases.insert(*name, alias_type.clone());
+        }
+
+        // Merge traits
+        for (trait_id, trait_def) in &other.traits {
+            self.traits.insert(*trait_id, trait_def.clone());
+            self.trait_name_to_id.insert(trait_def.name, *trait_id);
+        }
+
+        // Merge trait implementations
+        for (trait_id, impls) in &other.implementations {
+            let impl_list = self.implementations.entry(*trait_id).or_insert_with(Vec::new);
+            for impl_def in impls {
+                impl_list.push(impl_def.clone());
+                self.impl_cache.insert((*trait_id, impl_def.for_type.clone()), impl_def.clone());
+
+                // Update type implementations tracking
+                if let Type::Named { id: type_id, .. } = &impl_def.for_type {
+                    self.type_implementations.entry(*type_id)
+                        .or_insert_with(HashSet::new)
+                        .insert(*trait_id);
+                }
+            }
+        }
+
+        // Merge trait hierarchy
+        for (trait_id, super_traits) in &other.trait_hierarchy {
+            let hierarchy = self.trait_hierarchy.entry(*trait_id).or_insert_with(Vec::new);
+            for super_trait in super_traits {
+                if !hierarchy.contains(super_trait) {
+                    hierarchy.push(*super_trait);
+                }
+            }
+        }
+
+        // Merge coherence graph
+        for ((type_id, trait_id), constraints) in &other.coherence_graph {
+            let constraint_list = self.coherence_graph.entry((*type_id, *trait_id)).or_insert_with(Vec::new);
+            for constraint in constraints {
+                constraint_list.push(constraint.clone());
+            }
+        }
+    }
+
     /// Look up a type by name
     pub fn get_type_by_name(&self, name: InternedString) -> Option<&TypeDefinition> {
         self.name_to_id.get(&name).and_then(|id| self.types.get(id))

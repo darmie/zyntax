@@ -250,7 +250,7 @@ top_level_items = { top_level_item* }
       "args": { "declarations": "$result" }
   }
 
-top_level_item = { trait_def | impl_block | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
+top_level_item = { trait_def | impl_block | struct_def | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -407,6 +407,39 @@ struct_fields = { struct_field ~ ("," ~ struct_field)* ~ ","? }
   }
 
 struct_field = { identifier ~ ":" ~ type_expr }
+  -> TypedParameter {
+      "commands": [
+          { "define": "field", "args": {
+              "name": "$1",
+              "type": "$2"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Struct Definition (Colon Syntax)
+// ============================================================================
+
+// struct Point:
+//     x: float
+//     y: float
+// Note: Whitespace is handled implicitly by WHITESPACE rule
+struct_def = { "struct" ~ identifier ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "struct_type", "args": {
+              "name": "$1",
+              "fields": "$2"
+          }}
+      ]
+  }
+
+struct_def_fields = { struct_def_field+ }
+  -> List {
+      "get_all_children": true
+  }
+
+struct_def_field = { identifier ~ ":" ~ type_expr }
   -> TypedParameter {
       "commands": [
           { "define": "field", "args": {
@@ -868,6 +901,7 @@ member_op = { "." ~ identifier }
 primary_expr = {
     extern_call |
     tensor_literal |
+    struct_literal |
     array_literal |
     float_literal |
     int_literal |
@@ -920,6 +954,37 @@ tensor_literal = { "tensor" ~ "(" ~ array_literal ~ ")" }
           { "define": "call", "args": {
               "callee": { "define": "variable", "args": { "name": "tensor_from_array" } },
               "args": ["$1"]
+          }}
+      ]
+  }
+
+// ============================================================================
+// Struct Literals
+// ============================================================================
+
+// Struct literal: Point { x: 1.0, y: 2.0 }
+// Used to construct struct instances
+struct_literal = { identifier ~ "{" ~ struct_literal_fields? ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "struct_literal", "args": {
+              "type_name": "$1",
+              "fields": "$2"
+          }}
+      ]
+  }
+
+struct_literal_fields = { struct_literal_field ~ ("," ~ struct_literal_field)* }
+  -> List {
+      "get_all_children": true
+  }
+
+struct_literal_field = { identifier ~ ":" ~ expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "field_init", "args": {
+              "name": "$1",
+              "value": "$2"
           }}
       ]
   }

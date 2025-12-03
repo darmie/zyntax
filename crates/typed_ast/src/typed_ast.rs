@@ -39,7 +39,7 @@ impl<T: Default> Default for TypedNode<T> {
 }
 
 /// Typed program - the root of the AST
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypedProgram {
     pub declarations: Vec<TypedNode<TypedDeclaration>>,
     #[serde(default)]
@@ -47,6 +47,9 @@ pub struct TypedProgram {
     /// Source files used in this program (for diagnostics)
     #[serde(default)]
     pub source_files: Vec<SourceFile>,
+    /// Type registry for custom struct/enum types defined in the program
+    #[serde(skip, default = "crate::TypeRegistry::new")]
+    pub type_registry: crate::TypeRegistry,
 }
 
 impl Default for TypedProgram {
@@ -55,6 +58,7 @@ impl Default for TypedProgram {
             declarations: Vec::new(),
             span: Span::default(),
             source_files: Vec::new(),
+            type_registry: crate::TypeRegistry::new(),
         }
     }
 }

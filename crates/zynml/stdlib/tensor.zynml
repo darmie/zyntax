@@ -10,29 +10,32 @@
 //
 // ============================================================================
 
-// Tensor is an opaque type backed by zrtl_tensor plugin
-// The @opaque attribute tells the compiler this is a pointer to external data
+// Internal opaque type from the plugin
 @opaque("$Tensor")
-type Tensor
+type TensorPtr
+
+// Tensor is a struct that wraps the opaque pointer
+struct Tensor:
+    ptr: TensorPtr
 
 // Implement Display trait for Tensor
 impl Display for Tensor {
     fn to_string(self) -> String {
-        extern tensor_to_string(self)
+        extern tensor_to_string(self.ptr)
     }
 }
 
 // Implement Clone trait for Tensor
 impl Clone for Tensor {
     fn clone(self) -> Tensor {
-        extern tensor_clone(self)
+        Tensor { ptr: extern tensor_clone(self.ptr) }
     }
 }
 
 // Implement Drop trait for Tensor
 impl Drop for Tensor {
     fn drop(self) {
-        extern tensor_free(self)
+        extern tensor_free(self.ptr)
     }
 }
 
@@ -44,7 +47,7 @@ impl Drop for Tensor {
 impl Add<Tensor> for Tensor {
     type Output = Tensor
     fn add(self, rhs: Tensor) -> Tensor {
-        extern tensor_add(self, rhs)
+        Tensor { ptr: extern tensor_add(self.ptr, rhs.ptr) }
     }
 }
 
@@ -52,7 +55,7 @@ impl Add<Tensor> for Tensor {
 impl Sub<Tensor> for Tensor {
     type Output = Tensor
     fn sub(self, rhs: Tensor) -> Tensor {
-        extern tensor_sub(self, rhs)
+        Tensor { ptr: extern tensor_sub(self.ptr, rhs.ptr) }
     }
 }
 
@@ -60,7 +63,7 @@ impl Sub<Tensor> for Tensor {
 impl Mul<Tensor> for Tensor {
     type Output = Tensor
     fn mul(self, rhs: Tensor) -> Tensor {
-        extern tensor_mul(self, rhs)
+        Tensor { ptr: extern tensor_mul(self.ptr, rhs.ptr) }
     }
 }
 
@@ -68,7 +71,7 @@ impl Mul<Tensor> for Tensor {
 impl Div<Tensor> for Tensor {
     type Output = Tensor
     fn div(self, rhs: Tensor) -> Tensor {
-        extern tensor_div(self, rhs)
+        Tensor { ptr: extern tensor_div(self.ptr, rhs.ptr) }
     }
 }
 
@@ -76,7 +79,7 @@ impl Div<Tensor> for Tensor {
 impl MatMul<Tensor> for Tensor {
     type Output = f32  // Returns scalar for vector dot product
     fn matmul(self, rhs: Tensor) -> f32 {
-        extern tensor_dot(self, rhs)
+        extern tensor_dot(self.ptr, rhs.ptr)
     }
 }
 
@@ -84,7 +87,7 @@ impl MatMul<Tensor> for Tensor {
 impl Neg for Tensor {
     type Output = Tensor
     fn neg(self) -> Tensor {
-        extern tensor_neg(self)
+        Tensor { ptr: extern tensor_neg(self.ptr) }
     }
 }
 
@@ -93,45 +96,45 @@ impl Neg for Tensor {
 // ============================================================================
 
 // Create tensor from array literal
-// Usage: Tensor.from_array([1.0, 2.0, 3.0])
+// Usage: from_array([1.0, 2.0, 3.0])
 fn from_array(data: Array<f32>) -> Tensor {
-    extern tensor_from_array(data)
+    Tensor { ptr: extern tensor_from_array(data) }
 }
 
 // Create tensor filled with zeros
-// Usage: Tensor.zeros([3, 4])  // 3x4 matrix of zeros
+// Usage: zeros([3, 4])  // 3x4 matrix of zeros
 fn zeros(shape: Array<i64>, dtype: i32) -> Tensor {
-    extern tensor_zeros(shape, dtype)
+    Tensor { ptr: extern tensor_zeros(shape, dtype) }
 }
 
 // Create tensor filled with ones
-// Usage: Tensor.ones([3, 4])
+// Usage: ones([3, 4])
 fn ones(shape: Array<i64>, dtype: i32) -> Tensor {
-    extern tensor_ones(shape, dtype)
+    Tensor { ptr: extern tensor_ones(shape, dtype) }
 }
 
 // Create tensor with values in range [start, end) with step
-// Usage: Tensor.arange(0.0, 10.0, 1.0)
+// Usage: arange(0.0, 10.0, 1.0)
 fn arange(start: f32, end: f32, step: f32) -> Tensor {
-    extern tensor_arange(start, end, step)
+    Tensor { ptr: extern tensor_arange(start, end, step) }
 }
 
 // Create tensor with n evenly spaced values between start and end
-// Usage: Tensor.linspace(0.0, 1.0, 100)
+// Usage: linspace(0.0, 1.0, 100)
 fn linspace(start: f32, end: f32, n: i64) -> Tensor {
-    extern tensor_linspace(start, end, n)
+    Tensor { ptr: extern tensor_linspace(start, end, n) }
 }
 
 // Create tensor with random values in [0, 1)
-// Usage: Tensor.rand([3, 4], seed)
+// Usage: rand([3, 4], seed)
 fn rand(shape: Array<i64>, seed: i64) -> Tensor {
-    extern tensor_rand(shape, seed)
+    Tensor { ptr: extern tensor_rand(shape, seed) }
 }
 
 // Create tensor with random normal values (mean=0, std=1)
-// Usage: Tensor.randn([3, 4], seed)
+// Usage: randn([3, 4], seed)
 fn randn(shape: Array<i64>, seed: i64) -> Tensor {
-    extern tensor_randn(shape, seed)
+    Tensor { ptr: extern tensor_randn(shape, seed) }
 }
 
 // ============================================================================
@@ -142,25 +145,25 @@ fn randn(shape: Array<i64>, seed: i64) -> Tensor {
 // For now, they can be called as regular functions: sum(tensor)
 
 fn sum(t: Tensor) -> f32 {
-    extern tensor_sum(t)
+    extern tensor_sum(t.ptr)
 }
 
 fn mean(t: Tensor) -> f32 {
-    extern tensor_mean(t)
+    extern tensor_mean(t.ptr)
 }
 
 fn max(t: Tensor) -> f32 {
-    extern tensor_max(t)
+    extern tensor_max(t.ptr)
 }
 
 fn min(t: Tensor) -> f32 {
-    extern tensor_min(t)
+    extern tensor_min(t.ptr)
 }
 
 fn reshape(t: Tensor, shape: Array<i64>) -> Tensor {
-    extern tensor_reshape(t, shape)
+    Tensor { ptr: extern tensor_reshape(t.ptr, shape) }
 }
 
 fn transpose(t: Tensor, dim0: i32, dim1: i32) -> Tensor {
-    extern tensor_transpose(t, dim0, dim1)
+    Tensor { ptr: extern tensor_transpose(t.ptr, dim0, dim1) }
 }

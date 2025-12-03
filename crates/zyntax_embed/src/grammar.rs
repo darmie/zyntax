@@ -299,15 +299,55 @@ impl LanguageGrammar {
     ) -> GrammarResult<TypedProgram> {
         use zyntax_typed_ast::source::SourceFile;
 
-        let json = self.parse_to_json_with_filename(source, filename)?;
-        let mut program: TypedProgram = serde_json::from_str(&json)
-            .map_err(|e| GrammarError::AstBuildError(format!("Failed to deserialize TypedAST: {}", e)))?;
+        // Parse directly to TypedProgram without JSON serialization to preserve TypeRegistry
+        let mut program = self.parse_to_typed_program(source, filename)?;
 
         // Add source file for proper diagnostics
         program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
 
         // Inject extern function declarations with signatures
         self.inject_builtin_externs(&mut program, Some(signatures))?;
+
+        Ok(program)
+    }
+
+    /// Parse source code directly to TypedProgram without JSON serialization
+    /// This preserves the TypeRegistry which is not serializable
+    fn parse_to_typed_program(
+        &self,
+        source: &str,
+        filename: &str,
+    ) -> GrammarResult<TypedProgram> {
+        // Initialize or get the cached VM
+        let rules = {
+            let mut cache = self.vm.lock().unwrap();
+            if cache.is_none() {
+                let rules = self.compile_pest_grammar()?;
+                *cache = Some(PestVmCache { rules });
+            }
+            cache.as_ref().unwrap().rules.clone()
+        };
+
+        // Create VM and parse source
+        let vm = Vm::new(rules);
+        let parse_result = vm
+            .parse("program", source)
+            .map_err(|e| GrammarError::SourceParseError(e.to_string()))?;
+
+        // Create AST builder
+        let mut builder = zyn_peg::runtime::TypedAstBuilder::new();
+        builder.set_source(filename.to_string(), source.to_string());
+
+        // Create interpreter
+        let mut interpreter = CommandInterpreter::new(&self.module, builder);
+
+        // Walk the parse tree and execute commands
+        let result = walk_parse_tree(&mut interpreter, parse_result)?;
+
+        // Get the TypedProgram directly from the builder
+        // We don't need the program_handle - just call build_program() which
+        // returns the TypedProgram with the TypeRegistry intact
+        let program = interpreter.host_mut().build_program();
 
         Ok(program)
     }

@@ -853,10 +853,54 @@ fn eval_input(
     let mut typed_program: TypedProgram = serde_json::from_str(&json)
         .map_err(|e| format!("Failed to deserialize TypedAST: {}", e))?;
 
+    // Rebuild type registry from declarations (TypeRegistry is not serializable)
+    // Scan for struct definitions (TypedDeclaration::Class) and register them
+    use zyntax_typed_ast::{TypedDeclaration, type_registry::*};
+    for decl_node in &typed_program.declarations {
+        eprintln!("[DEBUG] Checking declaration, type: {:?}", decl_node.ty);
+        if let TypedDeclaration::Class(class) = &decl_node.node {
+            eprintln!("[DEBUG] Found Class declaration: {}, ty={:?}", class.name, decl_node.ty);
+            // Check if this is a struct (no methods, just fields)
+            // Create TypeDefinition and register it
+            if let zyntax_typed_ast::Type::Named { id, .. } = &decl_node.ty {
+                let field_defs: Vec<FieldDef> = class.fields.iter().map(|f| FieldDef {
+                    name: f.name,
+                    ty: f.ty.clone(),
+                    visibility: f.visibility,
+                    mutability: f.mutability,
+                    is_static: f.is_static,
+                    span: f.span,
+                    getter: None,
+                    setter: None,
+                    is_synthetic: false,
+                }).collect();
+
+                let type_def = TypeDefinition {
+                    id: *id,
+                    name: class.name,
+                    kind: TypeKind::Struct {
+                        fields: field_defs.clone(),
+                        is_tuple: false,
+                    },
+                    type_params: vec![],
+                    constraints: vec![],
+                    fields: field_defs,
+                    methods: vec![],
+                    constructors: vec![],
+                    metadata: Default::default(),
+                    span: class.span,
+                };
+                typed_program.type_registry.register_type(type_def);
+                eprintln!("[DEBUG] Reconstructed struct type: {} with TypeId: {:?}", class.name, *id);
+            }
+        }
+    }
+
     // Lower to HIR
     let arena = AstArena::new();
     let module_name = InternedString::new_global("repl");
-    let type_registry = Arc::new(TypeRegistry::new());
+    // Use the type registry from the parsed program (now contains registered structs)
+    let type_registry = Arc::new(typed_program.type_registry.clone());
 
     let mut lowering_ctx = LoweringContext::new(
         module_name,

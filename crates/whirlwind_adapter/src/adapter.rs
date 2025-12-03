@@ -183,6 +183,7 @@ impl WhirlwindAdapter {
             declarations: all_declarations,
             span,
             source_files: vec![],
+            type_registry: zyntax_typed_ast::TypeRegistry::new(),
         };
 
         // Run our type inference engine to fill in Unknown types

@@ -294,6 +294,9 @@ pub trait AstHostFunctions {
     /// Create an opaque type declaration (@opaque("$ExternName") type TypeName)
     fn create_opaque_type(&mut self, name: &str, external_name: &str) -> NodeHandle;
 
+    /// Create a struct type definition (struct Name: field1: Type1, field2: Type2)
+    fn create_struct_def(&mut self, name: &str, fields: Vec<NodeHandle>) -> NodeHandle;
+
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
 
@@ -1284,10 +1287,14 @@ impl TypedAstBuilder {
             vec![]
         };
 
+        eprintln!("[DEBUG build_program] Building program with {} declarations, registry has {} types",
+            decls.len(), self.inner.registry.get_all_types().count());
+
         TypedProgram {
             declarations: decls,
             span: self.default_span(),
             source_files,
+            type_registry: self.inner.registry.clone(),
         }
     }
 
@@ -1630,6 +1637,108 @@ impl AstHostFunctions for TypedAstBuilder {
             node: decl,
             span: self.default_span(),
             ty: Type::Never,  // Declarations don't have a type
+        };
+
+        self.store_decl(decl_node)
+    }
+
+    fn create_struct_def(&mut self, name: &str, fields: Vec<NodeHandle>) -> NodeHandle {
+        // Create a struct as a Class with fields but no methods
+        // struct Tensor:
+        //     ptr: TensorPtr
+        eprintln!("[DEBUG create_struct_def] Creating struct '{}' with {} fields", name, fields.len());
+
+        let name_interned = self.inner.intern(name);
+
+        // Convert field handles to TypedField nodes
+        let mut typed_fields = Vec::new();
+        for field_handle in fields {
+            // Each field should be a "field" node created by struct_def_field rule
+            // The grammar creates these via the "field" command
+            if let Some(params_val) = self.params.get(&field_handle) {
+                let (field_name, field_type) = params_val;
+                let field_name_interned = self.inner.intern(field_name);
+
+                typed_fields.push(TypedField {
+                    name: field_name_interned,
+                    ty: field_type.clone(),
+                    initializer: None,
+                    visibility: Visibility::Public,
+                    mutability: Mutability::Immutable,
+                    is_static: false,
+                    span: self.default_span(),
+                });
+                eprintln!("[DEBUG create_struct_def] Added field: {}", field_name);
+            }
+        }
+
+        // Pre-allocate TypeId before creating TypeDefinition
+        let type_id = zyntax_typed_ast::type_registry::TypeId::next();
+        eprintln!("[DEBUG create_struct_def] Allocated TypeId: {:?}", type_id);
+
+        // Create a Named type for the struct
+        let struct_type = Type::Named {
+            id: type_id,
+            type_args: vec![],
+            const_args: vec![],
+            variance: vec![],
+            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+        };
+
+        // Register the struct type so it can be referenced
+        self.declared_types.insert(name.to_string(), struct_type.clone());
+        eprintln!("[DEBUG create_struct_def] Registered struct type '{}' with ID {:?}", name, type_id);
+
+        // Register the type definition in the type registry
+        let field_defs: Vec<zyntax_typed_ast::type_registry::FieldDef> = typed_fields.clone().into_iter().map(|f| zyntax_typed_ast::type_registry::FieldDef {
+            name: f.name,
+            ty: f.ty,
+            visibility: f.visibility,
+            mutability: f.mutability,
+            is_static: f.is_static,
+            span: f.span,
+            getter: None,
+            setter: None,
+            is_synthetic: false,
+        }).collect();
+
+        let type_def = zyntax_typed_ast::type_registry::TypeDefinition {
+            id: type_id,
+            name: name_interned,
+            kind: zyntax_typed_ast::type_registry::TypeKind::Struct {
+                fields: field_defs.clone(),
+                is_tuple: false,
+            },
+            type_params: vec![],
+            constraints: vec![],
+            fields: field_defs,
+            methods: vec![],
+            constructors: vec![],
+            metadata: Default::default(),
+            span: self.default_span(),
+        };
+        self.inner.registry.register_type(type_def);
+        eprintln!("[DEBUG create_struct_def] Registered type definition in registry");
+
+        // Create the struct as a Class declaration (no methods, just fields)
+        let class_decl = TypedDeclaration::Class(TypedClass {
+            name: name_interned,
+            type_params: vec![],
+            extends: None,
+            implements: vec![],
+            fields: typed_fields,
+            methods: vec![],
+            constructors: vec![],
+            visibility: Visibility::Public,
+            is_abstract: false,
+            is_final: false,
+            span: self.default_span(),
+        });
+
+        let decl_node = TypedNode {
+            node: class_decl,
+            span: self.default_span(),
+            ty: struct_type,
         };
 
         self.store_decl(decl_node)
@@ -2219,28 +2328,12 @@ impl AstHostFunctions for TypedAstBuilder {
     }
 
     fn create_field(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
-        let span = self.default_span();
-
-        // Get the type - for now use a placeholder if not available
-        let field_type = if let Some(_expr) = self.get_expr(ty) {
-            // TODO: Extract type from type expression when type expr support is complete
-            Type::Primitive(PrimitiveType::I32)
-        } else {
-            Type::Primitive(PrimitiveType::I32)
-        };
-
-        let field = TypedField {
-            name: InternedString::new_global(name),
-            ty: field_type,
-            initializer: None,
-            visibility: Visibility::Public,
-            mutability: Mutability::Immutable,
-            is_static: false,
-            span,
-        };
-
+        // Store field name and type for later use in create_struct_def
         let handle = self.alloc_handle();
-        self.fields.insert(handle, field);
+        // Get the type from the type handle, default to Any if not found
+        let field_type = self.get_type_from_handle(ty).unwrap_or(Type::Any);
+        eprintln!("[DEBUG create_field] Registering field '{}' with type {:?}", name, field_type);
+        self.params.insert(handle, (name.to_string(), field_type));
         handle
     }
 
@@ -5390,6 +5483,41 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 log::debug!("[opaque_type] Creating opaque type: name='{}', external_name='{}'", actual_name, actual_external_name);
                 let handle = self.host.create_opaque_type(actual_name, &actual_external_name);
                 log::debug!("[opaque_type] Created opaque type with handle: {:?}", handle);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "struct_type" => {
+                // struct Tensor:
+                //     ptr: TensorPtr
+                // Declares a struct type with named fields
+
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError("struct_type: missing name".into()));
+                    }
+                };
+
+                let fields: Vec<NodeHandle> = match args.get("fields") {
+                    Some(RuntimeValue::List(values)) => {
+                        // Extract node handles from the list
+                        values.iter().filter_map(|v| {
+                            if let RuntimeValue::Node(handle) = v {
+                                Some(*handle)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    }
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError("struct_type: missing fields".into()));
+                    }
+                };
+
+                eprintln!("[DEBUG struct_type] Creating struct type: name='{}', {} fields", name, fields.len());
+                log::debug!("[struct_type] Creating struct type: name='{}', {} fields", name, fields.len());
+                let handle = self.host.create_struct_def(&name, fields);
+                log::debug!("[struct_type] Created struct type with handle: {:?}", handle);
                 Ok(RuntimeValue::Node(handle))
             }
 

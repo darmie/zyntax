@@ -810,11 +810,53 @@ impl ZyntaxRuntime {
     /// which can then be compiled to machine code.
     fn lower_typed_program(&self, mut program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
-        use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry};
+        use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry, TypedDeclaration, type_registry::*};
+
+        // Rebuild type registry from declarations (TypeRegistry is not serializable)
+        // Scan for struct definitions (TypedDeclaration::Class) and register them
+        for decl_node in &program.declarations {
+            eprintln!("[DEBUG] Declaration node ty: {:?}", decl_node.ty);
+            if let TypedDeclaration::Class(class) = &decl_node.node {
+                eprintln!("[DEBUG] Found Class '{}' with type: {:?}", class.name, decl_node.ty);
+                // Check if this is a struct (no methods, just fields)
+                // Create TypeDefinition and register it
+                if let zyntax_typed_ast::Type::Named { id, .. } = &decl_node.ty {
+                    let field_defs: Vec<FieldDef> = class.fields.iter().map(|f| FieldDef {
+                        name: f.name,
+                        ty: f.ty.clone(),
+                        visibility: f.visibility,
+                        mutability: f.mutability,
+                        is_static: f.is_static,
+                        span: f.span,
+                        getter: None,
+                        setter: None,
+                        is_synthetic: false,
+                    }).collect();
+
+                    let type_def = TypeDefinition {
+                        id: *id,
+                        name: class.name,
+                        kind: TypeKind::Struct {
+                            fields: field_defs.clone(),
+                            is_tuple: false,
+                        },
+                        type_params: vec![],
+                        constraints: vec![],
+                        fields: field_defs,
+                        methods: vec![],
+                        constructors: vec![],
+                        metadata: Default::default(),
+                        span: class.span,
+                    };
+                    program.type_registry.register_type(type_def);
+                    eprintln!("[DEBUG] Reconstructed struct type from main program: {} with TypeId: {:?}", class.name, *id);
+                }
+            }
+        }
 
         let arena = AstArena::new();
         let module_name = InternedString::new_global("main");
-        let mut type_registry = TypeRegistry::new();
+        let mut type_registry = program.type_registry.clone();
 
         // Process imports FIRST to load stdlib traits and impls
         // This merges declarations from imported modules into the program
@@ -903,6 +945,13 @@ impl ZyntaxRuntime {
                 if let Some(mut imported_program) = parsed_program {
                     log::info!("Parsed stdlib module '{}': {} declarations",
                         module_name, imported_program.declarations.len());
+
+                    // First, merge the TypeRegistry from the imported module
+                    // This includes struct definitions, trait definitions, etc.
+                    eprintln!("[DEBUG] Merging TypeRegistry from imported module '{}'", module_name);
+                    eprintln!("[DEBUG] Imported module has {} types before merge", imported_program.type_registry.get_all_types().count());
+                    type_registry.merge_from(&imported_program.type_registry);
+                    eprintln!("[DEBUG] Main registry now has {} types after merge", type_registry.get_all_types().count());
 
                     // First, process extern declarations from the imported module
                     // to register opaque types in the type registry
@@ -2365,11 +2414,53 @@ impl TieredRuntime {
     /// Lower a TypedProgram to HirModule
     fn lower_typed_program(&self, mut program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
-        use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry};
+        use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry, TypedDeclaration, type_registry::*};
+
+        // Rebuild type registry from declarations (TypeRegistry is not serializable)
+        // Scan for struct definitions (TypedDeclaration::Class) and register them
+        for decl_node in &program.declarations {
+            eprintln!("[DEBUG] Declaration node ty: {:?}", decl_node.ty);
+            if let TypedDeclaration::Class(class) = &decl_node.node {
+                eprintln!("[DEBUG] Found Class '{}' with type: {:?}", class.name, decl_node.ty);
+                // Check if this is a struct (no methods, just fields)
+                // Create TypeDefinition and register it
+                if let zyntax_typed_ast::Type::Named { id, .. } = &decl_node.ty {
+                    let field_defs: Vec<FieldDef> = class.fields.iter().map(|f| FieldDef {
+                        name: f.name,
+                        ty: f.ty.clone(),
+                        visibility: f.visibility,
+                        mutability: f.mutability,
+                        is_static: f.is_static,
+                        span: f.span,
+                        getter: None,
+                        setter: None,
+                        is_synthetic: false,
+                    }).collect();
+
+                    let type_def = TypeDefinition {
+                        id: *id,
+                        name: class.name,
+                        kind: TypeKind::Struct {
+                            fields: field_defs.clone(),
+                            is_tuple: false,
+                        },
+                        type_params: vec![],
+                        constraints: vec![],
+                        fields: field_defs,
+                        methods: vec![],
+                        constructors: vec![],
+                        metadata: Default::default(),
+                        span: class.span,
+                    };
+                    program.type_registry.register_type(type_def);
+                }
+            }
+        }
 
         let arena = AstArena::new();
         let module_name = InternedString::new_global("main");
-        let type_registry = std::sync::Arc::new(TypeRegistry::new());
+        // Use the type registry from the parsed program (now contains registered structs)
+        let type_registry = std::sync::Arc::new(program.type_registry.clone());
 
         let mut lowering_ctx = LoweringContext::new(
             module_name,

@@ -1182,7 +1182,12 @@ impl TypedASTBuilder {
             vec![]
         };
 
-        TypedProgram { declarations, span, source_files }
+        TypedProgram {
+            declarations,
+            span,
+            source_files,
+            type_registry: self.registry.clone(),
+        }
     }
 }
 
