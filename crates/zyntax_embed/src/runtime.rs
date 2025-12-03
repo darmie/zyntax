@@ -876,12 +876,12 @@ impl ZyntaxRuntime {
         zyntax_compiler::register_impl_blocks(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
 
-        // Wrap in Arc for sharing
-        let type_registry = std::sync::Arc::new(type_registry);
+        // Wrap program's type registry in Arc for sharing (it now includes registered traits and impls)
+        let type_registry_arc = std::sync::Arc::new(program.type_registry.clone());
 
         let mut lowering_ctx = LoweringContext::new(
             module_name,
-            type_registry.clone(),
+            type_registry_arc.clone(),
             std::sync::Arc::new(std::sync::Mutex::new(arena)),
             LoweringConfig::default(),
         );

@@ -176,8 +176,37 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
 
     eprintln!("[REGISTER_IMPL] Checking {} declarations", program.declarations.len());
 
+    // First pass: Register all traits
+    eprintln!("[REGISTER_IMPL] First pass: registering traits...");
+    let mut trait_count = 0;
+    for decl in program.declarations.iter() {
+        if let TypedDeclaration::Interface(trait_decl) = &decl.node {
+            trait_count += 1;
+            let trait_def = zyntax_typed_ast::type_registry::TraitDef {
+                id: zyntax_typed_ast::type_registry::TypeId::next(),
+                name: trait_decl.name,
+                methods: vec![], // Simplified for now
+                associated_types: vec![],
+                super_traits: vec![],
+                type_params: vec![],
+                is_object_safe: true,
+                span: trait_decl.span,
+            };
+            program.type_registry.register_trait(trait_def);
+            eprintln!("[REGISTER_IMPL] Registered trait {:?}", trait_decl.name);
+        }
+    }
+    eprintln!("[REGISTER_IMPL] Registered {} traits", trait_count);
+
+    // Second pass: Register impl blocks
+    eprintln!("[REGISTER_IMPL] Second pass: registering impl blocks...");
     let mut impl_count = 0;
-    for decl in &program.declarations {
+    for (idx, decl) in program.declarations.iter().enumerate() {
+        // Log all declaration types to debug
+        if idx < 10 || idx >= program.declarations.len() - 10 {
+            eprintln!("[REGISTER_IMPL] Decl {}: {:?}", idx, std::mem::discriminant(&decl.node));
+        }
+
         if let TypedDeclaration::Impl(impl_block) = &decl.node {
             impl_count += 1;
             eprintln!("[REGISTER_IMPL] Found impl block #{} for trait {:?}", impl_count, impl_block.trait_name);
@@ -185,7 +214,7 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
             // Find the trait by name
             let trait_def = program.type_registry.get_trait_by_name(impl_block.trait_name)
                 .ok_or_else(|| {
-                    CompilerError::Analysis(format!("Trait not found in registry"))
+                    CompilerError::Analysis(format!("Trait {:?} not found in registry", impl_block.trait_name))
                 })?;
             let trait_id = trait_def.id;
             eprintln!("[REGISTER_IMPL] Trait ID: {:?}", trait_id);

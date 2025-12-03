@@ -1251,7 +1251,9 @@ impl LoweringContext {
     ) -> zyntax_typed_ast::TypedBlock {
         use zyntax_typed_ast::TypedBlock;
 
-        let retyped_statements = block.statements.iter().map(|stmt_node| {
+        eprintln!("[RETYPE_BLOCK] Processing {} statements", block.statements.len());
+        let retyped_statements = block.statements.iter().enumerate().map(|(idx, stmt_node)| {
+            eprintln!("[RETYPE_BLOCK] Processing statement {}", idx);
             self.retype_statement_with_self(stmt_node, self_params)
         }).collect();
 
@@ -1536,8 +1538,11 @@ impl LoweringContext {
             }).collect();
 
             // Re-type the method body to update self references
+            eprintln!("[LOWERING] Retyping method body, self_param_mappings: {:?}", self_param_mappings);
             let retyped_body = method.body.as_ref().map(|body| {
-                self.retype_block_with_self(body, &self_param_mappings)
+                let result = self.retype_block_with_self(body, &self_param_mappings);
+                eprintln!("[LOWERING] Retyping complete");
+                result
             });
 
             // For return type, only resolve if it's unresolved AND matches the pattern
@@ -1578,6 +1583,10 @@ impl LoweringContext {
             };
 
             eprintln!("[LOWERING] Mangled method name: {:?}", mangled_name);
+
+            // Register the mangled function name in the symbol table
+            let function_id = crate::hir::HirId::new();
+            self.symbols.functions.insert(mangled_name, function_id);
 
             // Create a function from the method
             let func = TypedFunction {

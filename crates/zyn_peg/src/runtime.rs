@@ -5450,27 +5450,63 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "impl_block" => {
+                eprintln!("[GRAMMAR impl_block] Creating impl block");
+                eprintln!("[GRAMMAR impl_block] All args: {:?}", args);
                 // Trait implementation (e.g., "impl Add<Tensor> for Tensor { ... }")
                 let trait_name = match args.get("trait_name") {
-                    Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing trait_name".into())),
+                    Some(RuntimeValue::String(s)) => {
+                        eprintln!("[GRAMMAR impl_block] trait_name: {}", s);
+                        s.clone()
+                    },
+                    Some(other) => {
+                        eprintln!("[GRAMMAR impl_block] ERROR: trait_name is not a string, it's: {:?}", other);
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: trait_name is not a string".into()));
+                    },
+                    None => {
+                        eprintln!("[GRAMMAR impl_block] ERROR: missing trait_name");
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing trait_name".into()));
+                    }
                 };
 
                 let for_type = match args.get("type_name") {
-                    Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing type_name".into())),
+                    Some(RuntimeValue::String(s)) => {
+                        eprintln!("[GRAMMAR impl_block] type_name: {}", s);
+                        s.clone()
+                    },
+                    Some(other) => {
+                        eprintln!("[GRAMMAR impl_block] ERROR: type_name is not a string, it's: {:?}", other);
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: type_name is not a string".into()));
+                    },
+                    None => {
+                        eprintln!("[GRAMMAR impl_block] ERROR: missing type_name");
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing type_name".into()));
+                    }
                 };
 
                 // Extract trait type arguments (e.g., <Tensor> in Add<Tensor>)
                 let trait_args: Vec<NodeHandle> = match args.get("trait_args") {
-                    Some(RuntimeValue::List(vals)) => vals.iter().filter_map(|v| {
-                        if let RuntimeValue::Node(h) = v {
-                            Some(*h)
-                        } else {
-                            None
-                        }
-                    }).collect(),
-                    _ => vec![], // No type arguments
+                    Some(RuntimeValue::String(s)) if s == "none" => {
+                        eprintln!("[GRAMMAR impl_block] No trait type arguments");
+                        vec![]
+                    },
+                    Some(RuntimeValue::List(vals)) => {
+                        eprintln!("[GRAMMAR impl_block] trait_args list with {} items", vals.len());
+                        vals.iter().filter_map(|v| {
+                            if let RuntimeValue::Node(h) = v {
+                                Some(*h)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    },
+                    Some(other) => {
+                        eprintln!("[GRAMMAR impl_block] WARNING: trait_args is unexpected type: {:?}", other);
+                        vec![]
+                    },
+                    None => {
+                        eprintln!("[GRAMMAR impl_block] No trait_args provided");
+                        vec![]
+                    }
                 };
 
                 // Extract impl items (methods and associated types)
@@ -5498,6 +5534,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let handle = self.host.create_impl_block(&trait_name, &for_type, trait_args, items);
+                eprintln!("[GRAMMAR impl_block] Created impl block with handle: {:?}", handle);
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -5703,10 +5740,14 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "program" => {
                 let handle = self.host.create_program();
+                eprintln!("[GRAMMAR program] Adding {} declarations to program", args.len());
                 // Add declarations from args
-                for arg in args {
+                for (idx, arg) in args.iter().enumerate() {
                     if let RuntimeValue::Node(decl) = arg {
-                        self.host.program_add_decl(handle, decl);
+                        eprintln!("[GRAMMAR program] Adding decl {} with handle: {:?}", idx, decl);
+                        self.host.program_add_decl(handle, *decl);
+                    } else {
+                        eprintln!("[GRAMMAR program] Skipping non-node arg {} : {:?}", idx, arg);
                     }
                 }
                 Ok(RuntimeValue::Node(handle))

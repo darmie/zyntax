@@ -455,7 +455,14 @@ struct_def_field = { identifier ~ ":" ~ type_expr }
 
 // impl Display for Tensor { fn to_string(self) -> String { ... } }
 // impl Add<Tensor> for Tensor { type Output = Tensor; fn add(...) { ... } }
-impl_block = { "impl" ~ identifier ~ type_args_angle? ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
+// Split into two rules to avoid optional capture index shifting
+impl_block = { impl_block_with_args | impl_block_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// impl Trait<Args> for Type { ... }
+impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
@@ -463,6 +470,19 @@ impl_block = { "impl" ~ identifier ~ type_args_angle? ~ "for" ~ identifier ~ "{"
               "trait_args": "$2",
               "type_name": "$3",
               "items": "$4"
+          }}
+      ]
+  }
+
+// impl Trait for Type { ... }
+impl_block_simple = { "impl" ~ identifier ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_block", "args": {
+              "trait_name": "$1",
+              "trait_args": "none",
+              "type_name": "$2",
+              "items": "$3"
           }}
       ]
   }
