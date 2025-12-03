@@ -1067,13 +1067,21 @@ int_literal = @{ "-"? ~ ASCII_DIGIT+ }
       "args": { "value": "$result" }
   }
 
-// String: "hello world"
-string_literal = @{ "\"" ~ string_inner* ~ "\"" }
+// String: "hello world" or """multiline string"""
+string_literal = @{ triple_quoted_string | regular_string }
   -> TypedExpression {
       "get_text": true,
       "define": "string_literal",
       "args": { "value": "$result" }
   }
+
+// Triple-quoted string for multiline/docstrings
+triple_quoted_string = { "\"\"\"" ~ triple_string_inner* ~ "\"\"\"" }
+
+triple_string_inner = { !("\"\"\"") ~ ANY }
+
+// Regular double-quoted string
+regular_string = { "\"" ~ string_inner* ~ "\"" }
 
 string_inner = { !("\"" | "\\") ~ ANY | "\\" ~ ANY }
 
