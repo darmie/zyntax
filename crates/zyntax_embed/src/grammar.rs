@@ -458,7 +458,7 @@ impl LanguageGrammar {
                 visibility: Visibility::Public,
                 is_async: false,
                 is_external: true,  // Mark as external
-                calling_convention: CallingConvention::Cdecl, // Extern uses C calling convention
+                calling_convention: CallingConvention::System, // Use system calling convention for ZRTL plugins
                 link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
             };
 
