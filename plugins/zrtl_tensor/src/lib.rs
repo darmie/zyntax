@@ -1878,56 +1878,56 @@ zrtl_plugin! {
         ("$Tensor$randn_f32", tensor_randn_f32, (i64, u32) -> opaque),  // shape_ptr, ndim
 
         // Memory
-        ("$Tensor$free", tensor_free),
-        ("$Tensor$clone", tensor_clone, () -> opaque),
-        ("$Tensor$view", tensor_view, () -> opaque),
-        ("$Tensor$contiguous", tensor_contiguous, () -> opaque),
+        ("$Tensor$free", tensor_free, (i64) -> void),
+        ("$Tensor$clone", tensor_clone, (i64) -> opaque),
+        ("$Tensor$view", tensor_view, (i64) -> opaque),
+        ("$Tensor$contiguous", tensor_contiguous, (i64) -> opaque),
 
         // Info
-        ("$Tensor$ndim", tensor_ndim),
-        ("$Tensor$shape", tensor_shape),
-        ("$Tensor$stride", tensor_stride),
-        ("$Tensor$numel", tensor_numel),
-        ("$Tensor$dtype", tensor_dtype),
-        ("$Tensor$data", tensor_data),
-        ("$Tensor$is_contiguous", tensor_is_contiguous),
+        ("$Tensor$ndim", tensor_ndim, (i64) -> u32),
+        ("$Tensor$shape", tensor_shape, (i64, u32) -> u64),
+        ("$Tensor$stride", tensor_stride, (i64, u32) -> i64),
+        ("$Tensor$numel", tensor_numel, (i64) -> u64),
+        ("$Tensor$dtype", tensor_dtype, (i64) -> u8),
+        ("$Tensor$data", tensor_data, (i64) -> i64),
+        ("$Tensor$is_contiguous", tensor_is_contiguous, (i64) -> bool),
 
         // Element access
-        ("$Tensor$get_f32", tensor_get_f32),
-        ("$Tensor$set_f32", tensor_set_f32),
-        ("$Tensor$get_at_f32", tensor_get_at_f32),
-        ("$Tensor$set_at_f32", tensor_set_at_f32),
+        ("$Tensor$get_f32", tensor_get_f32, (i64, i64) -> f32),
+        ("$Tensor$set_f32", tensor_set_f32, (i64, i64, f32) -> void),
+        ("$Tensor$get_at_f32", tensor_get_at_f32, (i64, i64) -> f32),
+        ("$Tensor$set_at_f32", tensor_set_at_f32, (i64, i64, f32) -> void),
 
         // Shape operations - return new tensors
-        ("$Tensor$reshape", tensor_reshape, () -> opaque),
-        ("$Tensor$transpose", tensor_transpose, () -> opaque),
-        ("$Tensor$squeeze", tensor_squeeze, () -> opaque),
-        ("$Tensor$unsqueeze", tensor_unsqueeze, () -> opaque),
-        ("$Tensor$slice", tensor_slice, () -> opaque),
+        ("$Tensor$reshape", tensor_reshape, (i64, i64, u32) -> opaque),
+        ("$Tensor$transpose", tensor_transpose, (i64, u32, u32) -> opaque),
+        ("$Tensor$squeeze", tensor_squeeze, (i64, u32) -> opaque),
+        ("$Tensor$unsqueeze", tensor_unsqueeze, (i64, u32) -> opaque),
+        ("$Tensor$slice", tensor_slice, (i64, u32, i64, i64, i64) -> opaque),
 
         // Reductions - return scalars
-        ("$Tensor$sum_f32", tensor_sum_f32),
-        ("$Tensor$mean_f32", tensor_mean_f32),
-        ("$Tensor$max_f32", tensor_max_f32),
-        ("$Tensor$min_f32", tensor_min_f32),
-        ("$Tensor$argmax_f32", tensor_argmax_f32),
+        ("$Tensor$sum_f32", tensor_sum_f32, (i64) -> f32),
+        ("$Tensor$mean_f32", tensor_mean_f32, (i64) -> f32),
+        ("$Tensor$max_f32", tensor_max_f32, (i64) -> f32),
+        ("$Tensor$min_f32", tensor_min_f32, (i64) -> f32),
+        ("$Tensor$argmax_f32", tensor_argmax_f32, (i64) -> i64),
 
         // Type conversion
-        ("$Tensor$to_dtype", tensor_to_dtype, () -> opaque),
+        ("$Tensor$to_dtype", tensor_to_dtype, (i64, u8) -> opaque),
 
         // Display trait implementation
-        ("$Tensor$to_string", tensor_to_string),
-        ("$Tensor$print", tensor_print),
-        ("$Tensor$println", tensor_println),
+        ("$Tensor$to_string", tensor_to_string, (i64) -> i64),
+        ("$Tensor$print", tensor_print, (i64) -> void),
+        ("$Tensor$println", tensor_println, (i64) -> void),
 
         // Arithmetic operator trait methods - return new tensors
-        ("$Tensor$add", tensor_add, () -> opaque),
-        ("$Tensor$sub", tensor_sub, () -> opaque),
-        ("$Tensor$mul", tensor_mul, () -> opaque),
-        ("$Tensor$div", tensor_div, () -> opaque),
-        ("$Tensor$mod", tensor_mod, () -> opaque),
-        ("$Tensor$neg", tensor_neg, () -> opaque),
-        ("$Tensor$matmul", tensor_dot),  // @ operator returns f32, not tensor
+        ("$Tensor$add", tensor_add, (i64, i64) -> opaque),
+        ("$Tensor$sub", tensor_sub, (i64, i64) -> opaque),
+        ("$Tensor$mul", tensor_mul, (i64, i64) -> opaque),
+        ("$Tensor$div", tensor_div, (i64, i64) -> opaque),
+        ("$Tensor$mod", tensor_mod, (i64, i64) -> opaque),
+        ("$Tensor$neg", tensor_neg, (i64) -> opaque),
+        ("$Tensor$matmul", tensor_dot, (i64, i64) -> f32),  // @ operator returns f32, not tensor
     ]
 }
 

@@ -1203,8 +1203,8 @@ impl CraneliftBackend {
                                         if sym_sig.return_type == crate::zrtl::TypeTag::VOID {
                                             None
                                         } else {
-                                            // For now, all non-void returns are i64 (pointers/handles)
-                                            Some(types::I64)
+                                            // Convert TypeTag to Cranelift type
+                                            Some(type_tag_to_cranelift_type(&sym_sig.return_type))
                                         }
                                     } else {
                                         // No ZRTL signature - infer from boxed args

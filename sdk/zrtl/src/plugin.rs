@@ -283,6 +283,159 @@ macro_rules! zrtl_symbol_sig {
             &SIG as *const $crate::ZrtlSymbolSig,
         )
     }};
+    // Function with any params that returns void
+    ($name:expr, $func:ident, ($($param:tt)*) -> void) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::VOID,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns f32
+    ($name:expr, $func:ident, ($($param:tt)*) -> f32) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::F32,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns f64
+    ($name:expr, $func:ident, ($($param:tt)*) -> f64) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::F64,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns i32
+    ($name:expr, $func:ident, ($($param:tt)*) -> i32) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::I32,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns i64
+    ($name:expr, $func:ident, ($($param:tt)*) -> i64) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::I64,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns u32
+    ($name:expr, $func:ident, ($($param:tt)*) -> u32) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::U32,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns u64
+    ($name:expr, $func:ident, ($($param:tt)*) -> u64) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::U64,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns bool
+    ($name:expr, $func:ident, ($($param:tt)*) -> bool) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::BOOL,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
+    // Function with any params that returns u8
+    ($name:expr, $func:ident, ($($param:tt)*) -> u8) => {{
+        const PARAM_COUNT: u8 = $crate::__count_params!($($param)*);
+        const PARAM_ARRAY: [$crate::TypeTag; $crate::MAX_PARAMS] = $crate::__build_param_array!($($param)*);
+
+        static SIG: $crate::ZrtlSymbolSig = $crate::ZrtlSymbolSig {
+            param_count: PARAM_COUNT,
+            flags: $crate::ZrtlSigFlags::NONE,
+            return_type: $crate::TypeTag::U8,
+            params: PARAM_ARRAY,
+        };
+        $crate::ZrtlSymbol::with_sig(
+            concat!($name, "\0").as_ptr() as *const ::std::ffi::c_char,
+            $func as *const u8,
+            &SIG as *const $crate::ZrtlSymbolSig,
+        )
+    }};
     // Legacy: no signature (backwards compatible)
     ($name:expr, $func:ident) => {
         $crate::zrtl_symbol!($name, $func)
@@ -309,6 +462,42 @@ macro_rules! __zrtl_symbol_entry {
     ($sym_name:expr, $func:ident, ($($param:tt)*) -> opaque) => {
         $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> opaque)
     };
+    // Void return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> void) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> void)
+    };
+    // F32 return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> f32) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> f32)
+    };
+    // F64 return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> f64) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> f64)
+    };
+    // I32 return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> i32) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> i32)
+    };
+    // I64 return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> i64) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> i64)
+    };
+    // U32 return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> u32) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> u32)
+    };
+    // U64 return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> u64) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> u64)
+    };
+    // Bool return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> bool) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> bool)
+    };
+    // U8 return type
+    ($sym_name:expr, $func:ident, ($($param:tt)*) -> u8) => {
+        $crate::zrtl_symbol_sig!($sym_name, $func, ($($param)*) -> u8)
+    };
     // No signature (backwards compatible)
     ($sym_name:expr, $func:ident) => {
         $crate::zrtl_symbol!($sym_name, $func)
@@ -332,6 +521,7 @@ macro_rules! __count_params {
     (f64) => { 1 };
     (i32) => { 1 };
     (i64) => { 1 };
+    (u8) => { 1 };
     (u32) => { 1 };
     (u64) => { 1 };
     (bool) => { 1 };
@@ -339,6 +529,7 @@ macro_rules! __count_params {
     (f64, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
     (i32, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
     (i64, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
+    (u8, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
     (u32, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
     (u64, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
     (bool, $($rest:tt)*) => { 1 + $crate::__count_params!($($rest)*) };
@@ -373,6 +564,9 @@ macro_rules! __fill_param_array {
     ($array:ident, $idx:expr, i64) => {
         $array[$idx] = $crate::TypeTag::I64;
     };
+    ($array:ident, $idx:expr, u8) => {
+        $array[$idx] = $crate::TypeTag::U8;
+    };
     ($array:ident, $idx:expr, u32) => {
         $array[$idx] = $crate::TypeTag::U32;
     };
@@ -396,6 +590,10 @@ macro_rules! __fill_param_array {
     };
     ($array:ident, $idx:expr, i64, $($rest:tt)*) => {
         $array[$idx] = $crate::TypeTag::I64;
+        $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
+    };
+    ($array:ident, $idx:expr, u8, $($rest:tt)*) => {
+        $array[$idx] = $crate::TypeTag::U8;
         $crate::__fill_param_array!($array, $idx + 1, $($rest)*);
     };
     ($array:ident, $idx:expr, u32, $($rest:tt)*) => {
