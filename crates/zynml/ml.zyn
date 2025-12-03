@@ -952,10 +952,21 @@ primary_expr = {
     string_literal |
     bool_literal |
     grouped_expr |
+    path_expr |
     var_expr
 }
   -> TypedExpression {
       "get_child": { "index": 0 }
+  }
+
+// Path expression: Type::method or module::function
+// Used for associated functions (static methods) like Duration::from(1000)
+path_expr = { identifier ~ "::" ~ identifier }
+  -> TypedExpression {
+      "define": "path",
+      "args": {
+          "segments": ["$0", "$1"]
+      }
   }
 
 // Extern function call: extern name(args)

@@ -4477,6 +4477,34 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "path" => {
+                // Path expression: Type::method or module::function
+                // Creates a variable with the mangled name "Type::method"
+                let segments = match args.get("segments") {
+                    Some(RuntimeValue::List(arr)) => {
+                        let mut path_parts = Vec::new();
+                        for val in arr {
+                            if let RuntimeValue::String(s) = val {
+                                path_parts.push(s.clone());
+                            }
+                        }
+                        path_parts
+                    }
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("path: missing segments".into())),
+                };
+
+                if segments.len() != 2 {
+                    return Err(crate::error::ZynPegError::CodeGenError(
+                        format!("path: expected 2 segments, got {}", segments.len())
+                    ));
+                }
+
+                // Create mangled name: "Type::method"
+                let mangled_name = format!("{}::{}", segments[0], segments[1]);
+                let handle = self.host.create_variable(&mangled_name);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "call_expr" | "call" => {
                 // Callee can be either a Node (expression) or String (identifier)
                 let callee = match args.get("callee") {

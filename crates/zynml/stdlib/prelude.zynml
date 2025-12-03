@@ -163,3 +163,20 @@ trait IntoIterator {
     type IntoIter: Iterator<Item>
     fn into_iter(self) -> IntoIter
 }
+
+// ============================================================================
+// Type Conversion Traits
+// ============================================================================
+
+// From trait - value-to-value conversion that consumes the input
+// Used for type conversions, e.g., Duration::from(1000)
+trait From<T> {
+    fn from(value: T) -> Self
+}
+
+// Into trait - value-to-value conversion that consumes self
+// Used for type conversions, e.g., duration.into()
+// Note: Usually auto-implemented via blanket impl when From is implemented
+trait Into<T> {
+    fn into(self) -> T
+}
