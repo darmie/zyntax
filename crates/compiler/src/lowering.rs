@@ -1996,7 +1996,10 @@ impl LoweringContext {
     fn convert_calling_convention(&self, cc: zyntax_typed_ast::CallingConvention) -> crate::hir::CallingConvention {
         use zyntax_typed_ast::CallingConvention as TypedCC;
         match cc {
-            TypedCC::Default | TypedCC::Rust => crate::hir::CallingConvention::Fast,
+            // Default uses System which resolves to platform-native in backend (AppleAarch64 on ARM Mac, SystemV on x86)
+            // This matches ZRTL plugin calling conventions
+            TypedCC::Default => crate::hir::CallingConvention::System,
+            TypedCC::Rust => crate::hir::CallingConvention::Fast,
             TypedCC::Cdecl => crate::hir::CallingConvention::C,
             TypedCC::System => crate::hir::CallingConvention::System,
             TypedCC::Stdcall | TypedCC::Fastcall | TypedCC::Thiscall | TypedCC::Vectorcall => {

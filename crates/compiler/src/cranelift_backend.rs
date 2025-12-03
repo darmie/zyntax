@@ -24,6 +24,56 @@ use crate::hir::{
 };
 use crate::{CompilerResult, CompilerError};
 
+/// Convert ZRTL TypeTag to Cranelift type
+fn type_tag_to_cranelift_type(tag: &crate::zrtl::TypeTag) -> types::Type {
+    use crate::zrtl::{TypeCategory, PrimitiveSize};
+
+    match tag.category() {
+        TypeCategory::Void => types::I8,  // Void represented as i8
+        TypeCategory::Bool => types::I8,  // Bools as i8
+        TypeCategory::Int => {
+            let size = tag.type_id();
+            if size == PrimitiveSize::Bits8 as u16 {
+                types::I8
+            } else if size == PrimitiveSize::Bits16 as u16 {
+                types::I16
+            } else if size == PrimitiveSize::Bits32 as u16 {
+                types::I32
+            } else if size == PrimitiveSize::Bits64 as u16 {
+                types::I64
+            } else {
+                types::I32  // Default
+            }
+        }
+        TypeCategory::UInt => {
+            let size = tag.type_id();
+            if size == PrimitiveSize::Bits8 as u16 {
+                types::I8
+            } else if size == PrimitiveSize::Bits16 as u16 {
+                types::I16
+            } else if size == PrimitiveSize::Bits32 as u16 {
+                types::I32  // u32 uses I32 in Cranelift
+            } else if size == PrimitiveSize::Bits64 as u16 {
+                types::I64  // u64 uses I64 in Cranelift
+            } else {
+                types::I32  // Default
+            }
+        }
+        TypeCategory::Float => {
+            let size = tag.type_id();
+            if size == PrimitiveSize::Bits32 as u16 {
+                types::F32
+            } else if size == PrimitiveSize::Bits64 as u16 {
+                types::F64
+            } else {
+                types::F32  // Default
+            }
+        }
+        // All other types (pointers, opaques, etc.) are i64
+        _ => types::I64,
+    }
+}
+
 /// Cranelift backend for JIT compilation
 pub struct CraneliftBackend {
     /// JIT module for code generation
@@ -1090,42 +1140,56 @@ impl CraneliftBackend {
                                         }
                                     }
 
-                                    // Create signature based on (possibly boxed) argument types
+                                    // Create signature - prefer ZRTL signature if available
                                     let mut sig = self.module.make_signature();
-                                    for arg_val in &boxed_args {
-                                        let arg_ty = builder.func.dfg.value_type(*arg_val);
-                                        sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
-                                    }
 
-                                    // Determine return type - prefer signature info over HIR type
+                                    // Check if we have a ZRTL signature for this symbol
                                     let return_cranelift_ty = if let Some(sym_sig) = self.symbol_signatures.get(symbol_name) {
-                                        // Use signature return type if available
+                                        // Use ZRTL signature for parameters AND return type
+                                        eprintln!("[DEBUG Signature] Using ZRTL signature for {}: {} params", symbol_name, sym_sig.param_count);
+                                        for i in 0..sym_sig.param_count {
+                                            // Convert ZRTL TypeTag to Cranelift type
+                                            let type_tag = &sym_sig.params[i as usize];
+                                            let cranelift_ty = type_tag_to_cranelift_type(type_tag);
+                                            sig.params.push(cranelift_codegen::ir::AbiParam::new(cranelift_ty));
+                                        }
+
+                                        // Use signature return type
                                         if sym_sig.return_type == crate::zrtl::TypeTag::VOID {
                                             None
                                         } else {
                                             // For now, all non-void returns are i64 (pointers/handles)
                                             Some(types::I64)
                                         }
-                                    } else if let Some(result_id) = result {
-                                        // Fall back to HIR type
-                                        if let Some(value) = function.values.get(result_id) {
-                                            // Map HIR type to Cranelift type inline
-                                            match &value.ty {
-                                                HirType::I32 => Some(types::I32),
-                                                HirType::I64 => Some(types::I64),
-                                                HirType::F32 => Some(types::F32),
-                                                HirType::F64 => Some(types::F64),
-                                                HirType::Bool => Some(types::I8),
-                                                HirType::Ptr(_) => Some(types::I64),
-                                                HirType::Void => None,
-                                                _ => Some(types::I64), // Default to i64 for handles/complex types
+                                    } else {
+                                        // No ZRTL signature - infer from boxed args
+                                        eprintln!("[DEBUG Signature] No ZRTL signature for {}, inferring from args", symbol_name);
+                                        for arg_val in &boxed_args {
+                                            let arg_ty = builder.func.dfg.value_type(*arg_val);
+                                            sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
+                                        }
+
+                                        // Determine return type from HIR
+                                        if let Some(result_id) = result {
+                                            if let Some(value) = function.values.get(result_id) {
+                                                // Map HIR type to Cranelift type inline
+                                                match &value.ty {
+                                                    HirType::I32 => Some(types::I32),
+                                                    HirType::I64 => Some(types::I64),
+                                                    HirType::F32 => Some(types::F32),
+                                                    HirType::F64 => Some(types::F64),
+                                                    HirType::Bool => Some(types::I8),
+                                                    HirType::Ptr(_) => Some(types::I64),
+                                                    HirType::Void => None,
+                                                    _ => Some(types::I64), // Default to i64 for handles/complex types
+                                                }
+                                            } else {
+                                                // Default to i64 for unknown external call results
+                                                Some(types::I64)
                                             }
                                         } else {
-                                            // Default to i64 for unknown external call results
-                                            Some(types::I64)
+                                            None
                                         }
-                                    } else {
-                                        None
                                     };
 
                                     if let Some(ret_ty) = return_cranelift_ty {
@@ -2296,12 +2360,18 @@ impl CraneliftBackend {
         eprintln!("[Cranelift]   returns: {:?}", function.signature.returns);
 
         let mut cranelift_sig = self.module.make_signature();
-        
+
         // Set calling convention
+        // For System, use the ISA's default calling convention (platform-native)
+        // This ensures compatibility with ZRTL plugins on all platforms
         cranelift_sig.call_conv = match function.calling_convention {
             crate::hir::CallingConvention::C => CallConv::SystemV,
             crate::hir::CallingConvention::Fast => CallConv::Fast,
-            crate::hir::CallingConvention::System => CallConv::SystemV,
+            crate::hir::CallingConvention::System => {
+                // Use the default calling convention from make_signature()
+                // which is platform-native (AppleAarch64 on ARM Mac, SystemV on x86, etc.)
+                cranelift_sig.call_conv
+            },
             crate::hir::CallingConvention::WebKit => CallConv::Fast,
         };
         

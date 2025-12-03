@@ -1865,16 +1865,17 @@ zrtl_plugin! {
     name: "tensor",
     symbols: [
         // Creation - all return TensorPtr (opaque pointers)
-        ("$Tensor$new", tensor_new, () -> opaque),
-        ("$Tensor$zeros", tensor_zeros, () -> opaque),
-        ("$Tensor$ones", tensor_ones, () -> opaque),
-        ("$Tensor$full_f32", tensor_full_f32, () -> opaque),
-        ("$Tensor$from_array_f32", tensor_from_array_f32, () -> opaque),
-        ("$Tensor$from_raw_f32", tensor_from_raw_f32, () -> opaque),
+        // Note: pointers are i64, counts/sizes are i64 or u64 depending on usize
+        ("$Tensor$new", tensor_new, (i64, u32) -> opaque),  // shape_ptr, ndim
+        ("$Tensor$zeros", tensor_zeros, (i64, u32) -> opaque),  // shape_ptr, ndim
+        ("$Tensor$ones", tensor_ones, (i64, u32) -> opaque),  // shape_ptr, ndim
+        ("$Tensor$full_f32", tensor_full_f32, (i64, u32) -> opaque),  // shape_ptr, ndim (+ value f32)
+        ("$Tensor$from_array_f32", tensor_from_array_f32, (i64) -> opaque),  // array ptr
+        ("$Tensor$from_raw_f32", tensor_from_raw_f32, (i64, u64) -> opaque),  // ptr + count (usize)
         ("$Tensor$arange_f32", tensor_arange_f32, (f32, f32, f32) -> opaque),
-        ("$Tensor$linspace_f32", tensor_linspace_f32, () -> opaque),
-        ("$Tensor$rand_f32", tensor_rand_f32, () -> opaque),
-        ("$Tensor$randn_f32", tensor_randn_f32, () -> opaque),
+        ("$Tensor$linspace_f32", tensor_linspace_f32, (f32, f32, u64) -> opaque),  // start, end, n (usize)
+        ("$Tensor$rand_f32", tensor_rand_f32, (i64, u32) -> opaque),  // shape_ptr, ndim
+        ("$Tensor$randn_f32", tensor_randn_f32, (i64, u32) -> opaque),  // shape_ptr, ndim
 
         // Memory
         ("$Tensor$free", tensor_free),
