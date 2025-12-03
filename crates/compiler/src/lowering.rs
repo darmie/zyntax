@@ -2561,6 +2561,111 @@ impl LoweringContext {
         None
     }
 
+    /// Check if there's a From<SourceType> impl for target_type
+    /// Returns the mangled From::from function name if found
+    fn find_from_impl(&self, source_type: &Type, target_type: &Type) -> Option<String> {
+        use zyntax_typed_ast::TypeId;
+
+        // Only works for Named types
+        let target_type_id = match target_type {
+            Type::Named { id, .. } => *id,
+            _ => return None,
+        };
+
+        // Get target type name
+        let target_type_def = self.type_registry.get_type_by_id(target_type_id)?;
+        let target_type_name = {
+            let arena = self.arena.lock().unwrap();
+            arena.resolve_string(target_type_def.name)
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        };
+
+        // Look for From<SourceType> impl for TargetType
+        for (_trait_id, impls) in self.type_registry.iter_implementations() {
+            for impl_def in impls {
+                // Check if this is an impl for our target type
+                if let Type::Named { id, .. } = &impl_def.for_type {
+                    if *id == target_type_id {
+                        // Check if this is a From trait
+                        if let Some(trait_def) = self.type_registry.get_trait_by_id(impl_def.trait_id) {
+                            let trait_name = {
+                                let arena = self.arena.lock().unwrap();
+                                arena.resolve_string(trait_def.name)
+                                    .map(|s| s.to_string())
+                                    .unwrap_or_default()
+                            };
+
+                            if trait_name == "From" {
+                                // Check if the type arg matches source_type
+                                if !impl_def.type_args.is_empty() {
+                                    // Simple comparison - can be enhanced for complex types
+                                    if &impl_def.type_args[0] == source_type {
+                                        // Found From<SourceType> for TargetType!
+                                        // Return mangled name: TargetType$From$from
+                                        let mangled = format!("{}$From$from", target_type_name);
+                                        return Some(mangled);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Try to insert an implicit From conversion if types don't match
+    /// Returns a new expression wrapped in Type::from() if conversion is available
+    fn try_implicit_from_conversion(
+        &self,
+        expr: zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>,
+        expected_type: &Type,
+    ) -> Option<zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>> {
+        use zyntax_typed_ast::{TypedExpression, TypedCall, typed_ast::typed_node};
+
+        // Don't convert if types already match
+        if &expr.ty == expected_type {
+            return None;
+        }
+
+        // Don't convert if either type is Any or Unknown (type inference not done)
+        if matches!(expr.ty, Type::Any | Type::Unknown) || matches!(expected_type, Type::Any | Type::Unknown) {
+            return None;
+        }
+
+        // Check if there's a From<expr.ty> impl for expected_type
+        if let Some(from_func) = self.find_from_impl(&expr.ty, expected_type) {
+            eprintln!("[IMPLICIT_CONVERSION] Converting {:?} to {:?} via {}", expr.ty, expected_type, from_func);
+
+            // Capture span before moving expr
+            let span = expr.span;
+
+            // Create Type::from(expr) call
+            let from_func_name = InternedString::new_global(&from_func);
+            let call = TypedCall {
+                callee: Box::new(typed_node(
+                    TypedExpression::Variable(from_func_name),
+                    Type::Any, // Function type
+                    span,
+                )),
+                positional_args: vec![expr],
+                named_args: vec![],
+                type_args: vec![],
+            };
+
+            return Some(typed_node(
+                TypedExpression::Call(call),
+                expected_type.clone(),
+                span,
+            ));
+        }
+
+        None
+    }
+
     /// Mangle method name: ClassName_methodName
     fn mangle_method_name(&self, class_name: InternedString, method_name: InternedString) -> InternedString {
         // Use resolve_global() since InternedStrings may come from different sources
