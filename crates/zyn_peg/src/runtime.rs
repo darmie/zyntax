@@ -2260,16 +2260,35 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_named_type(&mut self, name: &str) -> NodeHandle {
         let handle = self.alloc_handle();
 
-        // Check if this type was declared in the current file (e.g., via @opaque, struct, enum)
-        let ty = if let Some(declared_ty) = self.declared_types.get(name) {
-            eprintln!("[DEBUG create_named_type] Found declared type '{}': {:?}", name, declared_ty);
-            declared_ty.clone()
-        } else {
-            // Type not found in current file - create unresolved for compiler resolution
-            // This handles types from imports or forward references (including language keywords like "Self")
-            eprintln!("[DEBUG create_named_type] Creating unresolved type '{}'", name);
-            let name_interned = self.inner.intern(name);
-            Type::Unresolved(name_interned)
+        // First check if it's a primitive type
+        let ty = match name {
+            "i8" => Type::Primitive(PrimitiveType::I8),
+            "i16" => Type::Primitive(PrimitiveType::I16),
+            "i32" => Type::Primitive(PrimitiveType::I32),
+            "i64" => Type::Primitive(PrimitiveType::I64),
+            "i128" => Type::Primitive(PrimitiveType::I128),
+            "u8" => Type::Primitive(PrimitiveType::U8),
+            "u16" => Type::Primitive(PrimitiveType::U16),
+            "u32" => Type::Primitive(PrimitiveType::U32),
+            "u64" => Type::Primitive(PrimitiveType::U64),
+            "u128" => Type::Primitive(PrimitiveType::U128),
+            "f32" => Type::Primitive(PrimitiveType::F32),
+            "f64" => Type::Primitive(PrimitiveType::F64),
+            "bool" => Type::Primitive(PrimitiveType::Bool),
+            "void" | "unit" => Type::Primitive(PrimitiveType::Unit),
+            _ => {
+                // Check if this type was declared in the current file (e.g., via @opaque, struct, enum)
+                if let Some(declared_ty) = self.declared_types.get(name) {
+                    eprintln!("[DEBUG create_named_type] Found declared type '{}': {:?}", name, declared_ty);
+                    declared_ty.clone()
+                } else {
+                    // Type not found in current file - create unresolved for compiler resolution
+                    // This handles types from imports or forward references (including language keywords like "Self")
+                    eprintln!("[DEBUG create_named_type] Creating unresolved type '{}'", name);
+                    let name_interned = self.inner.intern(name);
+                    Type::Unresolved(name_interned)
+                }
+            }
         };
 
         self.types.insert(handle, ty);
@@ -2346,7 +2365,6 @@ impl AstHostFunctions for TypedAstBuilder {
         let handle = self.alloc_handle();
         // Get the type from the type handle, default to Any if not found
         let field_type = self.get_type_from_handle(ty).unwrap_or(Type::Any);
-        eprintln!("[DEBUG create_field] Registering field '{}' with type {:?}", name, field_type);
         self.params.insert(handle, (name.to_string(), field_type));
         handle
     }

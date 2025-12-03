@@ -2965,6 +2965,26 @@ impl SsaBuilder {
                 // The name is used for trait dispatch (e.g., $Tensor -> $Tensor$add)
                 HirType::Ptr(Box::new(HirType::Opaque(*name)))
             },
+            Type::Named { id, .. } => {
+                // Look up the type definition in the registry
+                if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                    use crate::hir::HirStructType;
+
+                    // Convert the fields to HIR types
+                    let hir_fields: Vec<HirType> = type_def.fields.iter()
+                        .map(|field| self.convert_type(&field.ty))
+                        .collect();
+
+                    HirType::Struct(HirStructType {
+                        name: Some(type_def.name),
+                        fields: hir_fields,
+                        packed: false,
+                    })
+                } else {
+                    eprintln!("[WARN] Named type {:?} not found in registry, defaulting to I64", id);
+                    HirType::I64
+                }
+            },
             _ => HirType::I64, // Default for complex types
         }
     }
