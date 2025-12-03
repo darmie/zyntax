@@ -1881,6 +1881,9 @@ impl AstHostFunctions for TypedAstBuilder {
             let method_name_str = field_access.field.resolve_global()
                 .unwrap_or_else(|| "unknown".to_string());
 
+            eprintln!("[PARSER] Detected method call: receiver_ty={:?}, method={}",
+                receiver_expr.ty, method_name_str);
+
             // Store the receiver expression and use create_method_call
             let receiver_handle = self.store_expr(receiver_expr);
             return self.create_method_call(receiver_handle, &method_name_str, args);
@@ -2646,7 +2649,8 @@ impl AstHostFunctions for TypedAstBuilder {
             .filter_map(|h| self.get_expr(*h))
             .collect();
 
-        let expr = self.inner.method_call(receiver_expr, method, arg_exprs, Type::Primitive(PrimitiveType::I32), span);
+        // Use Type::Any for method call return type - will be resolved during type checking/lowering
+        let expr = self.inner.method_call(receiver_expr, method, arg_exprs, Type::Any, span);
         self.store_expr(expr)
     }
 

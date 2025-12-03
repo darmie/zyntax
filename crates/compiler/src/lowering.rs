@@ -1369,6 +1369,22 @@ impl LoweringContext {
                 (TypedExpression::Call(retyped_call), expr_node.ty.clone())
             }
 
+            // Struct literal - retype field values
+            TypedExpression::Struct(struct_lit) => {
+                use zyntax_typed_ast::TypedStructLiteral;
+                let retyped_struct = TypedStructLiteral {
+                    name: struct_lit.name,
+                    fields: struct_lit.fields.iter().map(|field_init| {
+                        use zyntax_typed_ast::TypedFieldInit;
+                        TypedFieldInit {
+                            name: field_init.name,
+                            value: Box::new(self.retype_expression_node_with_self(&field_init.value, self_params)),
+                        }
+                    }).collect(),
+                };
+                (TypedExpression::Struct(retyped_struct), expr_node.ty.clone())
+            }
+
             // All other expression types - just clone
             _ => (expr_node.node.clone(), expr_node.ty.clone()),
         };

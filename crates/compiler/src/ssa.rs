@@ -1905,8 +1905,47 @@ impl SsaBuilder {
                         )
                     })?;
 
-                // Create call instruction
-                let result_type = self.convert_type(&expr.ty);
+                // Determine result type: if the method call has type Any, look up the trait method's return type
+                let result_type = if matches!(expr.ty, Type::Any) {
+                    // Look up the trait method's return type from the type registry
+                    let receiver_type_id = match &method_call.receiver.ty {
+                        Type::Named { id, .. } => *id,
+                        _ => return Err(crate::CompilerError::Analysis(
+                            "Method receiver is not a named type".into()
+                        )),
+                    };
+
+                    // Find the trait implementation for this type
+                    let mut method_return_type = None;
+                    for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                        for impl_def in impls {
+                            if let Type::Named { id: impl_type_id, .. } = &impl_def.for_type {
+                                if *impl_type_id == receiver_type_id {
+                                    // Find the method in this impl
+                                    for method in &impl_def.methods {
+                                        if method.signature.name == method_call.method {
+                                            method_return_type = Some(method.signature.return_type.clone());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if method_return_type.is_some() {
+                                break;
+                            }
+                        }
+                        if method_return_type.is_some() {
+                            break;
+                        }
+                    }
+
+                    let typed_return_type = method_return_type.unwrap_or(Type::Primitive(zyntax_typed_ast::PrimitiveType::I32));
+                    self.convert_type(&typed_return_type)
+                } else {
+                    // Otherwise use the annotated type
+                    self.convert_type(&expr.ty)
+                };
+
                 let result = if result_type != HirType::Void {
                     Some(self.create_value(result_type.clone(), HirValueKind::Instruction))
                 } else {
