@@ -1041,22 +1041,67 @@ impl CraneliftBackend {
                                             // DynamicBox layout: { tag: u32, size: u32, data: i64, dropper: i64, display_fn: i64 }
 
                                             // Allocate stack space for DynamicBox (32 bytes on 64-bit)
+                                            // Determine TypeTag and size based on HIR type
+                                            let arg_hir_id = args[param_index];
+                                            let (tag_value, size_value) = if let Some(hir_value) = function.values.get(&arg_hir_id) {
+                                                match &hir_value.ty {
+                                                    HirType::I8 => (0x0200u32, 1u32),    // Int, Bits8
+                                                    HirType::I16 => (0x0201u32, 2u32),   // Int, Bits16
+                                                    HirType::I32 => (0x0202u32, 4u32),   // Int, Bits32
+                                                    HirType::I64 => (0x0203u32, 8u32),   // Int, Bits64
+                                                    HirType::U8 => (0x0300u32, 1u32),    // UInt, Bits8
+                                                    HirType::U16 => (0x0301u32, 2u32),   // UInt, Bits16
+                                                    HirType::U32 => (0x0302u32, 4u32),   // UInt, Bits32
+                                                    HirType::U64 => (0x0303u32, 8u32),   // UInt, Bits64
+                                                    HirType::F32 => (0x0402u32, 4u32),   // Float, Bits32
+                                                    HirType::F64 => (0x0403u32, 8u32),   // Float, Bits64
+                                                    HirType::Bool => (0x0100u32, 1u32),  // Bool
+                                                    _ => (0x1200u32, 8u32),               // Opaque for others
+                                                }
+                                            } else {
+                                                (0x1200u32, 8u32)  // Default to Opaque
+                                            };
+
+                                            // Allocate stack space for the VALUE (8 bytes max for primitives)
+                                            let value_slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                                                cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                                                8,
+                                            ));
+                                            let value_addr = builder.ins().stack_addr(types::I64, value_slot, 0);
+
+                                            // Store the actual value in the value slot
+                                            // Extend smaller integers to i64 for storage
+                                            let data_value = match builder.func.dfg.value_type(arg_val) {
+                                                types::I8 | types::I16 | types::I32 => {
+                                                    // Sign-extend to i64
+                                                    builder.ins().sextend(types::I64, arg_val)
+                                                }
+                                                types::F32 => {
+                                                    // Bitcast f32 to i32, then zero-extend to i64
+                                                    let as_i32 = builder.ins().bitcast(types::I32, cranelift_codegen::ir::MemFlags::new(), arg_val);
+                                                    builder.ins().uextend(types::I64, as_i32)
+                                                }
+                                                _ => arg_val  // Already i64 or pointer
+                                            };
+                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), data_value, value_addr, 0);
+
+                                            // Allocate stack space for DynamicBox (32 bytes on 64-bit)
                                             let slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                                                 cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                                                 32,
                                             ));
                                             let box_addr = builder.ins().stack_addr(types::I64, slot, 0);
 
-                                            // Set tag (TypeCategory::Opaque = 0x12, type_id = 0)
-                                            let tag_val = builder.ins().iconst(types::I32, 0x12); // Opaque category
+                                            // Set tag
+                                            let tag_val = builder.ins().iconst(types::I32, tag_value as i64);
                                             builder.ins().store(cranelift_codegen::ir::MemFlags::new(), tag_val, box_addr, 0);
 
-                                            // Set size (8 bytes for pointer)
-                                            let size_val = builder.ins().iconst(types::I32, 8);
+                                            // Set size
+                                            let size_val = builder.ins().iconst(types::I32, size_value as i64);
                                             builder.ins().store(cranelift_codegen::ir::MemFlags::new(), size_val, box_addr, 4);
 
-                                            // Set data pointer (the opaque value itself)
-                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), arg_val, box_addr, 8);
+                                            // Set data POINTER (pointer to the value slot)
+                                            builder.ins().store(cranelift_codegen::ir::MemFlags::new(), value_addr, box_addr, 8);
 
                                             // Set dropper to null (0)
                                             let null_dropper = builder.ins().iconst(types::I64, 0);
