@@ -114,8 +114,8 @@ impl From<InferenceError> for TypeError {
 
 impl TypeChecker {
     pub fn new(registry: Box<crate::type_registry::TypeRegistry>) -> Self {
-        // We need to share the registry between inference context and constraint solver
-        let registry_for_solver = Box::new(crate::type_registry::TypeRegistry::new());
+        // Clone the registry so both inference context and constraint solver can use it
+        let registry_for_solver = Box::new((*registry).clone());
         Self {
             inference: InferenceContext::new(registry),
             constraint_solver: ConstraintSolver::with_type_registry(registry_for_solver),
@@ -131,8 +131,8 @@ impl TypeChecker {
         registry: Box<crate::type_registry::TypeRegistry>,
         options: TypeCheckOptions,
     ) -> Self {
-        // We need to share the registry between inference context and constraint solver
-        let registry_for_solver = Box::new(crate::type_registry::TypeRegistry::new());
+        // Clone the registry so both inference context and constraint solver can use it
+        let registry_for_solver = Box::new((*registry).clone());
         Self {
             inference: InferenceContext::new(registry),
             constraint_solver: ConstraintSolver::with_type_registry(registry_for_solver),
