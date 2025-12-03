@@ -630,6 +630,38 @@ impl LoweringContext {
                 }
             }
             TypedExpression::Call(call) => {
+                // Check if this is an associated function call (Type::method syntax)
+                if let TypedExpression::Variable(func_name) = &call.callee.node {
+                    let func_name_str = func_name.resolve_global()
+                        .or_else(|| {
+                            let arena = self.arena.lock().unwrap();
+                            arena.resolve_string(*func_name).map(|s| s.to_string())
+                        });
+
+                    if let Some(name_str) = func_name_str {
+                        // Check if this looks like an associated function call (contains ::)
+                        if name_str.contains("::") {
+                            // Parse Type::method
+                            let parts: Vec<&str> = name_str.split("::").collect();
+                            if parts.len() == 2 {
+                                let type_name = parts[0];
+                                let method_name = parts[1];
+
+                                // Look up the type and find the trait impl
+                                if let Some(mangled_name) = self.resolve_associated_function_to_mangled(
+                                    type_name,
+                                    method_name
+                                ) {
+                                    // Replace the Variable with the mangled name
+                                    let mangled_interned = InternedString::new_global(&mangled_name);
+                                    call.callee.node = TypedExpression::Variable(mangled_interned);
+                                    eprintln!("[RESOLVE] Associated function {}::{} -> {}", type_name, method_name, mangled_name);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 self.resolve_method_calls_in_expression(&mut call.callee, var_types)?;
                 for arg in &mut call.positional_args {
                     self.resolve_method_calls_in_expression(arg, var_types)?;
@@ -2474,6 +2506,59 @@ impl LoweringContext {
         };
 
         self.lower_function(&func)
+    }
+
+    /// Resolve associated function call (Type::method) to mangled trait method name
+    /// Returns None if the function cannot be resolved
+    fn resolve_associated_function_to_mangled(&self, type_name: &str, method_name: &str) -> Option<String> {
+        // Search through all trait implementations to find the method
+        for (_trait_id, impls) in self.type_registry.iter_implementations() {
+            for impl_def in impls {
+                // Check if this impl is for our type
+                if let Type::Named { id, .. } = &impl_def.for_type {
+                    // Get the type definition to get its name
+                    if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                        let impl_type_name = {
+                            let arena = self.arena.lock().unwrap();
+                            arena.resolve_string(type_def.name)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        };
+
+                        if impl_type_name == type_name {
+                            // Check if this impl has the method we're looking for
+                            for method in &impl_def.methods {
+                                let impl_method_name = {
+                                    let arena = self.arena.lock().unwrap();
+                                    arena.resolve_string(method.signature.name)
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_default()
+                                };
+
+                                if impl_method_name == method_name {
+                                    // Found it! Return mangled name
+                                    // Format: {TypeName}${TraitName}${method_name}
+                                    let trait_def = self.type_registry.get_trait_by_id(impl_def.trait_id);
+                                    if let Some(trait_def) = trait_def {
+                                        let trait_name = {
+                                            let arena = self.arena.lock().unwrap();
+                                            arena.resolve_string(trait_def.name)
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_default()
+                                        };
+
+                                        let mangled = format!("{}${}${}", type_name, trait_name, method_name);
+                                        return Some(mangled);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Mangle method name: ClassName_methodName
