@@ -1660,6 +1660,9 @@ impl SsaBuilder {
                     incoming: vec![(then_val, then_block_id), (else_val, else_block_id)],
                 });
 
+                // Set continuation block so subsequent code executes in merge block
+                self.continuation_block = Some(merge_block_id);
+
                 Ok(result)
             }
 
