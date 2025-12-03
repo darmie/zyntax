@@ -438,9 +438,9 @@ abstract_with_modifiers = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "w
       "define": "abstract_type",
       "args": {
           "name": "$1",
-          "underlying_type": "$2",
-          "suffixes": "$3",
-          "fields": "$4"
+          "underlying_type": "$3",
+          "suffixes": "$6",
+          "fields": "$8"
       }
   }
 
