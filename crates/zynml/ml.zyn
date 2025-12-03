@@ -1007,6 +1007,7 @@ primary_expr = {
     struct_literal |
     array_literal |
     float_literal |
+    suffixed_literal |
     duration_literal |
     int_literal |
     string_literal |
@@ -1130,6 +1131,15 @@ float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+
       "args": { "value": "$result" }
   }
 
+// Suffixed literal: 1000ms, 5s, 3ns (abstract type suffix)
+// Must come before int_literal to match first
+suffixed_literal = @{ "-"? ~ ASCII_DIGIT+ ~ ASCII_ALPHA+ }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "suffixed_literal",
+      "args": { "text": "$result" }
+  }
+
 // Integer: 42, -10, 0
 int_literal = @{ "-"? ~ ASCII_DIGIT+ }
   -> TypedExpression {
@@ -1139,7 +1149,7 @@ int_literal = @{ "-"? ~ ASCII_DIGIT+ }
       "args": { "value": "$result" }
   }
 
-// Duration: 1h, 5m, 30s, 500ms, 2d
+// Duration: 1h, 5m, 30s, 500ms, 2d (deprecated - use abstract types)
 duration_literal = @{ ASCII_DIGIT+ ~ duration_unit }
   -> TypedExpression {
       "get_text": true,

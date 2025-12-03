@@ -300,6 +300,10 @@ pub trait AstHostFunctions {
     /// Create an abstract type definition (abstract Name(UnderlyingType) or abstract Name(UnderlyingType): fields, Suffix("x"))
     fn create_abstract_def(&mut self, name: &str, underlying_type: NodeHandle, fields: Vec<NodeHandle>, suffixes: Vec<String>) -> NodeHandle;
 
+    /// Lookup suffix in suffix registry to find the abstract type name
+    /// Returns None if suffix is not registered
+    fn lookup_suffix(&self, suffix: &str) -> Option<String>;
+
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
 
@@ -1125,6 +1129,9 @@ pub struct TypedAstBuilder {
     /// Type declarations defined in the current file (name -> Type)
     /// Tracks types from @opaque, struct, enum declarations so type references can be resolved
     declared_types: HashMap<String, Type>,
+    /// Suffix to type name mapping for abstract types (suffix -> type_name)
+    /// e.g., "ms" -> "Duration", "s" -> "Duration", "px" -> "Length"
+    suffix_registry: HashMap<String, String>,
     /// Program declaration handles (in order)
     program_decls: Vec<NodeHandle>,
     /// Current span being processed (start, end)
@@ -1158,6 +1165,7 @@ impl TypedAstBuilder {
             variable_types: HashMap::new(),
             enum_types: HashMap::new(),
             declared_types: HashMap::new(),
+            suffix_registry: HashMap::new(),
             program_decls: Vec::new(),
             current_span: (0, 0),
         }
@@ -1812,6 +1820,12 @@ impl AstHostFunctions for TypedAstBuilder {
         self.declared_types.insert(name.to_string(), abstract_type.clone());
         eprintln!("[DEBUG create_abstract_def] Registered abstract type '{}' with ID {:?}", name, type_id);
 
+        // Register suffixes in the suffix registry for literal parsing
+        for suffix in &suffixes {
+            eprintln!("[DEBUG create_abstract_def] Registering suffix '{}' -> '{}'", suffix, name);
+            self.suffix_registry.insert(suffix.clone(), name.to_string());
+        }
+
         // Register the type definition in the type registry
         // Implicit conversions will be populated later via From/Into trait impls
         let field_defs: Vec<zyntax_typed_ast::type_registry::FieldDef> = typed_fields.clone().into_iter().map(|f| zyntax_typed_ast::type_registry::FieldDef {
@@ -1878,6 +1892,10 @@ impl AstHostFunctions for TypedAstBuilder {
         };
 
         self.store_decl(decl_node)
+    }
+
+    fn lookup_suffix(&self, suffix: &str) -> Option<String> {
+        self.suffix_registry.get(suffix).cloned()
     }
 
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
@@ -4195,6 +4213,61 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => false,
                 };
                 let handle = self.host.create_bool_literal(value);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "suffixed_literal" => {
+                // Parse suffixed literals like "1000ms", "5s", "3ns"
+                // Lookup suffix in registry to find abstract type and create Type::from_{suffix}(value) call
+                let text = match args.get("text") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("suffixed_literal: missing text".into())),
+                };
+
+                // Split into number and suffix
+                let mut num_end = 0;
+                for (i, ch) in text.char_indices() {
+                    if ch.is_ascii_digit() || ch == '-' {
+                        num_end = i + ch.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+
+                let num_str = &text[..num_end];
+                let suffix = &text[num_end..];
+
+                eprintln!("[DEBUG suffixed_literal] Parsing '{}': num='{}', suffix='{}'", text, num_str, suffix);
+
+                // Look up suffix in registry
+                let type_name = match self.host.lookup_suffix(suffix) {
+                    Some(name) => name,
+                    None => {
+                        // Suffix not registered - could be a typo or undefined abstract type
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            format!("suffixed_literal: unknown suffix '{}' - no abstract type registered with this suffix", suffix)
+                        ));
+                    }
+                };
+
+                eprintln!("[DEBUG suffixed_literal] Suffix '{}' maps to type '{}'", suffix, type_name);
+
+                // Parse the number
+                let num: i64 = num_str.parse()
+                    .map_err(|_| crate::error::ZynPegError::CodeGenError(
+                        format!("suffixed_literal: invalid number '{}'", num_str)
+                    ))?;
+
+                // Create method call: Type::from_{suffix}(num)
+                // e.g., "1000ms" -> Duration::from_ms(1000)
+                let method_name = format!("{}::from_{}", type_name, suffix);
+
+                // Create the call expression
+                let num_literal = self.host.create_int_literal(num);
+                let method_var = self.host.create_variable(&method_name);
+                let handle = self.host.create_call(method_var, vec![num_literal]);
+
+                eprintln!("[DEBUG suffixed_literal] Created call to '{}' with arg {}", method_name, num);
                 Ok(RuntimeValue::Node(handle))
             }
 
