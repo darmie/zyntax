@@ -513,6 +513,7 @@ impl LoweringContext {
         use zyntax_typed_ast::typed_ast::TypedDeclaration;
         use zyntax_typed_ast::TypedExpression;
         use zyntax_typed_ast::Type;
+        use std::collections::HashMap;
 
         eprintln!("[RESOLVE_TYPES] Resolving method call return types...");
 
@@ -521,7 +522,8 @@ impl LoweringContext {
             match &mut decl.node {
                 TypedDeclaration::Function(func) => {
                     if let Some(body) = &mut func.body {
-                        self.resolve_method_calls_in_block(body)?;
+                        let mut var_types = HashMap::new();
+                        self.resolve_method_calls_in_block(body, &mut var_types)?;
                     }
                 }
                 _ => {}
@@ -533,9 +535,13 @@ impl LoweringContext {
     }
 
     /// Recursively resolve method calls in a block
-    fn resolve_method_calls_in_block(&self, block: &mut zyntax_typed_ast::TypedBlock) -> CompilerResult<()> {
+    fn resolve_method_calls_in_block(
+        &self,
+        block: &mut zyntax_typed_ast::TypedBlock,
+        var_types: &mut std::collections::HashMap<zyntax_typed_ast::InternedString, zyntax_typed_ast::Type>,
+    ) -> CompilerResult<()> {
         for stmt in &mut block.statements {
-            self.resolve_method_calls_in_statement(stmt)?;
+            self.resolve_method_calls_in_statement(stmt, var_types)?;
         }
         Ok(())
     }
@@ -544,27 +550,30 @@ impl LoweringContext {
     fn resolve_method_calls_in_statement(
         &self,
         stmt: &mut zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedStatement>,
+        var_types: &mut std::collections::HashMap<zyntax_typed_ast::InternedString, zyntax_typed_ast::Type>,
     ) -> CompilerResult<()> {
         use zyntax_typed_ast::typed_ast::TypedStatement;
         use zyntax_typed_ast::Type;
 
         match &mut stmt.node {
             TypedStatement::Expression(expr) => {
-                self.resolve_method_calls_in_expression(expr)?;
+                self.resolve_method_calls_in_expression(expr, var_types)?;
             }
             TypedStatement::Let(let_stmt) => {
                 if let Some(init) = &mut let_stmt.initializer {
-                    self.resolve_method_calls_in_expression(init)?;
+                    self.resolve_method_calls_in_expression(init, var_types)?;
                     // If the let statement has type Any and the initializer has a resolved type, update it
                     if matches!(let_stmt.ty, Type::Any) && !matches!(init.ty, Type::Any) {
                         let_stmt.ty = init.ty.clone();
                         eprintln!("[RESOLVE_TYPES] Updated let statement type to: {:?}", let_stmt.ty);
                     }
+                    // Register the variable's type for later lookups
+                    var_types.insert(let_stmt.name, let_stmt.ty.clone());
                 }
             }
             TypedStatement::Return(opt_expr) => {
                 if let Some(expr) = opt_expr {
-                    self.resolve_method_calls_in_expression(expr)?;
+                    self.resolve_method_calls_in_expression(expr, var_types)?;
                 }
             }
             _ => {}
@@ -576,21 +585,29 @@ impl LoweringContext {
     fn resolve_method_calls_in_expression(
         &self,
         expr: &mut zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>,
+        var_types: &std::collections::HashMap<zyntax_typed_ast::InternedString, zyntax_typed_ast::Type>,
     ) -> CompilerResult<()> {
         use zyntax_typed_ast::{TypedExpression, Type};
 
         match &mut expr.node {
             TypedExpression::MethodCall(method_call) => {
                 // Recursively process receiver and arguments FIRST
-                // This is important because the receiver might be a Variable that needs type lookup
-                self.resolve_method_calls_in_expression(&mut method_call.receiver)?;
+                self.resolve_method_calls_in_expression(&mut method_call.receiver, var_types)?;
                 for arg in &mut method_call.positional_args {
-                    self.resolve_method_calls_in_expression(arg)?;
+                    self.resolve_method_calls_in_expression(arg, var_types)?;
                 }
 
                 // If the method call has Type::Any, resolve it
+                // First, get the actual receiver type (may need to look up from var_types)
                 if matches!(expr.ty, Type::Any) {
-                    if let Type::Named { id: receiver_type_id, .. } = &method_call.receiver.ty {
+                    let receiver_type = if let TypedExpression::Variable(var_name) = &method_call.receiver.node {
+                        // Look up variable type from our symbol table
+                        var_types.get(var_name).cloned().unwrap_or_else(|| method_call.receiver.ty.clone())
+                    } else {
+                        method_call.receiver.ty.clone()
+                    };
+
+                    if let Type::Named { id: receiver_type_id, .. } = &receiver_type {
                         // Look up the trait implementation
                         for (_trait_id, impls) in self.type_registry.iter_implementations() {
                             for impl_def in impls {
@@ -613,31 +630,28 @@ impl LoweringContext {
                 }
             }
             TypedExpression::Call(call) => {
-                self.resolve_method_calls_in_expression(&mut call.callee)?;
+                self.resolve_method_calls_in_expression(&mut call.callee, var_types)?;
                 for arg in &mut call.positional_args {
-                    self.resolve_method_calls_in_expression(arg)?;
+                    self.resolve_method_calls_in_expression(arg, var_types)?;
                 }
             }
             TypedExpression::Binary(binary) => {
-                self.resolve_method_calls_in_expression(&mut binary.left)?;
-                self.resolve_method_calls_in_expression(&mut binary.right)?;
+                self.resolve_method_calls_in_expression(&mut binary.left, var_types)?;
+                self.resolve_method_calls_in_expression(&mut binary.right, var_types)?;
             }
             TypedExpression::Unary(unary) => {
-                self.resolve_method_calls_in_expression(&mut unary.operand)?;
+                self.resolve_method_calls_in_expression(&mut unary.operand, var_types)?;
             }
             TypedExpression::Field(field_access) => {
-                self.resolve_method_calls_in_expression(&mut field_access.object)?;
+                self.resolve_method_calls_in_expression(&mut field_access.object, var_types)?;
             }
             TypedExpression::Struct(struct_lit) => {
                 for field in &mut struct_lit.fields {
-                    self.resolve_method_calls_in_expression(&mut field.value)?;
+                    self.resolve_method_calls_in_expression(&mut field.value, var_types)?;
                 }
             }
-            TypedExpression::Variable(var_name) => {
-                // Variables need their types updated to match their Let statement
-                // This is important for chained method calls like p2.clone() where p2's type was resolved from p1.clone()
-                // However, we can't easily look up the Let statement here, so we rely on SSA's var_types lookup instead
-                // For now, just skip - SSA will handle this via var_types
+            TypedExpression::Variable(_var_name) => {
+                // Variable types are looked up from var_types when needed (see MethodCall case above)
             }
             _ => {}
         }
