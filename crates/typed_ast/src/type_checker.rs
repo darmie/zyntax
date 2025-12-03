@@ -798,13 +798,16 @@ impl TypeChecker {
                     self.emit_type_error(err, span);
                 }
             }
+            // Import and Class declarations are handled elsewhere
+            TypedDeclaration::Import(_) | TypedDeclaration::Class(_) => {
+                // Import declarations are processed at the module level
+                // Class declarations (structs) are registered in the TypeRegistry
+            }
             // TODO: Implement other declaration types
-            TypedDeclaration::Class(_)
-            | TypedDeclaration::Interface(_)
+            TypedDeclaration::Interface(_)
             | TypedDeclaration::Enum(_)
             | TypedDeclaration::TypeAlias(_)
-            | TypedDeclaration::Module(_)
-            | TypedDeclaration::Import(_) => {
+            | TypedDeclaration::Module(_) => {
                 // Placeholder for now - emit warning for unimplemented features
                 self.diagnostics
                     .warning("declaration type not yet fully implemented")
