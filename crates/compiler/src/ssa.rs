@@ -1525,9 +1525,22 @@ impl SsaBuilder {
                 let object = &field_access.object;
                 let field = &field_access.field;
                 let object_val = self.translate_expression(block_id, object)?;
-                
+
+                // Resolve actual type - if object is a variable, look up its type from var_types
+                let object_type = if let TypedExpression::Variable(var_name) = &object.node {
+                    // Variable - get actual type from var_types (which was updated during type resolution)
+                    if let Some(hir_type) = self.var_types.get(var_name) {
+                        // Convert HIR type back to TypedAST Type for get_field_index
+                        self.hir_type_to_typed_ast_type(hir_type)
+                    } else {
+                        object.ty.clone()
+                    }
+                } else {
+                    object.ty.clone()
+                };
+
                 // Calculate field index
-                let field_index = self.get_field_index(&object.ty, field)?;
+                let field_index = self.get_field_index(&object_type, field)?;
                 let result_type = self.convert_type(&expr.ty);
                 let result = self.create_value(result_type.clone(), HirValueKind::Instruction);
                 
@@ -1877,9 +1890,22 @@ impl SsaBuilder {
             }
 
             TypedExpression::MethodCall(method_call) => {
+                // Resolve actual receiver type - if receiver is a variable, look up its type from var_types
+                let receiver_type = if let TypedExpression::Variable(var_name) = &method_call.receiver.node {
+                    // Variable - get actual type from var_types (which was updated during type resolution)
+                    if let Some(hir_type) = self.var_types.get(var_name) {
+                        // Convert HIR type back to TypedAST Type
+                        self.hir_type_to_typed_ast_type(hir_type)
+                    } else {
+                        method_call.receiver.ty.clone()
+                    }
+                } else {
+                    method_call.receiver.ty.clone()
+                };
+
                 // Resolve method to mangled function name
                 let mangled_name = self.resolve_method_to_function(
-                    &method_call.receiver.ty,
+                    &receiver_type,
                     method_call.method,
                 )?;
 
@@ -1908,10 +1934,10 @@ impl SsaBuilder {
                 // Determine result type: if the method call has type Any, look up the trait method's return type
                 let result_type = if matches!(expr.ty, Type::Any) {
                     // Look up the trait method's return type from the type registry
-                    let receiver_type_id = match &method_call.receiver.ty {
+                    let receiver_type_id = match &receiver_type {
                         Type::Named { id, .. } => *id,
                         _ => return Err(crate::CompilerError::Analysis(
-                            "Method receiver is not a named type".into()
+                            format!("Method receiver is not a named type: {:?}", receiver_type)
                         )),
                     };
 
@@ -3128,7 +3154,77 @@ impl SsaBuilder {
             _ => HirType::I64, // Default for complex types
         }
     }
-    
+
+    /// Convert HIR type back to TypedAST Type (reverse of convert_type)
+    /// This is used when we need to look up type information that was stored in HIR format
+    fn hir_type_to_typed_ast_type(&self, hir_ty: &HirType) -> Type {
+        use zyntax_typed_ast::PrimitiveType;
+        use zyntax_typed_ast::type_registry::NullabilityKind;
+
+        match hir_ty {
+            HirType::Bool => Type::Primitive(PrimitiveType::Bool),
+            HirType::I8 => Type::Primitive(PrimitiveType::I8),
+            HirType::I16 => Type::Primitive(PrimitiveType::I16),
+            HirType::I32 => Type::Primitive(PrimitiveType::I32),
+            HirType::I64 => Type::Primitive(PrimitiveType::I64),
+            HirType::I128 => Type::Primitive(PrimitiveType::I128),
+            HirType::U8 => Type::Primitive(PrimitiveType::U8),
+            HirType::U16 => Type::Primitive(PrimitiveType::U16),
+            HirType::U32 => Type::Primitive(PrimitiveType::U32),
+            HirType::U64 => Type::Primitive(PrimitiveType::U64),
+            HirType::U128 => Type::Primitive(PrimitiveType::U128),
+            HirType::F32 => Type::Primitive(PrimitiveType::F32),
+            HirType::F64 => Type::Primitive(PrimitiveType::F64),
+            HirType::Void => Type::Primitive(PrimitiveType::Unit),
+            HirType::Ptr(inner) => {
+                Type::Reference {
+                    ty: Box::new(self.hir_type_to_typed_ast_type(inner)),
+                    mutability: zyntax_typed_ast::type_registry::Mutability::Mutable,
+                    lifetime: None,
+                    nullability: NullabilityKind::NonNull,
+                }
+            },
+            HirType::Array(elem_ty, size) => {
+                Type::Array {
+                    element_type: Box::new(self.hir_type_to_typed_ast_type(elem_ty)),
+                    size: Some(zyntax_typed_ast::type_registry::ConstValue::UInt(*size)),
+                    nullability: NullabilityKind::NonNull,
+                }
+            },
+            HirType::Struct(struct_ty) => {
+                // If struct has a name, look it up in type registry to get TypeId
+                if let Some(name) = struct_ty.name {
+                    if let Some(type_def) = self.type_registry.get_type_by_name(name) {
+                        return Type::Named {
+                            id: type_def.id,
+                            type_args: vec![],
+                            const_args: vec![],
+                            variance: vec![],
+                            nullability: NullabilityKind::NonNull,
+                        };
+                    }
+                }
+                // Fallback: inline struct type
+                Type::Struct {
+                    fields: vec![], // We don't reconstruct fields here
+                    is_anonymous: false,
+                    nullability: NullabilityKind::NonNull,
+                }
+            },
+            HirType::Union(_) => {
+                // Optional/Result types - return as Any for now
+                Type::Any
+            },
+            HirType::Opaque(name) => {
+                Type::Extern {
+                    name: *name,
+                    layout: None,
+                }
+            },
+            _ => Type::Any, // Default fallback
+        }
+    }
+
     /// Convert binary operator
     fn convert_binary_op(&self, op: &zyntax_typed_ast::typed_ast::BinaryOp) -> crate::hir::BinaryOp {
         use zyntax_typed_ast::typed_ast::BinaryOp as FrontendOp;

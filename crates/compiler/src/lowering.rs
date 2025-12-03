@@ -390,6 +390,10 @@ impl AstLowering for LoweringContext {
             self.run_type_checking(program)?;
         }
 
+        // Phase 0.5: Resolve method call return types
+        // This updates MethodCall expression types by looking up trait implementations
+        self.resolve_method_call_types(program)?;
+
         // First pass: collect all declarations
         self.collect_declarations(program)?;
 
@@ -498,6 +502,144 @@ impl LoweringContext {
         // Warn about Unknown types (for debugging Issue 0)
         if std::env::var("ZYNTAX_DEBUG_TYPES").is_ok() {
             self.check_for_unknown_types(program);
+        }
+
+        Ok(())
+    }
+
+    /// Resolve method call return types by looking up trait implementations
+    /// This updates MethodCall expressions with Type::Any to have the correct return type
+    fn resolve_method_call_types(&mut self, program: &mut TypedProgram) -> CompilerResult<()> {
+        use zyntax_typed_ast::typed_ast::TypedDeclaration;
+        use zyntax_typed_ast::TypedExpression;
+        use zyntax_typed_ast::Type;
+
+        eprintln!("[RESOLVE_TYPES] Resolving method call return types...");
+
+        // Iterate through all declarations and resolve method calls
+        for decl in &mut program.declarations {
+            match &mut decl.node {
+                TypedDeclaration::Function(func) => {
+                    if let Some(body) = &mut func.body {
+                        self.resolve_method_calls_in_block(body)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        eprintln!("[RESOLVE_TYPES] Method call type resolution complete");
+        Ok(())
+    }
+
+    /// Recursively resolve method calls in a block
+    fn resolve_method_calls_in_block(&self, block: &mut zyntax_typed_ast::TypedBlock) -> CompilerResult<()> {
+        for stmt in &mut block.statements {
+            self.resolve_method_calls_in_statement(stmt)?;
+        }
+        Ok(())
+    }
+
+    /// Recursively resolve method calls in a statement
+    fn resolve_method_calls_in_statement(
+        &self,
+        stmt: &mut zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedStatement>,
+    ) -> CompilerResult<()> {
+        use zyntax_typed_ast::typed_ast::TypedStatement;
+        use zyntax_typed_ast::Type;
+
+        match &mut stmt.node {
+            TypedStatement::Expression(expr) => {
+                self.resolve_method_calls_in_expression(expr)?;
+            }
+            TypedStatement::Let(let_stmt) => {
+                if let Some(init) = &mut let_stmt.initializer {
+                    self.resolve_method_calls_in_expression(init)?;
+                    // If the let statement has type Any and the initializer has a resolved type, update it
+                    if matches!(let_stmt.ty, Type::Any) && !matches!(init.ty, Type::Any) {
+                        let_stmt.ty = init.ty.clone();
+                        eprintln!("[RESOLVE_TYPES] Updated let statement type to: {:?}", let_stmt.ty);
+                    }
+                }
+            }
+            TypedStatement::Return(opt_expr) => {
+                if let Some(expr) = opt_expr {
+                    self.resolve_method_calls_in_expression(expr)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Recursively resolve method calls in an expression
+    fn resolve_method_calls_in_expression(
+        &self,
+        expr: &mut zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>,
+    ) -> CompilerResult<()> {
+        use zyntax_typed_ast::{TypedExpression, Type};
+
+        match &mut expr.node {
+            TypedExpression::MethodCall(method_call) => {
+                // Recursively process receiver and arguments FIRST
+                // This is important because the receiver might be a Variable that needs type lookup
+                self.resolve_method_calls_in_expression(&mut method_call.receiver)?;
+                for arg in &mut method_call.positional_args {
+                    self.resolve_method_calls_in_expression(arg)?;
+                }
+
+                // If the method call has Type::Any, resolve it
+                if matches!(expr.ty, Type::Any) {
+                    if let Type::Named { id: receiver_type_id, .. } = &method_call.receiver.ty {
+                        // Look up the trait implementation
+                        for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                            for impl_def in impls {
+                                if let Type::Named { id: impl_type_id, .. } = &impl_def.for_type {
+                                    if *impl_type_id == *receiver_type_id {
+                                        // Find the method in this impl
+                                        for method in &impl_def.methods {
+                                            if method.signature.name == method_call.method {
+                                                // Update the expression type
+                                                expr.ty = method.signature.return_type.clone();
+                                                eprintln!("[RESOLVE_TYPES] Resolved method call return type: {:?}", expr.ty);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            TypedExpression::Call(call) => {
+                self.resolve_method_calls_in_expression(&mut call.callee)?;
+                for arg in &mut call.positional_args {
+                    self.resolve_method_calls_in_expression(arg)?;
+                }
+            }
+            TypedExpression::Binary(binary) => {
+                self.resolve_method_calls_in_expression(&mut binary.left)?;
+                self.resolve_method_calls_in_expression(&mut binary.right)?;
+            }
+            TypedExpression::Unary(unary) => {
+                self.resolve_method_calls_in_expression(&mut unary.operand)?;
+            }
+            TypedExpression::Field(field_access) => {
+                self.resolve_method_calls_in_expression(&mut field_access.object)?;
+            }
+            TypedExpression::Struct(struct_lit) => {
+                for field in &mut struct_lit.fields {
+                    self.resolve_method_calls_in_expression(&mut field.value)?;
+                }
+            }
+            TypedExpression::Variable(var_name) => {
+                // Variables need their types updated to match their Let statement
+                // This is important for chained method calls like p2.clone() where p2's type was resolved from p1.clone()
+                // However, we can't easily look up the Let statement here, so we rely on SSA's var_types lookup instead
+                // For now, just skip - SSA will handle this via var_types
+            }
+            _ => {}
         }
 
         Ok(())
@@ -1584,18 +1726,7 @@ impl LoweringContext {
                 let trait_name = impl_block.trait_name;
 
                 // Create mangled name: TypeName$TraitName$method_name
-                let arena = self.arena.lock().unwrap();
-                let type_name_str = arena.resolve_string(type_name)
-                    .unwrap_or("Unknown");
-                let trait_name_str = arena.resolve_string(trait_name)
-                    .unwrap_or("Unknown");
-                let method_name_str = arena.resolve_string(method.name)
-                    .unwrap_or("unknown");
-
-                let mangled = format!("{}${}${}", type_name_str, trait_name_str, method_name_str);
-                drop(arena);
-
-                InternedString::new_global(&mangled)
+                self.mangle_trait_method_name(type_name, trait_name, method.name)
             };
 
             eprintln!("[LOWERING] Mangled method name: {:?}", mangled_name);
@@ -2343,6 +2474,25 @@ impl LoweringContext {
         arena.intern_string(&format!("{}_{}", class_name_str, method_name_str))
     }
 
+    /// Mangle trait method name: Type$Trait$method
+    /// This is used for trait implementations to avoid name collisions
+    fn mangle_trait_method_name(
+        &self,
+        type_name: InternedString,
+        trait_name: InternedString,
+        method_name: InternedString,
+    ) -> InternedString {
+        let type_name_str = type_name.resolve_global()
+            .unwrap_or_else(|| "UnknownType".to_string());
+        let trait_name_str = trait_name.resolve_global()
+            .unwrap_or_else(|| "UnknownTrait".to_string());
+        let method_name_str = method_name.resolve_global()
+            .unwrap_or_else(|| "unknown_method".to_string());
+
+        let mangled = format!("{}${}${}", type_name_str, trait_name_str, method_name_str);
+        InternedString::new_global(&mangled)
+    }
+
     /// Convert visibility to linkage
     fn convert_linkage(&self, vis: Visibility) -> crate::hir::Linkage {
         match vis {
@@ -2529,29 +2679,45 @@ impl LoweringContext {
     #[allow(dead_code)]  // Will be used when TypeRegistry integration is complete
     fn lower_impl_method(
         &mut self,
-        _trait_id: TypeId,
+        trait_id: TypeId,
         type_id: TypeId,
         method_impl: &zyntax_typed_ast::MethodImpl,
     ) -> CompilerResult<crate::hir::HirId> {
-        // Get type name first
+        // Get type name and trait name
         let type_def = self.type_registry.get_type_by_id(type_id)
             .ok_or_else(|| crate::CompilerError::Analysis(
                 format!("Type {:?} not found in registry", type_id)
             ))?;
         let type_name = type_def.name;
 
-        // Create mangled name matching lower_method format: ClassName::methodName
-        // Note: mangle_method_name locks arena internally, so don't hold lock here
-        let mangled_name = self.mangle_method_name(type_name, method_impl.signature.name);
+        // Try trait-based mangling first (Type$Trait$method)
+        // This is what lower_impl_block uses for trait implementations
+        let trait_def = self.type_registry.get_trait_def(trait_id);
+        if let Some(trait_def) = trait_def {
+            let trait_mangled_name = self.mangle_trait_method_name(
+                type_name,
+                trait_def.name,
+                method_impl.signature.name,
+            );
+
+            // Check if already lowered by lower_impl_block
+            if let Some(&method_id) = self.symbols.functions.get(&trait_mangled_name) {
+                return Ok(method_id);
+            }
+        }
+
+        // Fallback: try class method mangling (ClassName::methodName)
+        // This is for inherent methods on classes
+        let class_mangled_name = self.mangle_method_name(type_name, method_impl.signature.name);
 
         // Lookup the already-lowered function ID from symbol table
-        let method_id = self.symbols.functions.get(&mangled_name)
+        let method_id = self.symbols.functions.get(&class_mangled_name)
             .copied()
             .ok_or_else(|| crate::CompilerError::Analysis(
-                format!("Method function not found in symbol table: {:?}. \
-                        This likely means the class method was not lowered yet. \
-                        Ensure lower_class() runs before lower_implementations().",
-                        mangled_name)
+                format!("Method function not found in symbol table: {:?} or {:?}. \
+                        This likely means the method was not lowered yet. \
+                        Ensure lower_class() or lower_impl_block() runs before lower_implementations().",
+                        class_mangled_name, trait_def.map(|t| t.name))
             ))?;
 
         Ok(method_id)
