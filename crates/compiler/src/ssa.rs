@@ -3286,9 +3286,25 @@ impl SsaBuilder {
             ))?;
 
         // Find the field index in the type definition
+        eprintln!("[DEBUG] Looking for field {:?} in type {:?} which has {} fields",
+            field_name, type_def.name, type_def.fields.len());
         for (idx, field) in type_def.fields.iter().enumerate() {
+            eprintln!("[DEBUG]   Field {}: name={:?}", idx, field.name);
             if &field.name == field_name {
                 return Ok(idx as u32);
+            }
+        }
+
+        // Field not found - also try string comparison as fallback
+        eprintln!("[DEBUG] Direct comparison failed, trying string resolution");
+        for (idx, field) in type_def.fields.iter().enumerate() {
+            if let (Some(field_name_str), Some(lookup_name_str)) =
+                (field.name.resolve_global(), field_name.resolve_global()) {
+                eprintln!("[DEBUG]   Comparing '{}' == '{}'", field_name_str, lookup_name_str);
+                if field_name_str == lookup_name_str {
+                    eprintln!("[DEBUG] Found match by string comparison!");
+                    return Ok(idx as u32);
+                }
             }
         }
 
