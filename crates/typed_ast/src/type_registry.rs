@@ -553,6 +553,19 @@ pub enum TypeKind {
     },
     /// Type alias
     Alias { target: Type },
+    /// Abstract type (like Haxe's abstract) - wrapper with implicit conversions
+    /// Provides zero-cost abstraction with compile-time conversions to/from underlying type
+    Abstract {
+        /// The underlying/base type this abstracts over
+        underlying_type: Type,
+        /// Types this abstract can implicitly convert TO (via to() methods or From impls)
+        implicit_to: Vec<Type>,
+        /// Types this abstract can implicitly convert FROM (via from() methods or Into impls)
+        implicit_from: Vec<Type>,
+        /// Suffixes for literal syntax (e.g., ["ms", "s", "ns"] for Duration allows 1ms, 2s, 3ns syntax)
+        /// Each suffix maps to specific from_* method (e.g., Suffix("ms") -> from_ms, Suffix("s") -> from_s)
+        suffixes: Vec<String>,
+    },
     /// Function type constructor
     Function,
     /// Array/Collection type constructor

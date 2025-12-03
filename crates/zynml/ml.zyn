@@ -250,7 +250,7 @@ top_level_items = { top_level_item* }
       "args": { "declarations": "$result" }
   }
 
-top_level_item = { trait_def | impl_block | struct_def | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
+top_level_item = { trait_def | impl_block | abstract_def | struct_def | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -414,6 +414,66 @@ struct_field = { identifier ~ ":" ~ type_expr }
               "type": "$2"
           }}
       ]
+  }
+
+// ============================================================================
+// Abstract Type Definition (Haxe-style)
+// ============================================================================
+
+// abstract Duration(i64) with Suffix("ms"):
+//     ms: i64
+// abstract Duration(i64) with Suffixes("ms, s, ns, m, h"):
+//     ms: i64
+// Abstract types are zero-cost wrappers with implicit conversions
+// Can have fields like structs, with underlying type for direct conversions
+// Suffix/Suffixes enables literal syntax like 1000ms, 5s, 3ns
+abstract_def = { abstract_with_modifiers | abstract_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// abstract Name(Type) with Suffix("x"):  or  with Suffixes("x, y, z"):
+abstract_with_modifiers = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ abstract_modifier ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration {
+      "define": "abstract_type",
+      "args": {
+          "name": "$1",
+          "underlying_type": "$2",
+          "suffixes": "$3",
+          "fields": "$4"
+      }
+  }
+
+// abstract Name(Type)
+abstract_simple = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" }
+  -> TypedDeclaration {
+      "define": "abstract_type",
+      "args": {
+          "name": "$1",
+          "underlying_type": "$2"
+      }
+  }
+
+// Suffix modifier: Suffix("ms") or Suffixes("ms, s, ns")
+abstract_modifier = { suffixes_attr | suffix_attr }
+  -> List {
+      "get_child": { "index": 0 }
+  }
+
+// Single suffix: Suffix("ms")
+suffix_attr = { "Suffix" ~ "(" ~ string_literal ~ ")" }
+  -> List {
+      "get_text": true,
+      "define": "single_suffix",
+      "args": { "suffix": "$2" }
+  }
+
+// Multiple suffixes: Suffixes("ms, s, ns, m, h")
+suffixes_attr = { "Suffixes" ~ "(" ~ string_literal ~ ")" }
+  -> List {
+      "get_text": true,
+      "define": "multiple_suffixes",
+      "args": { "suffixes": "$2" }
   }
 
 // ============================================================================

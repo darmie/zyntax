@@ -902,6 +902,14 @@ impl ConstraintSolver {
                                 Constraint::HasMember(target_with_args, member, member_ty, span),
                             ]))
                         }
+                        TypeKind::Abstract { underlying_type, .. } => {
+                            // For abstract types, forward member access to underlying type
+                            let underlying_with_args =
+                                self.apply_type_args(underlying_type, &type_def.type_params, type_args);
+                            Ok(ConstraintResult::NewConstraints(vec![
+                                Constraint::HasMember(underlying_with_args, member, member_ty, span),
+                            ]))
+                        }
                         TypeKind::Atomic => todo!(),
                         TypeKind::Class => todo!(),
                         TypeKind::Function => todo!(),
@@ -1183,6 +1191,33 @@ impl ConstraintSolver {
                         self.apply_type_args(target, &sub_def.type_params, &sub_args);
                     Ok(ConstraintResult::NewConstraints(vec![Constraint::Subtype(
                         instantiated_target,
+                        Type::Named {
+                            id: super_id,
+                            type_args: super_args,
+                            const_args: Vec::new(),
+                            variance: Vec::new(),
+                            nullability: crate::type_registry::NullabilityKind::default(),
+                        },
+                        span,
+                    )]))
+                }
+                TypeKind::Abstract { underlying_type, implicit_to, .. } => {
+                    // For abstract types, check if super_id is in implicit_to list
+                    // or if underlying type is a subtype of super_id
+                    for to_type in implicit_to {
+                        if let Type::Named { id, .. } = to_type {
+                            if *id == super_id {
+                                // Abstract can implicitly convert to super_id
+                                return Ok(ConstraintResult::Solved);
+                            }
+                        }
+                    }
+
+                    // Otherwise try underlying type
+                    let underlying_with_args =
+                        self.apply_type_args(underlying_type, &sub_def.type_params, &sub_args);
+                    Ok(ConstraintResult::NewConstraints(vec![Constraint::Subtype(
+                        underlying_with_args,
                         Type::Named {
                             id: super_id,
                             type_args: super_args,

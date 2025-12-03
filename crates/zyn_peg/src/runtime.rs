@@ -49,7 +49,7 @@ pub use zyntax_typed_ast::{
     TypedASTBuilder, TypedProgram, TypedNode, TypedDeclaration, TypedExpression,
     TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span, InternedString,
     TypedClass, TypedEnum, TypedField, TypedVariant,
-    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern, TypedMethod, TypedMethodParam, TypedTypeParam, ParameterKind, ParameterAttribute, TypedRange, TypedExtern, TypedExternStruct},
+    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern, TypedMethod, TypedMethodParam, TypedTypeParam, ParameterKind, ParameterAttribute, TypedRange, TypedExtern, TypedExternStruct, TypedTypeAlias},
     type_registry::{Type, PrimitiveType, Mutability, Visibility, ConstValue},
 };
 
@@ -296,6 +296,9 @@ pub trait AstHostFunctions {
 
     /// Create a struct type definition (struct Name: field1: Type1, field2: Type2)
     fn create_struct_def(&mut self, name: &str, fields: Vec<NodeHandle>) -> NodeHandle;
+
+    /// Create an abstract type definition (abstract Name(UnderlyingType) or abstract Name(UnderlyingType): fields, Suffix("x"))
+    fn create_abstract_def(&mut self, name: &str, underlying_type: NodeHandle, fields: Vec<NodeHandle>, suffixes: Vec<String>) -> NodeHandle;
 
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
@@ -1756,6 +1759,122 @@ impl AstHostFunctions for TypedAstBuilder {
             node: class_decl,
             span: self.default_span(),
             ty: struct_type,
+        };
+
+        self.store_decl(decl_node)
+    }
+
+    fn create_abstract_def(&mut self, name: &str, underlying_type_handle: NodeHandle, field_handles: Vec<NodeHandle>, suffixes: Vec<String>) -> NodeHandle {
+        // Create an abstract type (Haxe-style zero-cost wrapper)
+        // abstract Duration(i64): ms: i64, Suffix("ms"), Suffix("s")
+        eprintln!("[DEBUG create_abstract_def] Creating abstract type '{}' with {} fields, suffixes={:?}", name, field_handles.len(), suffixes);
+
+        let name_interned = self.inner.intern(name);
+
+        // Get the underlying type from the handle
+        let underlying_type = self.get_type_from_handle(underlying_type_handle)
+            .unwrap_or(Type::Any);
+
+        // Convert field handles to TypedField nodes (same as struct_def)
+        let mut typed_fields = Vec::new();
+        for field_handle in field_handles {
+            if let Some(params_val) = self.params.get(&field_handle) {
+                let (field_name, field_type) = params_val;
+                let field_name_interned = self.inner.intern(field_name);
+
+                typed_fields.push(TypedField {
+                    name: field_name_interned,
+                    ty: field_type.clone(),
+                    initializer: None,
+                    visibility: Visibility::Public,
+                    mutability: Mutability::Immutable,
+                    is_static: false,
+                    span: self.default_span(),
+                });
+                eprintln!("[DEBUG create_abstract_def] Added field: {}", field_name);
+            }
+        }
+
+        // Pre-allocate TypeId before creating TypeDefinition
+        let type_id = zyntax_typed_ast::type_registry::TypeId::next();
+        eprintln!("[DEBUG create_abstract_def] Allocated TypeId: {:?}", type_id);
+
+        // Create a Named type for the abstract
+        let abstract_type = Type::Named {
+            id: type_id,
+            type_args: vec![],
+            const_args: vec![],
+            variance: vec![],
+            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+        };
+
+        // Register the abstract type so it can be referenced
+        self.declared_types.insert(name.to_string(), abstract_type.clone());
+        eprintln!("[DEBUG create_abstract_def] Registered abstract type '{}' with ID {:?}", name, type_id);
+
+        // Register the type definition in the type registry
+        // Implicit conversions will be populated later via From/Into trait impls
+        let field_defs: Vec<zyntax_typed_ast::type_registry::FieldDef> = typed_fields.clone().into_iter().map(|f| zyntax_typed_ast::type_registry::FieldDef {
+            name: f.name,
+            ty: f.ty,
+            visibility: f.visibility,
+            mutability: f.mutability,
+            is_static: f.is_static,
+            span: f.span,
+            getter: None,
+            setter: None,
+            is_synthetic: false,
+        }).collect();
+
+        let type_def = zyntax_typed_ast::type_registry::TypeDefinition {
+            id: type_id,
+            name: name_interned,
+            kind: zyntax_typed_ast::type_registry::TypeKind::Abstract {
+                underlying_type: underlying_type.clone(),
+                implicit_to: vec![],
+                implicit_from: vec![],
+                suffixes,
+            },
+            type_params: vec![],
+            constraints: vec![],
+            fields: field_defs.clone(),
+            methods: vec![],
+            constructors: vec![],
+            metadata: Default::default(),
+            span: self.default_span(),
+        };
+        self.inner.registry.register_type(type_def);
+        eprintln!("[DEBUG create_abstract_def] Registered abstract type definition in registry");
+
+        // Create as Class declaration if it has fields, or TypeAlias if not
+        let abstract_decl = if typed_fields.is_empty() {
+            TypedDeclaration::TypeAlias(TypedTypeAlias {
+                name: name_interned,
+                target: underlying_type,
+                type_params: vec![],
+                visibility: Visibility::Public,
+                span: self.default_span(),
+            })
+        } else {
+            TypedDeclaration::Class(TypedClass {
+                name: name_interned,
+                type_params: vec![],
+                extends: None,
+                implements: vec![],
+                fields: typed_fields,
+                methods: vec![],
+                constructors: vec![],
+                visibility: Visibility::Public,
+                is_abstract: false,
+                is_final: false,
+                span: self.default_span(),
+            })
+        };
+
+        let decl_node = TypedNode {
+            node: abstract_decl,
+            span: self.default_span(),
+            ty: abstract_type,
         };
 
         self.store_decl(decl_node)
@@ -5704,6 +5823,89 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let handle = self.host.create_struct_def(&name, fields);
                 log::debug!("[struct_type] Created struct type with handle: {:?}", handle);
                 Ok(RuntimeValue::Node(handle))
+            }
+
+            "abstract_type" => {
+                // abstract Duration(i64): ms: i64
+                // Declares an abstract type (zero-cost wrapper with implicit conversions)
+
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError("abstract_type: missing name".into()));
+                    }
+                };
+
+                let underlying_type = match args.get("underlying_type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError("abstract_type: missing underlying_type".into()));
+                    }
+                };
+
+                // Fields are optional
+                let fields: Vec<NodeHandle> = match args.get("fields") {
+                    Some(RuntimeValue::List(values)) => {
+                        values.iter().filter_map(|v| {
+                            if let RuntimeValue::Node(handle) = v {
+                                Some(*handle)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    }
+                    _ => vec![], // No fields
+                };
+
+                // Suffixes are optional (can be multiple)
+                let suffixes = match args.get("suffixes") {
+                    Some(RuntimeValue::List(values)) => {
+                        values.iter().filter_map(|v| {
+                            if let RuntimeValue::String(s) = v {
+                                Some(s.clone())
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    }
+                    _ => vec![],
+                };
+
+                eprintln!("[DEBUG abstract_type] Creating abstract type: name='{}', {} fields, suffixes={:?}", name, fields.len(), suffixes);
+                log::debug!("[abstract_type] Creating abstract type: name='{}', {} fields, suffixes={:?}", name, fields.len(), suffixes);
+                let handle = self.host.create_abstract_def(&name, underlying_type, fields, suffixes);
+                log::debug!("[abstract_type] Created abstract type with handle: {:?}", handle);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "single_suffix" => {
+                // Suffix("ms") -> ["ms"]
+                let suffix_str = match args.get("suffix") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("single_suffix: missing suffix string".into())),
+                };
+
+                // Remove quotes from the string if present
+                let suffix = suffix_str.trim_matches('"');
+
+                Ok(RuntimeValue::List(vec![RuntimeValue::String(suffix.to_string())]))
+            }
+
+            "multiple_suffixes" => {
+                // Suffixes("ms, s, ns, m") -> ["ms", "s", "ns", "m"]
+                let suffixes_str = match args.get("suffixes") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("multiple_suffixes: missing suffixes string".into())),
+                };
+
+                // Remove quotes and split by comma
+                let suffixes_clean = suffixes_str.trim_matches('"');
+                let suffixes: Vec<RuntimeValue> = suffixes_clean
+                    .split(',')
+                    .map(|s| RuntimeValue::String(s.trim().to_string()))
+                    .collect();
+
+                Ok(RuntimeValue::List(suffixes))
             }
 
             "ternary" => {
