@@ -1408,6 +1408,104 @@ impl LoweringContext {
         };
         eprintln!("[LOWERING] Impl block implementing_type after resolution: {:?}", implementing_type);
 
+        // Register the implementation in the type registry
+        // First, find the trait by name
+        let trait_def = self.type_registry.get_trait_by_name(impl_block.trait_name)
+            .ok_or_else(|| {
+                let arena = self.arena.lock().unwrap();
+                let trait_name_str = arena.resolve_string(impl_block.trait_name)
+                    .unwrap_or("Unknown");
+                crate::CompilerError::Analysis(format!("Trait '{}' not found in registry", trait_name_str))
+            })?;
+        let trait_id = trait_def.id;
+
+        // Build MethodImpl list from the impl block methods
+        let method_impls: Vec<zyntax_typed_ast::type_registry::MethodImpl> = impl_block.methods.iter().map(|method| {
+            // Build parameter definitions
+            let params: Vec<zyntax_typed_ast::type_registry::ParamDef> = method.params.iter().map(|p| {
+                zyntax_typed_ast::type_registry::ParamDef {
+                    name: p.name,
+                    ty: p.ty.clone(),
+                    is_self: p.is_self,
+                    is_varargs: false,
+                    is_mut: matches!(p.mutability, zyntax_typed_ast::type_registry::Mutability::Mutable),
+                }
+            }).collect();
+
+            // Convert TypedTypeParam to TypeParam
+            let type_params: Vec<zyntax_typed_ast::type_registry::TypeParam> = method.type_params.iter().map(|tp| {
+                // Convert TypedTypeBound to TypeBound
+                let bounds: Vec<zyntax_typed_ast::type_registry::TypeBound> = tp.bounds.iter().filter_map(|bound| {
+                    match bound {
+                        zyntax_typed_ast::typed_ast::TypedTypeBound::Trait(trait_type) => {
+                            // Extract name and args from the trait type
+                            match trait_type {
+                                Type::Named { id: _, type_args, .. } => {
+                                    // Get the trait name from the type
+                                    // For now, just use a placeholder since we don't have easy access to the name
+                                    Some(zyntax_typed_ast::type_registry::TypeBound::Trait {
+                                        name: zyntax_typed_ast::InternedString::new_global("Trait"),
+                                        args: type_args.clone(),
+                                    })
+                                }
+                                Type::Unresolved(name) => {
+                                    Some(zyntax_typed_ast::type_registry::TypeBound::Trait {
+                                        name: *name,
+                                        args: vec![],
+                                    })
+                                }
+                                _ => None,
+                            }
+                        }
+                        _ => None, // Skip other bounds for now
+                    }
+                }).collect();
+
+                zyntax_typed_ast::type_registry::TypeParam {
+                    name: tp.name,
+                    bounds,
+                    variance: zyntax_typed_ast::type_registry::Variance::Invariant,
+                    default: tp.default.clone(),
+                    span: tp.span,
+                }
+            }).collect();
+
+            let method_sig = zyntax_typed_ast::type_registry::MethodSig {
+                name: method.name,
+                type_params,
+                params,
+                return_type: method.return_type.clone(),
+                where_clause: vec![],
+                is_static: false,
+                is_async: method.is_async,
+                visibility: zyntax_typed_ast::type_registry::Visibility::Public,
+                span: method.span,
+                is_extension: false,
+            };
+
+            zyntax_typed_ast::type_registry::MethodImpl {
+                signature: method_sig,
+                is_default: false,
+            }
+        }).collect();
+
+        // Create ImplDef and register it
+        let impl_def = zyntax_typed_ast::type_registry::ImplDef {
+            trait_id,
+            for_type: implementing_type.clone(),
+            type_args: vec![],
+            methods: method_impls,
+            associated_types: std::collections::HashMap::new(),
+            where_clause: vec![],
+            span: impl_block.span,
+        };
+
+        // TODO: Register impl in type registry before lowering starts
+        // self.type_registry is Arc (immutable), so we can't register here
+        // For now, method resolution relies on mangled names being available in SSA phase
+        eprintln!("[LOWERING] Built impl def for trait {:?} for type {:?} (registration TODO)", trait_id, implementing_type);
+        eprintln!("[LOWERING] ImplDef has {} methods", impl_def.methods.len());
+
         // For each method in the impl block, convert it to a function and lower it
         for method in &impl_block.methods {
             // Resolve parameter types and track self parameters for body retyping
@@ -1447,10 +1545,43 @@ impl LoweringContext {
             // In practice, return types should be explicitly typed in the source
             let resolved_return_type = method.return_type.clone();
 
+            // Mangle the method name to include trait and type info
+            // Format: {TypeName}${TraitName}${method_name}
+            let mangled_name = {
+                let type_name = match &implementing_type {
+                    Type::Named { id, .. } => {
+                        if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                            type_def.name
+                        } else {
+                            method.name // Fallback to original name
+                        }
+                    }
+                    _ => method.name, // For non-named types, use original name
+                };
+
+                // trait_name is already an InternedString on impl_block
+                let trait_name = impl_block.trait_name;
+
+                // Create mangled name: TypeName$TraitName$method_name
+                let arena = self.arena.lock().unwrap();
+                let type_name_str = arena.resolve_string(type_name)
+                    .unwrap_or("Unknown");
+                let trait_name_str = arena.resolve_string(trait_name)
+                    .unwrap_or("Unknown");
+                let method_name_str = arena.resolve_string(method.name)
+                    .unwrap_or("unknown");
+
+                let mangled = format!("{}${}${}", type_name_str, trait_name_str, method_name_str);
+                drop(arena);
+
+                InternedString::new_global(&mangled)
+            };
+
+            eprintln!("[LOWERING] Mangled method name: {:?}", mangled_name);
+
             // Create a function from the method
-            // Method names should be mangled to include the trait and type info
             let func = TypedFunction {
-                name: method.name,  // TODO: Consider name mangling for trait methods
+                name: mangled_name,  // Use mangled name for trait method
                 type_params: vec![],
                 params,
                 return_type: resolved_return_type,

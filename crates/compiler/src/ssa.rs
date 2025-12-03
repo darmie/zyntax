@@ -1877,44 +1877,58 @@ impl SsaBuilder {
             }
 
             TypedExpression::MethodCall(method_call) => {
-                // Translate method call to regular call with receiver as first argument
+                // Resolve method to mangled function name
+                let mangled_name = self.resolve_method_to_function(
+                    &method_call.receiver.ty,
+                    method_call.method,
+                )?;
+
+                // Translate receiver and arguments
                 let receiver_val = self.translate_expression(block_id, &method_call.receiver)?;
 
-                // Translate arguments
                 let mut arg_vals = vec![receiver_val];
                 for arg in &method_call.positional_args {
                     let arg_val = self.translate_expression(block_id, arg)?;
                     arg_vals.push(arg_val);
                 }
 
-                // For now, method calls need to be resolved to function pointers
-                // This would require vtable lookup or static dispatch
-                // Create a placeholder call
+                // Look up the function by mangled name
+                let func_id = self.function_symbols.get(&mangled_name)
+                    .copied()
+                    .ok_or_else(|| {
+                        let arena = self.arena.lock().unwrap();
+                        let name_str = arena.resolve_string(mangled_name)
+                            .unwrap_or("unknown")
+                            .to_string();
+                        crate::CompilerError::Analysis(
+                            format!("Method function '{}' not found in symbol table", name_str)
+                        )
+                    })?;
+
+                // Create call instruction
                 let result_type = self.convert_type(&expr.ty);
                 let result = if result_type != HirType::Void {
-                    Some(self.create_value(result_type, HirValueKind::Instruction))
+                    Some(self.create_value(result_type.clone(), HirValueKind::Instruction))
                 } else {
                     None
                 };
 
-                // Create method reference (simplified - needs proper resolution)
-                // For now, create an undefined function pointer
-                let method_ref = self.create_undef(HirType::Ptr(Box::new(HirType::Void)));
-
                 self.add_instruction(block_id, HirInstruction::Call {
                     result,
-                    callee: crate::hir::HirCallable::Indirect(method_ref),
+                    callee: crate::hir::HirCallable::Function(func_id),
                     args: arg_vals.clone(),
-                    type_args: vec![],  // Method calls resolve types separately
+                    type_args: vec![],
                     const_args: vec![],
                     is_tail: false,
                 });
 
-                for arg in arg_vals {
-                    self.add_use(arg, result.unwrap_or(method_ref));
+                // Track argument uses
+                let result_or_void = result.unwrap_or_else(|| self.create_undef(HirType::Void));
+                for arg in &arg_vals {
+                    self.add_use(*arg, result_or_void);
                 }
 
-                Ok(result.unwrap_or_else(|| self.create_undef(HirType::Void)))
+                Ok(result_or_void)
             }
 
             TypedExpression::Match(match_expr) => {
@@ -2848,7 +2862,94 @@ impl SsaBuilder {
         
         (def_use, use_def)
     }
-    
+
+    /// Resolve a method call to a mangled function name
+    /// Looks up which trait impl provides the method for the receiver type
+    fn resolve_method_to_function(
+        &self,
+        receiver_type: &Type,
+        method_name: InternedString,
+    ) -> CompilerResult<InternedString> {
+        use zyntax_typed_ast::TypeId;
+
+        // Get the type ID from Named type
+        let type_id = match receiver_type {
+            Type::Named { id, .. } => *id,
+            Type::Extern { name, .. } => {
+                // For extern types, method calls go through the trait impl
+                // The mangled name format is: ${TypeName}${method_name}
+                // E.g., $Tensor$add for Tensor.add()
+                let arena = self.arena.lock().unwrap();
+                let type_name_str = arena.resolve_string(*name)
+                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve extern type name".into()))?;
+                let method_name_str = arena.resolve_string(method_name)
+                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve method name".into()))?;
+
+                // Format: ${TypeName}${method_name}
+                let mangled = format!("{}${}", type_name_str, method_name_str);
+                drop(arena);
+                return Ok(InternedString::new_global(&mangled));
+            }
+            _ => {
+                return Err(crate::CompilerError::Analysis(
+                    format!("Cannot call methods on non-nominal type: {:?}", receiver_type)
+                ))
+            }
+        };
+
+        // Look up which traits this type implements
+        // Check all implementations in the type registry
+        for (_trait_id, impls) in self.type_registry.iter_implementations() {
+            for impl_def in impls {
+                // Check if this impl is for our type
+                if let Type::Named { id: impl_type_id, .. } = &impl_def.for_type {
+                    if *impl_type_id == type_id {
+                        // Check if this impl has the method we're looking for
+                        for method in &impl_def.methods {
+                            if method.signature.name == method_name {
+                                // Found it! Return mangled name
+                                // Format: {TypeName}${TraitName}${method_name}
+                                let type_def = self.type_registry.get_type_by_id(type_id)
+                                    .ok_or_else(|| crate::CompilerError::Analysis(
+                                        format!("Type {:?} not found in registry", type_id)
+                                    ))?;
+
+                                let trait_def = self.type_registry.get_trait_by_id(impl_def.trait_id)
+                                    .ok_or_else(|| crate::CompilerError::Analysis(
+                                        format!("Trait {:?} not found in registry", impl_def.trait_id)
+                                    ))?;
+
+                                let arena = self.arena.lock().unwrap();
+                                let type_name_str = arena.resolve_string(type_def.name)
+                                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve type name".into()))?;
+                                let trait_name_str = arena.resolve_string(trait_def.name)
+                                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve trait name".into()))?;
+                                let method_name_str = arena.resolve_string(method_name)
+                                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve method name".into()))?;
+
+                                let mangled = format!("{}${}${}", type_name_str, trait_name_str, method_name_str);
+                                drop(arena);
+
+                                return Ok(InternedString::new_global(&mangled));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Method not found
+        let arena = self.arena.lock().unwrap();
+        let method_name_str = arena.resolve_string(method_name)
+            .unwrap_or("unknown")
+            .to_string();
+        drop(arena);
+
+        Err(crate::CompilerError::Analysis(
+            format!("Method '{}' not found for type '{:?}'", method_name_str, receiver_type)
+        ))
+    }
+
     /// Convert frontend type to HIR type
     fn convert_type(&self, ty: &Type) -> HirType {
         use zyntax_typed_ast::PrimitiveType;

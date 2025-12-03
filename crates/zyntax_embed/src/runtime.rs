@@ -872,6 +872,10 @@ impl ZyntaxRuntime {
         // The compiler's type checker and SSA builder need resolved types
         self.resolve_unresolved_types(&mut program, &type_registry);
 
+        // Register impl blocks before lowering
+        zyntax_compiler::register_impl_blocks(&mut program)
+            .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
+
         // Wrap in Arc for sharing
         let type_registry = std::sync::Arc::new(type_registry);
 
@@ -2456,6 +2460,10 @@ impl TieredRuntime {
                 }
             }
         }
+
+        // Register impl blocks before lowering
+        zyntax_compiler::register_impl_blocks(&mut program)
+            .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
 
         let arena = AstArena::new();
         let module_name = InternedString::new_global("main");

@@ -896,6 +896,10 @@ fn eval_input(
         }
     }
 
+    // Register impl blocks before lowering
+    zyntax_compiler::register_impl_blocks(&mut typed_program)
+        .map_err(|e| format!("Failed to register impl blocks: {:?}", e))?;
+
     // Lower to HIR
     let arena = AstArena::new();
     let module_name = InternedString::new_global("repl");

@@ -1874,6 +1874,18 @@ impl AstHostFunctions for TypedAstBuilder {
         let callee_expr = self.get_expr(callee)
             .unwrap_or_else(|| self.inner.variable("unknown", Type::Primitive(PrimitiveType::I32), span));
 
+        // Check if this is a method call: obj.method(args)
+        // If callee is a field access, transform into MethodCall
+        if let TypedExpression::Field(field_access) = &callee_expr.node {
+            let receiver_expr = *field_access.object.clone();
+            let method_name_str = field_access.field.resolve_global()
+                .unwrap_or_else(|| "unknown".to_string());
+
+            // Store the receiver expression and use create_method_call
+            let receiver_handle = self.store_expr(receiver_expr);
+            return self.create_method_call(receiver_handle, &method_name_str, args);
+        }
+
         let arg_exprs: Vec<_> = args.iter()
             .filter_map(|h| self.get_expr(*h))
             .collect();

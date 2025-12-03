@@ -167,6 +167,108 @@ impl Default for CompilationConfig {
 /// Main compilation pipeline: TypedAST → HIR → Optimized HIR
 ///
 /// This function orchestrates the complete compilation process:
+/// Register all impl blocks from a TypedProgram into its type registry
+/// This must be called before lowering starts
+pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Result<(), CompilerError> {
+    use zyntax_typed_ast::typed_ast::TypedDeclaration;
+    use zyntax_typed_ast::type_registry::{ImplDef, MethodImpl, MethodSig, ParamDef};
+    use zyntax_typed_ast::Type;
+
+    eprintln!("[REGISTER_IMPL] Checking {} declarations", program.declarations.len());
+
+    let mut impl_count = 0;
+    for decl in &program.declarations {
+        if let TypedDeclaration::Impl(impl_block) = &decl.node {
+            impl_count += 1;
+            eprintln!("[REGISTER_IMPL] Found impl block #{} for trait {:?}", impl_count, impl_block.trait_name);
+
+            // Find the trait by name
+            let trait_def = program.type_registry.get_trait_by_name(impl_block.trait_name)
+                .ok_or_else(|| {
+                    CompilerError::Analysis(format!("Trait not found in registry"))
+                })?;
+            let trait_id = trait_def.id;
+            eprintln!("[REGISTER_IMPL] Trait ID: {:?}", trait_id);
+
+            // Resolve the implementing type
+            let implementing_type = match &impl_block.for_type {
+                Type::Unresolved(name) => {
+                    if let Some(type_def) = program.type_registry.get_type_by_name(*name) {
+                        Type::Named {
+                            id: type_def.id,
+                            type_args: vec![],
+                            const_args: vec![],
+                            variance: vec![],
+                            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                        }
+                    } else {
+                        impl_block.for_type.clone()
+                    }
+                }
+                _ => impl_block.for_type.clone(),
+            };
+
+            // Build MethodImpl list
+            let method_impls: Vec<MethodImpl> = impl_block.methods.iter().map(|method| {
+                let params: Vec<ParamDef> = method.params.iter().map(|p| {
+                    ParamDef {
+                        name: p.name,
+                        ty: p.ty.clone(),
+                        is_self: p.is_self,
+                        is_varargs: false,
+                        is_mut: matches!(p.mutability, zyntax_typed_ast::type_registry::Mutability::Mutable),
+                    }
+                }).collect();
+
+                let type_params: Vec<zyntax_typed_ast::type_registry::TypeParam> = method.type_params.iter().map(|tp| {
+                    zyntax_typed_ast::type_registry::TypeParam {
+                        name: tp.name,
+                        bounds: vec![],  // Simplified for now
+                        variance: zyntax_typed_ast::type_registry::Variance::Invariant,
+                        default: tp.default.clone(),
+                        span: tp.span,
+                    }
+                }).collect();
+
+                let method_sig = MethodSig {
+                    name: method.name,
+                    type_params,
+                    params,
+                    return_type: method.return_type.clone(),
+                    where_clause: vec![],
+                    is_static: false,
+                    is_async: method.is_async,
+                    visibility: zyntax_typed_ast::type_registry::Visibility::Public,
+                    span: method.span,
+                    is_extension: false,
+                };
+
+                MethodImpl {
+                    signature: method_sig,
+                    is_default: false,
+                }
+            }).collect();
+
+            // Create and register ImplDef
+            let impl_def = ImplDef {
+                trait_id,
+                for_type: implementing_type.clone(),
+                type_args: vec![],
+                methods: method_impls,
+                associated_types: std::collections::HashMap::new(),
+                where_clause: vec![],
+                span: impl_block.span,
+            };
+
+            program.type_registry.register_implementation(impl_def.clone());
+            eprintln!("[REGISTER_IMPL] Registered impl for type {:?} trait {:?}", implementing_type, trait_id);
+        }
+    }
+
+    eprintln!("[REGISTER_IMPL] Registration complete - registered {} impl blocks", impl_count);
+    Ok(())
+}
+
 /// 1. Lower TypedAST to HIR (with generic definitions intact)
 /// 2. Monomorphize generic functions and types (if enabled)
 /// 3. Run analysis passes (liveness, alias analysis, etc.)
