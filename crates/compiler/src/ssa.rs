@@ -3239,9 +3239,28 @@ impl SsaBuilder {
     
     /// Get field index in struct using TypeRegistry
     fn get_field_index(&self, struct_type: &Type, field_name: &InternedString) -> CompilerResult<u32> {
-        // Extract the type ID from the struct type
-        let type_id = match struct_type {
-            Type::Named { id, .. } => *id,
+        // Resolve the type if it's unresolved
+        let resolved_type = match struct_type {
+            Type::Unresolved(name) => {
+                // Look up the type in the registry by name
+                self.type_registry.get_type_by_name(*name)
+                    .map(|type_def| Type::Named {
+                        id: type_def.id,
+                        type_args: vec![],
+                        const_args: vec![],
+                        variance: vec![],
+                        nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                    })
+                    .ok_or_else(|| crate::CompilerError::Analysis(
+                        format!("Unresolved type {:?} not found in registry", name)
+                    ))?
+            }
+            _ => struct_type.clone()
+        };
+
+        // Extract the type ID from the resolved struct type
+        let type_id = match resolved_type {
+            Type::Named { id, .. } => id,
             Type::Struct { fields, .. } => {
                 // For inline struct types, search the fields directly
                 for (idx, field) in fields.iter().enumerate() {
@@ -3255,7 +3274,7 @@ impl SsaBuilder {
             }
             _ => {
                 return Err(crate::CompilerError::Analysis(
-                    format!("Cannot access fields on non-struct type: {:?}", struct_type)
+                    format!("Cannot access fields on non-struct type: {:?}", resolved_type)
                 ));
             }
         };

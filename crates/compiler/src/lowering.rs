@@ -1325,12 +1325,13 @@ impl LoweringContext {
             // Field access - retype the object expression and possibly update field type
             TypedExpression::Field(field_access) => {
                 let retyped_object = self.retype_expression_node_with_self(&field_access.object, self_params);
-                eprintln!("[RETYPE] Field access: object before={:?}, after={:?}, field={:?}",
-                    field_access.object.ty, retyped_object.ty, field_access.field);
+                eprintln!("[RETYPE] Field access: object before={:?}, after={:?}, field={:?}, expr_ty={:?}",
+                    field_access.object.ty, retyped_object.ty, field_access.field, expr_node.ty);
                 let retyped_field_access = TypedFieldAccess {
                     object: Box::new(retyped_object),
                     field: field_access.field,
                 };
+                // Keep the original field result type - it should have been correctly typed by the parser
                 (TypedExpression::Field(retyped_field_access), expr_node.ty.clone())
             }
 

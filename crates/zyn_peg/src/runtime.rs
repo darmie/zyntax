@@ -1254,11 +1254,20 @@ impl TypedAstBuilder {
         self.types.get(&handle).cloned()
     }
 
-    /// Get a named type by string name (creates unresolved type for inference)
+    /// Get a named type by string name (looks up declared types or creates unresolved)
     fn get_type_by_name(&mut self, name: &str) -> Type {
-        // Return an unresolved type - the type resolver will look it up
-        // This is better than TypeId(0) placeholder which can't be resolved
-        Type::Unresolved(self.inner.intern(name))
+        let interned_name = self.inner.intern(name);
+
+        // First check if this type was already declared (struct, enum, etc.)
+        eprintln!("[DEBUG get_type_by_name] Looking up '{}', declared_types has {} entries", name, self.declared_types.len());
+        if let Some(ty) = self.declared_types.get(name) {
+            eprintln!("[DEBUG get_type_by_name] Found declared type for '{}': {:?}", name, ty);
+            return ty.clone();
+        }
+
+        // If not declared yet, return an unresolved type for later resolution
+        eprintln!("[DEBUG get_type_by_name] Type '{}' not found in declared_types, returning Unresolved", name);
+        Type::Unresolved(interned_name)
     }
 
     /// Get the default span for nodes (uses current span from parsing)
@@ -2637,29 +2646,9 @@ impl AstHostFunctions for TypedAstBuilder {
             })
             .collect();
 
-        // Create an inline struct type with the fields from the literal
-        // This allows field access to work without a TypeRegistry lookup
-        let struct_fields: Vec<zyntax_typed_ast::type_registry::FieldDef> = fields.iter()
-            .map(|(field_name, _h)| {
-                zyntax_typed_ast::type_registry::FieldDef {
-                    name: InternedString::new_global(field_name),
-                    ty: Type::Primitive(PrimitiveType::I32), // Default to i32 for now
-                    visibility: Visibility::Public,
-                    mutability: Mutability::Immutable,
-                    is_static: false,
-                    span,
-                    getter: None,
-                    setter: None,
-                    is_synthetic: false,
-                }
-            })
-            .collect();
-
-        let struct_type = Type::Struct {
-            fields: struct_fields,
-            is_anonymous: false,
-            nullability: zyntax_typed_ast::NullabilityKind::NonNull,
-        };
+        // Look up the struct type by name - use Named type reference, not inline Struct
+        // The type should have been declared earlier with create_struct_def
+        let struct_type = self.get_type_by_name(name);
 
         let expr = self.inner.struct_literal(name, field_exprs, struct_type, span);
         self.store_expr(expr)
@@ -4597,6 +4586,20 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "field_init" => {
+                let field_name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let value_handle = match args.get("value") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => NodeHandle(0),
+                };
+                // Store the field init for later retrieval by struct_literal
+                let handle = self.host.store_struct_field_init(&field_name, value_handle);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "array" | "array_literal" => {
                 let elements: Vec<NodeHandle> = match args.get("elements") {
                     Some(RuntimeValue::List(list)) => {
@@ -4614,15 +4617,23 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "struct_literal" => {
-                let name = match args.get("name") {
+                let name = match args.get("type_name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => String::new(),
+                    _ => {
+                        eprintln!("[ERROR] struct_literal missing type_name, args: {:?}", args.keys());
+                        String::new()
+                    }
                 };
+                // Fields should be struct_literal_field nodes with field name and expression
                 let fields: Vec<(String, NodeHandle)> = match args.get("fields") {
                     Some(RuntimeValue::List(list)) => {
                         list.iter()
                             .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some((String::new(), *h)),
+                                RuntimeValue::Node(h) => {
+                                    // Each field is a struct_literal_field with field_name and expr
+                                    // For now we just pass the handle, field name extraction happens in host
+                                    self.host.get_struct_field_init(*h)
+                                }
                                 _ => None,
                             })
                             .collect()
