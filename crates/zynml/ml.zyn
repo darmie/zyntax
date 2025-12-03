@@ -947,6 +947,7 @@ primary_expr = {
     struct_literal |
     array_literal |
     float_literal |
+    duration_literal |
     int_literal |
     string_literal |
     bool_literal |
@@ -1066,6 +1067,16 @@ int_literal = @{ "-"? ~ ASCII_DIGIT+ }
       "define": "int_literal",
       "args": { "value": "$result" }
   }
+
+// Duration: 1h, 5m, 30s, 500ms, 2d
+duration_literal = @{ ASCII_DIGIT+ ~ duration_unit }
+  -> TypedExpression {
+      "get_text": true,
+      "define": "duration_literal",
+      "args": { "value": "$result" }
+  }
+
+duration_unit = { "ms" | "s" | "m" | "h" | "d" }
 
 // String: "hello world" or """multiline string"""
 string_literal = @{ triple_quoted_string | regular_string }

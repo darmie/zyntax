@@ -4079,6 +4079,44 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "duration_literal" => {
+                // Parse duration like "5s", "1h", "500ms" into milliseconds as i64
+                let text = match args.get("value") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("duration_literal: missing value".into())),
+                };
+
+                // Extract number and unit
+                let (num_str, unit) = if text.ends_with("ms") {
+                    (&text[..text.len()-2], "ms")
+                } else if text.ends_with('s') {
+                    (&text[..text.len()-1], "s")
+                } else if text.ends_with('m') {
+                    (&text[..text.len()-1], "m")
+                } else if text.ends_with('h') {
+                    (&text[..text.len()-1], "h")
+                } else if text.ends_with('d') {
+                    (&text[..text.len()-1], "d")
+                } else {
+                    return Err(crate::error::ZynPegError::CodeGenError(format!("duration_literal: unknown unit in '{}'", text)));
+                };
+
+                let num: i64 = num_str.parse().unwrap_or(0);
+
+                // Convert to milliseconds
+                let ms = match unit {
+                    "ms" => num,
+                    "s" => num * 1000,
+                    "m" => num * 60 * 1000,
+                    "h" => num * 60 * 60 * 1000,
+                    "d" => num * 24 * 60 * 60 * 1000,
+                    _ => num,
+                };
+
+                let handle = self.host.create_int_literal(ms);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "identifier" => {
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
