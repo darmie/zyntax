@@ -422,7 +422,6 @@ impl LanguageGrammar {
             // Get parameters from signature if available
             let params = if let Some(sigs) = signatures {
                 if let Some(sig) = sigs.get(target_symbol.as_str()) {
-                    eprintln!("[DEBUG inject_builtin_externs] Found signature for {}: param_count={}", target_symbol, sig.param_count);
                     // Convert ZRTL signature parameters to TypedParameter
                     use zyntax_typed_ast::typed_ast::ParameterKind;
                     (0..sig.param_count)
@@ -440,7 +439,6 @@ impl LanguageGrammar {
                         })
                         .collect()
                 } else {
-                    eprintln!("[DEBUG inject_builtin_externs] No signature found for {}", target_symbol);
                     vec![]  // No signature found - accept anything
                 }
             } else {
@@ -448,7 +446,6 @@ impl LanguageGrammar {
             };
 
             // Create extern function declaration
-            eprintln!("[DEBUG inject_builtin_externs] Creating extern func {} with {} params", target_symbol, params.len());
             let extern_func = TypedFunction {
                 name: InternedString::new_global(target_symbol),
                 type_params: vec![],
@@ -458,7 +455,7 @@ impl LanguageGrammar {
                 visibility: Visibility::Public,
                 is_async: false,
                 is_external: true,  // Mark as external
-                calling_convention: CallingConvention::System, // Use system calling convention for ZRTL plugins
+                calling_convention: CallingConvention::Default, // Placeholder - backend resolves to platform convention
                 link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
             };
 
