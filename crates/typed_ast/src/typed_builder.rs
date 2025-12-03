@@ -222,6 +222,26 @@ impl TypedASTBuilder {
         )
     }
 
+    /// Build if expression (ternary conditional)
+    pub fn if_expr(
+        &mut self,
+        condition: TypedNode<TypedExpression>,
+        then_branch: TypedNode<TypedExpression>,
+        else_branch: TypedNode<TypedExpression>,
+        result_type: Type,
+        span: Span,
+    ) -> TypedNode<TypedExpression> {
+        typed_node(
+            TypedExpression::If(TypedIfExpr {
+                condition: Box::new(condition),
+                then_branch: Box::new(then_branch),
+                else_branch: Box::new(else_branch),
+            }),
+            result_type,
+            span,
+        )
+    }
+
     /// Build function call with only positional arguments
     pub fn call_positional(
         &mut self,

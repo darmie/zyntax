@@ -580,6 +580,9 @@ pub trait AstHostFunctions {
         body: NodeHandle,
     ) -> NodeHandle;
 
+    /// Create a ternary conditional expression (condition ? then_expr : else_expr)
+    fn create_ternary(&mut self, condition: NodeHandle, then_expr: NodeHandle, else_expr: NodeHandle) -> NodeHandle;
+
     // ========== Span/Location ==========
 
     /// Set span on a node
@@ -2551,6 +2554,23 @@ impl AstHostFunctions for TypedAstBuilder {
         let handle = self.alloc_handle();
         self.methods.insert(handle, method);
         handle
+    }
+
+    fn create_ternary(&mut self, condition: NodeHandle, then_expr_handle: NodeHandle, else_expr_handle: NodeHandle) -> NodeHandle {
+        let span = self.default_span();
+
+        let cond_expr = self.get_expr(condition)
+            .unwrap_or_else(|| self.inner.bool_literal(true, span));
+        let then_expr = self.get_expr(then_expr_handle)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
+        let else_expr = self.get_expr(else_expr_handle)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
+
+        // Type of ternary expression is Any initially - will be resolved during type resolution
+        let result_type = Type::Any;
+
+        let expr = self.inner.if_expr(cond_expr, then_expr, else_expr, result_type, span);
+        self.store_expr(expr)
     }
 
     fn set_span(&mut self, _node: NodeHandle, _start: usize, _end: usize) {
@@ -5617,6 +5637,24 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 log::debug!("[struct_type] Creating struct type: name='{}', {} fields", name, fields.len());
                 let handle = self.host.create_struct_def(&name, fields);
                 log::debug!("[struct_type] Created struct type with handle: {:?}", handle);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "ternary" => {
+                // Ternary conditional: condition ? then_expr : else_expr
+                let condition = match args.get("condition") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("ternary: missing condition".into())),
+                };
+                let then_expr = match args.get("then_expr") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("ternary: missing then_expr".into())),
+                };
+                let else_expr = match args.get("else_expr") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("ternary: missing else_expr".into())),
+                };
+                let handle = self.host.create_ternary(condition, then_expr, else_expr);
                 Ok(RuntimeValue::Node(handle))
             }
 

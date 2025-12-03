@@ -803,7 +803,7 @@ expr = { pipe_expr }
 
 // Pipe operator: x |> f(args) |> g()
 // Transforms: a |> f(b) into f(a, b)
-pipe_expr = { or_expr ~ ("|>" ~ pipe_call)* }
+pipe_expr = { ternary_expr ~ ("|>" ~ pipe_call)* }
   -> TypedExpression {
       "get_all_children": true,
       "fold_left": {
@@ -820,6 +820,22 @@ pipe_call = { identifier ~ "(" ~ call_args? ~ ")" }
               "args": "$2"
           }}
       ]
+  }
+
+// Ternary conditional: condition ? true_expr : false_expr
+// Two separate rules to handle optional ternary syntax
+ternary_expr = { ternary_with_branches | or_expr }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+ternary_with_branches = { or_expr ~ "?" ~ or_expr ~ ":" ~ or_expr }
+  -> TypedExpression {
+      "define": "ternary", "args": {
+          "condition": "$1",
+          "then_expr": "$2",
+          "else_expr": "$3"
+      }
   }
 
 // Logical OR
