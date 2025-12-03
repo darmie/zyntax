@@ -1256,15 +1256,9 @@ impl TypedAstBuilder {
 
     /// Get a named type by string name (creates unresolved type for inference)
     fn get_type_by_name(&mut self, name: &str) -> Type {
-        // Create a named type with placeholder ID (0)
-        // Type inference will resolve this to the actual TypeId
-        Type::Named {
-            id: zyntax_typed_ast::TypeId::new(0),
-            type_args: vec![],
-            const_args: vec![],
-            variance: vec![],
-            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
-        }
+        // Return an unresolved type - the type resolver will look it up
+        // This is better than TypeId(0) placeholder which can't be resolved
+        Type::Unresolved(self.inner.intern(name))
     }
 
     /// Get the default span for nodes (uses current span from parsing)
@@ -1561,25 +1555,36 @@ impl AstHostFunctions for TypedAstBuilder {
         let mut methods = Vec::new();
         let mut associated_types = Vec::new();
 
+        eprintln!("[DEBUG] Processing {} items for impl block", items.len());
         for item_handle in items {
+            eprintln!("[DEBUG] Processing item handle: {:?}", item_handle);
             if let Some(decl) = self.declarations.get(&item_handle) {
+                eprintln!("[DEBUG] Found declaration: {:?}", decl.node);
                 match &decl.node {
                     TypedDeclaration::Function(func) => {
-                        // Convert TypedParameter to TypedMethodParam
+                        eprintln!("[DEBUG] Processing function: {:?}", func.name);
+
+                        // Convert function parameters to method parameters
+                        // Set is_self flag based on parameter name matching
+                        // The compiler will handle type resolution for self parameters
+                        let self_name = self.inner.intern("self");
                         let method_params: Vec<TypedMethodParam> = func.params.iter().map(|p| {
+                            let is_self_param = p.name == self_name;
                             TypedMethodParam {
                                 name: p.name,
                                 ty: p.ty.clone(),
-                                mutability: p.mutability.clone(),
-                                is_self: false, // Will be inferred by compiler
+                                mutability: p.mutability,
+                                is_self: is_self_param,  // Mark self params - compiler will resolve type
                                 default_value: None,
                                 attributes: vec![],
                                 kind: ParameterKind::Regular,
-                                span: span,
+                                span: p.span,
                             }
                         }).collect();
 
                         // Convert function to method
+                        eprintln!("[DEBUG] Impl method return type: {:?}", func.return_type);
+
                         let method = TypedMethod {
                             name: func.name,
                             type_params: func.type_params.clone(),
@@ -2252,7 +2257,7 @@ impl AstHostFunctions for TypedAstBuilder {
             declared_ty.clone()
         } else {
             // Type not found in current file - create unresolved for compiler resolution
-            // This handles types from imports or forward references
+            // This handles types from imports or forward references (including language keywords like "Self")
             eprintln!("[DEBUG create_named_type] Creating unresolved type '{}'", name);
             let name_interned = self.inner.intern(name);
             Type::Unresolved(name_interned)
@@ -5428,15 +5433,27 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 // Extract impl items (methods and associated types)
+                eprintln!("[DEBUG impl_block] items arg: {:?}", args.get("items"));
                 let items: Vec<NodeHandle> = match args.get("items") {
-                    Some(RuntimeValue::List(vals)) => vals.iter().filter_map(|v| {
-                        if let RuntimeValue::Node(h) = v {
-                            Some(*h)
-                        } else {
-                            None
-                        }
-                    }).collect(),
-                    _ => vec![], // No items
+                    Some(RuntimeValue::List(vals)) => {
+                        eprintln!("[DEBUG impl_block] items list has {} values", vals.len());
+                        vals.iter().filter_map(|v| {
+                            eprintln!("[DEBUG impl_block] item value: {:?}", v);
+                            if let RuntimeValue::Node(h) = v {
+                                Some(*h)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    },
+                    Some(other) => {
+                        eprintln!("[DEBUG impl_block] items is not a list, it's: {:?}", other);
+                        vec![]
+                    },
+                    None => {
+                        eprintln!("[DEBUG impl_block] items arg is None");
+                        vec![]
+                    }
                 };
 
                 let handle = self.host.create_impl_block(&trait_name, &for_type, trait_args, items);
@@ -5787,6 +5804,7 @@ mod tests {
                 entry_point: None,
                 zpeg_version: "0.1.0".to_string(),
                 builtins: HashMap::new(),
+                types: TypeDeclarations::default(),
             },
             pest_grammar: "program = { expr }".to_string(),
             rules: HashMap::from([(

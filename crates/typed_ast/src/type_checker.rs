@@ -827,11 +827,26 @@ impl TypeChecker {
     fn check_impl_block(&mut self, impl_block: &TypedTraitImpl) -> Result<(), TypeError> {
         // Type check each method in the impl block
         for method in &impl_block.methods {
-            // Convert method params to function params
+            // FIRST: Add constraints for self parameters so inference can propagate through body
+            for param in &method.params {
+                if param.is_self && (matches!(param.ty, Type::Any) || matches!(param.ty, Type::Unresolved(_))) {
+                    // Unify the parameter's Any/Unresolved type with the implementing type
+                    // This allows the inference to propagate to all usages in the body
+                    self.inference.unify(param.ty.clone(), impl_block.for_type.clone())?;
+                }
+            }
+
+            // Convert method params to function params with resolved types
             let params: Vec<TypedParameter> = method.params.iter().map(|p| {
+                let resolved_ty = if p.is_self && (matches!(p.ty, Type::Any) || matches!(p.ty, Type::Unresolved(_))) {
+                    impl_block.for_type.clone()
+                } else {
+                    p.ty.clone()
+                };
+
                 TypedParameter {
                     name: p.name,
-                    ty: p.ty.clone(),
+                    ty: resolved_ty,
                     mutability: p.mutability,
                     kind: p.kind.clone(),
                     default_value: p.default_value.clone(),
@@ -840,12 +855,15 @@ impl TypeChecker {
                 }
             }).collect();
 
+            // Return types should be explicitly typed in source
+            let resolved_return_type = method.return_type.clone();
+
             // Create a function-like structure from the method to reuse function checking
             let func = TypedFunction {
                 name: method.name,
                 type_params: vec![],
                 params,
-                return_type: method.return_type.clone(),
+                return_type: resolved_return_type,
                 body: method.body.clone(),
                 visibility: Visibility::Public,
                 is_async: method.is_async,

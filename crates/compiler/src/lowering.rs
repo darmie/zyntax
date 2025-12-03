@@ -578,7 +578,16 @@ impl LoweringContext {
                     // FUTURE (v2.0): Implement trait system
                     // Estimated effort: 40-60 hours (major feature - requires runtime support)
                 }
-                
+
+                TypedDeclaration::Impl(impl_block) => {
+                    // Pre-register impl block methods in symbol table
+                    for method in &impl_block.methods {
+                        let method_id = crate::hir::HirId::new();
+                        // Register method with its name (TODO: Consider name mangling for trait methods)
+                        self.symbols.functions.insert(method.name, method_id);
+                    }
+                }
+
                 _ => {}
             }
         }
@@ -1234,30 +1243,217 @@ impl LoweringContext {
         Ok(())
     }
 
+    /// Re-type expressions in a block that reference self parameters with resolved types
+    fn retype_block_with_self(
+        &self,
+        block: &zyntax_typed_ast::TypedBlock,
+        self_params: &[(zyntax_typed_ast::InternedString, zyntax_typed_ast::Type)], // (param_name, resolved_type)
+    ) -> zyntax_typed_ast::TypedBlock {
+        use zyntax_typed_ast::TypedBlock;
+
+        let retyped_statements = block.statements.iter().map(|stmt_node| {
+            self.retype_statement_with_self(stmt_node, self_params)
+        }).collect();
+
+        TypedBlock {
+            statements: retyped_statements,
+            span: block.span,
+        }
+    }
+
+    /// Re-type a statement node's expressions that reference self parameters
+    fn retype_statement_with_self(
+        &self,
+        stmt_node: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedStatement>,
+        self_params: &[(zyntax_typed_ast::InternedString, zyntax_typed_ast::Type)],
+    ) -> zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedStatement> {
+        use zyntax_typed_ast::{TypedStatement, TypedNode, TypedLet};
+
+        let retyped_stmt = match &stmt_node.node {
+            TypedStatement::Expression(expr) => {
+                TypedStatement::Expression(Box::new(self.retype_expression_node_with_self(expr, self_params)))
+            }
+            TypedStatement::Let(let_stmt) => {
+                TypedStatement::Let(TypedLet {
+                    name: let_stmt.name,
+                    ty: let_stmt.ty.clone(),
+                    mutability: let_stmt.mutability,
+                    initializer: let_stmt.initializer.as_ref().map(|init| {
+                        Box::new(self.retype_expression_node_with_self(init, self_params))
+                    }),
+                    span: let_stmt.span,
+                })
+            }
+            TypedStatement::Return(opt_expr) => {
+                TypedStatement::Return(opt_expr.as_ref().map(|expr| {
+                    Box::new(self.retype_expression_node_with_self(expr, self_params))
+                }))
+            }
+            TypedStatement::Break(_) | TypedStatement::Continue => stmt_node.node.clone(),
+            // Handle other statement types that may contain expressions
+            _ => stmt_node.node.clone(),
+        };
+
+        TypedNode::new(retyped_stmt, stmt_node.ty.clone(), stmt_node.span)
+    }
+
+    /// Re-type an expression node if it references a self parameter
+    fn retype_expression_node_with_self(
+        &self,
+        expr_node: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>,
+        self_params: &[(zyntax_typed_ast::InternedString, zyntax_typed_ast::Type)],
+    ) -> zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression> {
+        use zyntax_typed_ast::{TypedExpression, Type, TypedNode, TypedBinary, TypedUnary, TypedFieldAccess, TypedCall};
+
+        let (retyped_expr, new_ty) = match &expr_node.node {
+            // Variable reference - check if it's a self parameter and retype if needed
+            TypedExpression::Variable(name) => {
+                // Check if this variable is a self parameter
+                if let Some((_, resolved_ty)) = self_params.iter().find(|(param_name, _)| param_name == name) {
+                    // Only retype if current type is Any or Unresolved
+                    if matches!(expr_node.ty, Type::Any) || matches!(expr_node.ty, Type::Unresolved(_)) {
+                        return TypedNode::new(
+                            TypedExpression::Variable(*name),
+                            resolved_ty.clone(),
+                            expr_node.span
+                        );
+                    }
+                }
+                (expr_node.node.clone(), expr_node.ty.clone())
+            }
+
+            // Field access - retype the object expression and possibly update field type
+            TypedExpression::Field(field_access) => {
+                let retyped_object = self.retype_expression_node_with_self(&field_access.object, self_params);
+                eprintln!("[RETYPE] Field access: object before={:?}, after={:?}, field={:?}",
+                    field_access.object.ty, retyped_object.ty, field_access.field);
+                let retyped_field_access = TypedFieldAccess {
+                    object: Box::new(retyped_object),
+                    field: field_access.field,
+                };
+                (TypedExpression::Field(retyped_field_access), expr_node.ty.clone())
+            }
+
+            // Binary operation - retype both operands
+            TypedExpression::Binary(binary) => {
+                let retyped_binary = TypedBinary {
+                    op: binary.op,
+                    left: Box::new(self.retype_expression_node_with_self(&binary.left, self_params)),
+                    right: Box::new(self.retype_expression_node_with_self(&binary.right, self_params)),
+                };
+                (TypedExpression::Binary(retyped_binary), expr_node.ty.clone())
+            }
+
+            // Unary operation - retype the operand
+            TypedExpression::Unary(unary) => {
+                let retyped_unary = TypedUnary {
+                    op: unary.op,
+                    operand: Box::new(self.retype_expression_node_with_self(&unary.operand, self_params)),
+                };
+                (TypedExpression::Unary(retyped_unary), expr_node.ty.clone())
+            }
+
+            // Function call - retype callee and arguments
+            TypedExpression::Call(call) => {
+                let retyped_call = TypedCall {
+                    callee: Box::new(self.retype_expression_node_with_self(&call.callee, self_params)),
+                    positional_args: call.positional_args.iter().map(|arg| {
+                        self.retype_expression_node_with_self(arg, self_params)
+                    }).collect(),
+                    named_args: call.named_args.clone(), // Named args don't need retyping of names
+                    type_args: call.type_args.clone(),
+                };
+                (TypedExpression::Call(retyped_call), expr_node.ty.clone())
+            }
+
+            // All other expression types - just clone
+            _ => (expr_node.node.clone(), expr_node.ty.clone()),
+        };
+
+        TypedNode::new(retyped_expr, new_ty, expr_node.span)
+    }
+
     /// Lower an impl block by extracting and lowering its methods
     fn lower_impl_block(&mut self, impl_block: &zyntax_typed_ast::typed_ast::TypedTraitImpl) -> CompilerResult<()> {
-        use zyntax_typed_ast::TypedFunction;
+        use zyntax_typed_ast::{TypedFunction, Type, TypeId};
+
+        // Resolve the implementing type if it's still unresolved
+        // The parser uses Unresolved types, we need to look them up in the registry
+        let implementing_type = match &impl_block.for_type {
+            Type::Unresolved(name) => {
+                // Look up the type by name in the registry
+                eprintln!("[LOWERING] Looking up unresolved type: {:?}", name);
+
+                // Find the type in the registry
+                if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
+                    let type_id = type_def.id;
+                    eprintln!("[LOWERING] Found TypeId: {:?}", type_id);
+                    Type::Named {
+                        id: type_id,
+                        type_args: vec![],
+                        const_args: vec![],
+                        variance: vec![],
+                        nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                    }
+                } else {
+                    let type_name_str = self.arena.lock().unwrap().resolve_string(*name)
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string());
+                    eprintln!("[LOWERING] WARNING: Type '{}' not found in registry", type_name_str);
+                    impl_block.for_type.clone()
+                }
+            }
+            _ => impl_block.for_type.clone(),
+        };
+        eprintln!("[LOWERING] Impl block implementing_type after resolution: {:?}", implementing_type);
 
         // For each method in the impl block, convert it to a function and lower it
         for method in &impl_block.methods {
+            // Resolve parameter types and track self parameters for body retyping
+            let mut self_param_mappings: Vec<(zyntax_typed_ast::InternedString, Type)> = Vec::new();
+
+            let params: Vec<zyntax_typed_ast::TypedParameter> = method.params.iter().map(|p| {
+                eprintln!("[LOWERING] Param is_self={}, ty={:?}", p.is_self, p.ty);
+                let resolved_ty = if p.is_self && (matches!(p.ty, Type::Any) || matches!(p.ty, Type::Unresolved(_))) {
+                    // Self parameter without explicit type -> use implementing type
+                    eprintln!("[LOWERING] Resolving self param to {:?}", implementing_type);
+                    let resolved = implementing_type.clone();
+                    // Track this parameter for body retyping
+                    self_param_mappings.push((p.name, resolved.clone()));
+                    resolved
+                } else {
+                    p.ty.clone()
+                };
+
+                zyntax_typed_ast::TypedParameter {
+                    name: p.name,
+                    ty: resolved_ty,
+                    mutability: p.mutability,
+                    kind: p.kind.clone(),
+                    default_value: p.default_value.clone(),
+                    attributes: p.attributes.clone(),
+                    span: p.span,
+                }
+            }).collect();
+
+            // Re-type the method body to update self references
+            let retyped_body = method.body.as_ref().map(|body| {
+                self.retype_block_with_self(body, &self_param_mappings)
+            });
+
+            // For return type, only resolve if it's unresolved AND matches the pattern
+            // of being a self-referential type that needs resolution
+            // In practice, return types should be explicitly typed in the source
+            let resolved_return_type = method.return_type.clone();
+
             // Create a function from the method
             // Method names should be mangled to include the trait and type info
             let func = TypedFunction {
                 name: method.name,  // TODO: Consider name mangling for trait methods
                 type_params: vec![],
-                params: method.params.iter().map(|p| {
-                    zyntax_typed_ast::TypedParameter {
-                        name: p.name,
-                        ty: p.ty.clone(),
-                        mutability: p.mutability,
-                        kind: p.kind.clone(),
-                        default_value: p.default_value.clone(),
-                        attributes: p.attributes.clone(),
-                        span: p.span,
-                    }
-                }).collect(),
-                return_type: method.return_type.clone(),
-                body: method.body.clone(),
+                params,
+                return_type: resolved_return_type,
+                body: retyped_body,  // Use retyped body with updated self types
                 visibility: zyntax_typed_ast::type_registry::Visibility::Public,
                 is_async: method.is_async,
                 is_external: false,

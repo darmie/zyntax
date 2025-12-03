@@ -455,7 +455,7 @@ struct_def_field = { identifier ~ ":" ~ type_expr }
 
 // impl Display for Tensor { fn to_string(self) -> String { ... } }
 // impl Add<Tensor> for Tensor { type Output = Tensor; fn add(...) { ... } }
-impl_block = { "impl" ~ identifier ~ type_args_angle? ~ "for" ~ identifier ~ "{" ~ impl_item* ~ "}" }
+impl_block = { "impl" ~ identifier ~ type_args_angle? ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
@@ -465,6 +465,11 @@ impl_block = { "impl" ~ identifier ~ type_args_angle? ~ "for" ~ identifier ~ "{"
               "items": "$4"
           }}
       ]
+  }
+
+impl_items = { impl_item* }
+  -> List {
+      "get_all_children": true
   }
 
 impl_item = { impl_assoc_type | impl_method_return | impl_method_params | impl_method_simple }
@@ -487,6 +492,8 @@ impl_assoc_type = { "type" ~ identifier ~ "=" ~ type_expr }
 // So we define specific impl method rules without type params
 
 // fn add(self, rhs: T) -> ReturnType { ... }
+// NOTE: Impl methods are initially typed as functions but marked with is_self on parameters
+// The compiler will re-type the body expressions with correct self type during lowering
 impl_method_return = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
   -> TypedDeclaration {
       "commands": [
