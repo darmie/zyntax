@@ -1770,7 +1770,8 @@ impl LoweringContext {
             let resolved_return_type = method.return_type.clone();
 
             // Mangle the method name to include trait and type info
-            // Format: {TypeName}${TraitName}${method_name}
+            // Format for inherent: {TypeName}${method_name}
+            // Format for trait: {TypeName}${TraitName}${method_name}
             let mangled_name = {
                 let type_name = match &implementing_type {
                     Type::Named { id, .. } => {
@@ -1783,11 +1784,19 @@ impl LoweringContext {
                     _ => method.name, // For non-named types, use original name
                 };
 
-                // trait_name is already an InternedString on impl_block
-                let trait_name = impl_block.trait_name;
-
-                // Create mangled name: TypeName$TraitName$method_name
-                self.mangle_trait_method_name(type_name, trait_name, method.name)
+                // For inherent impls (empty trait name), use simpler mangling
+                if is_inherent {
+                    let type_name_str = type_name.resolve_global()
+                        .unwrap_or_else(|| "UnknownType".to_string());
+                    let method_name_str = method.name.resolve_global()
+                        .unwrap_or_else(|| "unknown_method".to_string());
+                    let mangled = format!("{}${}", type_name_str, method_name_str);
+                    InternedString::new_global(&mangled)
+                } else {
+                    // For trait impls, include trait name
+                    let trait_name = impl_block.trait_name;
+                    self.mangle_trait_method_name(type_name, trait_name, method.name)
+                }
             };
 
             eprintln!("[LOWERING] Mangled method name: {:?}", mangled_name);

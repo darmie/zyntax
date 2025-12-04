@@ -3165,17 +3165,23 @@ impl SsaBuilder {
                     use crate::hir::HirStructType;
                     use zyntax_typed_ast::type_registry::TypeKind;
 
-                    // Special handling for Abstract types with suffixes
-                    // These should be represented as their underlying type in IR
-                    if let TypeKind::Abstract { underlying_type, suffixes, .. } = &type_def.kind {
-                        if !suffixes.is_empty() {
-                            // Abstract type with suffixes uses its underlying type for IR
-                            // Convention: the 'value' field holds the canonical representation
-                            eprintln!("[CONVERT TYPE] Abstract type '{}' with suffixes → underlying type {:?}",
-                                type_def.name.resolve_global().unwrap_or_default(),
-                                underlying_type);
-                            return self.convert_type(underlying_type);
-                        }
+                    // Abstract types (including those with suffixes) remain as nominal types in HIR
+                    // This allows method dispatch to work while still maintaining zero-cost abstraction
+                    // The backend will handle the actual representation
+                    if let TypeKind::Abstract { underlying_type, .. } = &type_def.kind {
+                        // For abstract types, we represent them as a single-field struct in HIR
+                        // containing their underlying type (the 'value' field)
+                        let underlying_hir_type = self.convert_type(underlying_type);
+
+                        eprintln!("[CONVERT TYPE] Abstract type '{}' → struct wrapping {:?}",
+                            type_def.name.resolve_global().unwrap_or_default(),
+                            underlying_hir_type);
+
+                        return HirType::Struct(HirStructType {
+                            name: Some(type_def.name),
+                            fields: vec![underlying_hir_type],
+                            packed: false,
+                        });
                     }
 
                     // Regular Named types (structs, classes, enums) convert to struct types
