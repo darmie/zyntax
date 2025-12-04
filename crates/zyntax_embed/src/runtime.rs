@@ -886,6 +886,10 @@ impl ZyntaxRuntime {
         zyntax_compiler::register_impl_blocks(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
 
+        // Generate automatic trait implementations for abstract types
+        zyntax_compiler::generate_abstract_trait_impls(&mut program)
+            .map_err(|e| RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e)))?;
+
         // Wrap program's type registry in Arc for sharing (it now includes registered traits and impls)
         let type_registry_arc = std::sync::Arc::new(program.type_registry.clone());
 
@@ -2474,6 +2478,10 @@ impl TieredRuntime {
         // Register impl blocks before lowering
         zyntax_compiler::register_impl_blocks(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
+
+        // Generate automatic trait implementations for abstract types
+        zyntax_compiler::generate_abstract_trait_impls(&mut program)
+            .map_err(|e| RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e)))?;
 
         let arena = AstArena::new();
         let module_name = InternedString::new_global("main");

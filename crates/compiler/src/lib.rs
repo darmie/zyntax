@@ -365,6 +365,58 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
     Ok(())
 }
 
+/// Generate automatic trait implementations for abstract types
+/// Abstract types wrapping numeric primitives automatically inherit numeric operation traits
+pub fn generate_abstract_trait_impls(program: &mut zyntax_typed_ast::TypedProgram) -> Result<(), CompilerError> {
+    use zyntax_typed_ast::type_registry::{TypeKind, PrimitiveType};
+    use zyntax_typed_ast::Type;
+
+    eprintln!("[AUTO_TRAITS] Generating automatic trait implementations for abstract types");
+
+    // List of numeric traits that should be automatically implemented
+    let numeric_traits = vec!["Add", "Sub", "Mul", "Div", "Mod", "Neg", "Eq", "Ord"];
+
+    // Iterate through all registered types
+    let type_ids: Vec<_> = program.type_registry.get_all_types()
+        .filter_map(|type_def| {
+            if matches!(&type_def.kind, TypeKind::Abstract { .. }) {
+                Some(type_def.id)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for type_id in type_ids {
+        if let Some(type_def) = program.type_registry.get_type_by_id(type_id) {
+            if let TypeKind::Abstract { underlying_type, .. } = &type_def.kind {
+                // Check if underlying type is numeric
+                let is_numeric = matches!(underlying_type,
+                    Type::Primitive(PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 |
+                                   PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 |
+                                   PrimitiveType::F32 | PrimitiveType::F64)
+                );
+
+                if is_numeric {
+                    let type_name_str = type_def.name.resolve_global().unwrap_or_default();
+                    eprintln!("[AUTO_TRAITS] Type '{}' wraps numeric type {:?}, generating trait impls",
+                        type_name_str, underlying_type);
+
+                    // For each numeric trait, generate an implementation
+                    // TODO: Actual implementation generation
+                    // This would involve:
+                    // 1. Looking up the trait definition
+                    // 2. Creating TypedFunction nodes for each trait method
+                    // 3. Registering the impl in the type registry
+                    // 4. Adding the generated functions to program.declarations
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// 1. Lower TypedAST to HIR (with generic definitions intact)
 /// 2. Monomorphize generic functions and types (if enabled)
 /// 3. Run analysis passes (liveness, alias analysis, etc.)
