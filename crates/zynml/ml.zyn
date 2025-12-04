@@ -427,7 +427,7 @@ struct_field = { identifier ~ ":" ~ type_expr }
 // Abstract types are zero-cost wrappers with implicit conversions
 // Can have fields like structs, with underlying type for direct conversions
 // Suffix/Suffixes enables literal syntax like 1000ms, 5s, 3ns
-abstract_def = { abstract_with_suffixes | abstract_with_suffix | abstract_simple }
+abstract_def = { abstract_with_suffixes | abstract_with_suffix | abstract_with_fields | abstract_simple }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -453,6 +453,19 @@ abstract_with_suffixes = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "wi
               "underlying_type": "$2",
               "suffixes_literal": "$3",
               "fields": "$4"
+          }}
+      ]
+  }
+
+// abstract Name(Type): fields (without suffix)
+abstract_with_fields = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "abstract_with_multiple_suffixes", "args": {
+              "name": "$1",
+              "underlying_type": "$2",
+              "suffixes_literal": "",
+              "fields": "$3"
           }}
       ]
   }

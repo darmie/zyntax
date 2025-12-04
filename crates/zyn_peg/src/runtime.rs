@@ -1735,6 +1735,8 @@ impl AstHostFunctions for TypedAstBuilder {
             span,
         );
 
+        eprintln!("[DEBUG impl_decl] Inherent impl_decl.ty = {:?}", impl_decl.ty);
+
         self.store_decl(impl_decl)
     }
 
@@ -2200,9 +2202,44 @@ impl AstHostFunctions for TypedAstBuilder {
             .filter_map(|h| self.get_expr(*h))
             .collect();
 
+        // Try to resolve the return type from the function's signature if callee is a simple variable
+        let resolved_return_type = if let TypedExpression::Variable(func_name) = &callee_expr.node {
+            // Look up the function in declarations to get its actual return type
+            let func_name_str = func_name.resolve_global().unwrap_or_default();
+            eprintln!("[PARSER] Looking up function '{}' to get return type", func_name_str);
+
+            // Search through declarations for this function
+            // Try exact match first, then try as a suffix (for mangled names like Type$method)
+            let found_func = self.declarations.values().find_map(|decl| {
+                if let TypedDeclaration::Function(func) = &decl.node {
+                    let this_name = func.name.resolve_global().unwrap_or_default();
+                    // Exact match
+                    if this_name == func_name_str {
+                        eprintln!("[PARSER] Found function '{}' with return type: {:?}", func_name_str, func.return_type);
+                        return Some(func.return_type.clone());
+                    }
+                    // Mangled name match: if func_name contains Type$method, match on just the method name
+                    // or if we're looking for Type$method, match the full mangled name
+                    if this_name.ends_with(&format!("${}", func_name_str)) || this_name == func_name_str || func_name_str.ends_with(&format!("${}", this_name.split('$').last().unwrap_or(""))) {
+                        eprintln!("[PARSER] Found mangled function '{}' for call to '{}' with return type: {:?}", this_name, func_name_str, func.return_type);
+                        return Some(func.return_type.clone());
+                    }
+                }
+                None
+            });
+
+            found_func
+        } else {
+            None
+        };
+
         // Convert return type string to Type
         // Opaque types (starting with $) become Extern types which are pointers at the HIR level
-        let ty = match return_type {
+        let ty = if let Some(resolved_ty) = resolved_return_type {
+            // Use the resolved type from the function signature
+            resolved_ty
+        } else {
+            match return_type {
             Some(type_name) if type_name.starts_with('$') => {
                 // This is an opaque type - create an Extern type
                 // The type name without $ is used as the extern type name
@@ -2226,6 +2263,7 @@ impl AstHostFunctions for TypedAstBuilder {
                 }
             }
             None => Type::Any, // Use Any when no return type specified - will be resolved during type inference
+            }
         };
 
         let expr = self.inner.call_positional(callee_expr, arg_exprs, ty, span);
@@ -6355,7 +6393,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => vec![],
                 };
 
-                // Extract suffixes from the string literal node
+                // Extract suffixes from the string literal node or direct string
                 let suffixes_str = match args.get("suffixes_literal") {
                     Some(RuntimeValue::Node(h)) => {
                         if let Some(expr) = self.host.get_expr(*h) {
@@ -6367,6 +6405,10 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                         } else {
                             return Err(crate::error::ZynPegError::CodeGenError("Failed to get string literal expression".into()));
                         }
+                    }
+                    Some(RuntimeValue::String(s)) => {
+                        // Direct string (for abstract types without suffix clause)
+                        s.clone()
                     }
                     _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_multiple_suffixes: missing or invalid suffixes_literal".into())),
                 };

@@ -375,10 +375,16 @@ impl SsaBuilder {
         let entry_block = self.function.entry_block;
 
         for (param_index, param) in params.iter().enumerate() {
+            eprintln!("[PARAM DEBUG] Param '{}' has HIR type: {:?}",
+                param.name.resolve_global().unwrap_or_default(), param.ty);
+
             let param_value_id = self.create_value(param.ty.clone(), HirValueKind::Parameter(param_index as u32));
 
             // Store parameter type for SSA variable tracking
             self.var_types.insert(param.name, param.ty.clone());
+
+            eprintln!("[PARAM DEBUG] Inserted into var_types: var_types['{}'] = {:?}",
+                param.name.resolve_global().unwrap_or_default(), self.var_types.get(&param.name));
 
             // Define parameter in entry block so it's available to all code
             self.write_variable(param.name, entry_block, param_value_id);
@@ -1104,6 +1110,10 @@ impl SsaBuilder {
                     let write_block = self.continuation_block.unwrap_or(block_id);
 
                     // Record variable type (both HIR and TypedAST versions)
+                    eprintln!("[VAR_TYPE DEBUG] Variable '{}' CONVERTING: let_stmt.ty={:?}",
+                        let_stmt.name.resolve_global().unwrap_or_default(),
+                        let_stmt.ty);
+
                     let hir_type = self.convert_type(&let_stmt.ty);
 
                     eprintln!("[VAR_TYPE DEBUG] Variable '{}' BEFORE insert: let_stmt.ty={:?}, hir_type={:?}, initializer.ty={:?}",

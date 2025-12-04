@@ -982,11 +982,21 @@ impl LoweringContext {
 
     /// Convert function signature
     fn convert_function_signature(&self, func: &TypedFunction) -> CompilerResult<HirFunctionSignature> {
+        eprintln!("[CONVERT_SIG] Converting function '{}' signature",
+            func.name.resolve_global().unwrap_or_default());
+
         let mut params = Vec::new();
 
         for param in &func.params {
+            eprintln!("[CONVERT_SIG] Param '{}': TypedAST type = {:?}",
+                param.name.resolve_global().unwrap_or_default(), param.ty);
+
             // Keep abstract types as nominal for method dispatch
             let hir_type = self.convert_type(&param.ty);
+
+            eprintln!("[CONVERT_SIG] Param '{}': HIR type = {:?}",
+                param.name.resolve_global().unwrap_or_default(), hir_type);
+
             let attributes = self.compute_param_attributes(&param.ty, param.mutability);
 
             params.push(HirParam {
@@ -997,8 +1007,10 @@ impl LoweringContext {
             });
         }
 
+        eprintln!("[CONVERT_SIG] Return type: TypedAST = {:?}", func.return_type);
         // Keep abstract types as nominal for method dispatch
         let returns = vec![self.convert_type(&func.return_type)];
+        eprintln!("[CONVERT_SIG] Return type: HIR = {:?}", returns[0]);
         
         // Convert type params from TypedFunction to HirTypeParam
         let hir_type_params: Vec<crate::hir::HirTypeParam> = func.type_params.iter().map(|tp| {
@@ -1499,7 +1511,10 @@ impl LoweringContext {
 
         let retyped_stmt = match &stmt_node.node {
             TypedStatement::Expression(expr) => {
-                TypedStatement::Expression(Box::new(self.retype_expression_node_with_self(expr, self_params)))
+                eprintln!("[RETYPE_STMT] Retyping expression statement");
+                let retyped = self.retype_expression_node_with_self(expr, self_params);
+                eprintln!("[RETYPE_STMT] Expression retyping done");
+                TypedStatement::Expression(Box::new(retyped))
             }
             TypedStatement::Let(let_stmt) => {
                 TypedStatement::Let(TypedLet {
@@ -1552,6 +1567,8 @@ impl LoweringContext {
 
             // Field access - retype the object expression and possibly update field type
             TypedExpression::Field(field_access) => {
+                eprintln!("[RETYPE] Field access starting: object.ty={:?}, field={:?}",
+                    field_access.object.ty, field_access.field);
                 let retyped_object = self.retype_expression_node_with_self(&field_access.object, self_params);
                 eprintln!("[RETYPE] Field access: object before={:?}, after={:?}, field={:?}, expr_ty={:?}",
                     field_access.object.ty, retyped_object.ty, field_access.field, expr_node.ty);
@@ -1559,6 +1576,7 @@ impl LoweringContext {
                     object: Box::new(retyped_object),
                     field: field_access.field,
                 };
+                eprintln!("[RETYPE] Field access done, returning");
                 // Keep the original field result type - it should have been correctly typed by the parser
                 (TypedExpression::Field(retyped_field_access), expr_node.ty.clone())
             }
@@ -1766,7 +1784,11 @@ impl LoweringContext {
         }
 
         // For each method in the impl block, convert it to a function and lower it
-        for method in &impl_block.methods {
+        for (method_idx, method) in impl_block.methods.iter().enumerate() {
+            eprintln!("[LOWERING] Processing method {} of {}: {}",
+                method_idx + 1, impl_block.methods.len(),
+                method.name.resolve_global().unwrap_or_default());
+
             // Resolve parameter types and track self parameters for body retyping
             let mut self_param_mappings: Vec<(zyntax_typed_ast::InternedString, Type)> = Vec::new();
 
