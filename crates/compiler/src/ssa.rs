@@ -1105,7 +1105,19 @@ impl SsaBuilder {
 
                     // Record variable type (both HIR and TypedAST versions)
                     let hir_type = self.convert_type(&let_stmt.ty);
+
+                    eprintln!("[VAR_TYPE DEBUG] Variable '{}' BEFORE insert: let_stmt.ty={:?}, hir_type={:?}, initializer.ty={:?}",
+                        let_stmt.name.resolve_global().unwrap_or_default(),
+                        let_stmt.ty,
+                        hir_type,
+                        value.ty);
+
                     self.var_types.insert(let_stmt.name, hir_type.clone());
+
+                    eprintln!("[VAR_TYPE DEBUG] Variable '{}' AFTER insert, var_types[{}] = {:?}",
+                        let_stmt.name.resolve_global().unwrap_or_default(),
+                        let_stmt.name.resolve_global().unwrap_or_default(),
+                        self.var_types.get(&let_stmt.name));
 
                     // For TypedAST type, use initializer's type if variable type is Any
                     // This works around the issue where type inference doesn't update the AST
@@ -1546,12 +1558,19 @@ impl SsaBuilder {
                 let object_type = if let TypedExpression::Variable(var_name) = &object.node {
                     // Variable - get actual type from var_types (which was updated during type resolution)
                     if let Some(hir_type) = self.var_types.get(var_name) {
+                        eprintln!("[FIELD ACCESS DEBUG] Variable '{}' has hir_type: {:?}",
+                            var_name.resolve_global().unwrap_or_default(), hir_type);
                         // Convert HIR type back to TypedAST Type for get_field_index
-                        self.hir_type_to_typed_ast_type(hir_type)
+                        let converted = self.hir_type_to_typed_ast_type(hir_type);
+                        eprintln!("[FIELD ACCESS DEBUG] Converted to typed_ast_type: {:?}", converted);
+                        converted
                     } else {
+                        eprintln!("[FIELD ACCESS DEBUG] Variable '{}' not in var_types, using object.ty: {:?}",
+                            var_name.resolve_global().unwrap_or_default(), object.ty);
                         object.ty.clone()
                     }
                 } else {
+                    eprintln!("[FIELD ACCESS DEBUG] Not a variable, using object.ty: {:?}", object.ty);
                     object.ty.clone()
                 };
 
