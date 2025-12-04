@@ -28,6 +28,8 @@ pub struct SsaBuilder {
     var_counter: IndexMap<InternedString, u32>,
     /// Type information for variables
     var_types: IndexMap<InternedString, HirType>,
+    /// TypedAST type information for variables (preserves nominal types for method dispatch)
+    var_typed_ast_types: IndexMap<InternedString, Type>,
     /// Sealed blocks (all predecessors known)
     sealed_blocks: HashSet<HirId>,
     /// Filled blocks (all definitions complete)
@@ -273,6 +275,7 @@ impl SsaBuilder {
             incomplete_phis: IndexMap::new(),
             var_counter: IndexMap::new(),
             var_types: IndexMap::new(),
+            var_typed_ast_types: IndexMap::new(),
             sealed_blocks: HashSet::new(),
             filled_blocks: HashSet::new(),
             type_registry,
@@ -1100,9 +1103,22 @@ impl SsaBuilder {
                     // If so, subsequent writes should go to that block
                     let write_block = self.continuation_block.unwrap_or(block_id);
 
-                    // Record variable type
+                    // Record variable type (both HIR and TypedAST versions)
                     let hir_type = self.convert_type(&let_stmt.ty);
                     self.var_types.insert(let_stmt.name, hir_type.clone());
+
+                    // For TypedAST type, use initializer's type if variable type is Any
+                    // This works around the issue where type inference doesn't update the AST
+                    let typed_ast_type = if matches!(let_stmt.ty, Type::Any) {
+                        eprintln!("[VAR_TYPE] Variable '{}' has Any type, using initializer type: {:?}",
+                            let_stmt.name.resolve_global().unwrap_or_default(), value.ty);
+                        value.ty.clone()
+                    } else {
+                        eprintln!("[VAR_TYPE] Variable '{}' has explicit type: {:?}",
+                            let_stmt.name.resolve_global().unwrap_or_default(), let_stmt.ty);
+                        let_stmt.ty.clone()
+                    };
+                    self.var_typed_ast_types.insert(let_stmt.name, typed_ast_type);
 
                     // Check if this variable has its address taken
                     if self.address_taken_vars.contains(&let_stmt.name) {
@@ -1914,10 +1930,23 @@ impl SsaBuilder {
             }
 
             TypedExpression::MethodCall(method_call) => {
-                // Use the receiver's TypedAST type directly for method resolution
-                // This preserves nominal type information (e.g., Duration) even if the HIR type is primitive (e.g., i64)
-                // This is essential for abstract types which are zero-cost but need method dispatch
-                let receiver_type = method_call.receiver.ty.clone();
+                // Resolve receiver type - if receiver is a variable, look up its actual type
+                // This works around the issue where type inference doesn't update variable references in the AST
+                let receiver_type = if let TypedExpression::Variable(var_name) = &method_call.receiver.node {
+                    eprintln!("[METHOD_CALL] Receiver is variable '{}'", var_name.resolve_global().unwrap_or_default());
+                    // Look up the variable's actual type from when it was declared
+                    if let Some(var_ty) = self.var_typed_ast_types.get(var_name) {
+                        eprintln!("[METHOD_CALL] Found variable type: {:?}", var_ty);
+                        var_ty.clone()
+                    } else {
+                        eprintln!("[METHOD_CALL] Variable type not found, using receiver type: {:?}", method_call.receiver.ty);
+                        method_call.receiver.ty.clone()
+                    }
+                } else {
+                    // Non-variable expression - use the type directly
+                    eprintln!("[METHOD_CALL] Receiver is expression with type: {:?}", method_call.receiver.ty);
+                    method_call.receiver.ty.clone()
+                };
 
                 // Resolve method to mangled function name
                 let mangled_name = self.resolve_method_to_function(
@@ -3373,10 +3402,21 @@ impl SsaBuilder {
         }
         let type_name = type_name.unwrap();
 
-        // Construct the method symbol name: $TypeName$method
-        // Note: type_name already includes the $ prefix (e.g., "$Tensor")
+        // Construct the method function name: TypeName$method
         let method_symbol = format!("{}${}", type_name, method_name);
+        let method_name_interned = InternedString::new_global(&method_symbol);
         log::debug!("[SSA] Operator trait dispatch: {} for type {}", method_symbol, type_name);
+
+        // Try to look up the function ID for this method
+        // If it's a compiled ZynML function (like Duration$add), we need HirCallable::Function
+        // If it's an external plugin function (like $Tensor$add), we need HirCallable::Symbol
+        let callee = if let Some(&func_id) = self.function_symbols.get(&method_name_interned) {
+            log::debug!("[SSA] Found function ID for {}", method_symbol);
+            crate::hir::HirCallable::Function(func_id)
+        } else {
+            log::debug!("[SSA] No function ID found, using external symbol for {}", method_symbol);
+            crate::hir::HirCallable::Symbol(method_symbol)
+        };
 
         // Translate arguments
         let left_val = self.translate_expression(block_id, left)?;
@@ -3392,7 +3432,7 @@ impl SsaBuilder {
 
         let inst = HirInstruction::Call {
             result,
-            callee: crate::hir::HirCallable::Symbol(method_symbol),
+            callee,
             args: vec![left_val, right_val],
             type_args: vec![],
             const_args: vec![],

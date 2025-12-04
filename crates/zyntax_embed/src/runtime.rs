@@ -816,7 +816,16 @@ impl ZyntaxRuntime {
         // Scan for struct definitions (TypedDeclaration::Class) and register them
         // IMPORTANT: Only register types that don't already exist (abstract types are pre-registered by parser)
         for decl_node in &program.declarations {
-            eprintln!("[DEBUG] Declaration node ty: {:?}", decl_node.ty);
+            let decl_kind = match &decl_node.node {
+                TypedDeclaration::Function(f) => format!("Function({})", f.name.resolve_global().unwrap_or_default()),
+                TypedDeclaration::Class(c) => format!("Class({})", c.name.resolve_global().unwrap_or_default()),
+                TypedDeclaration::Impl(_) => "Impl".to_string(),
+                TypedDeclaration::Variable(_) => "Variable".to_string(),
+                TypedDeclaration::Import(_) => "Import".to_string(),
+                TypedDeclaration::Enum(_) => "Enum".to_string(),
+                _ => "Other".to_string(),
+            };
+            eprintln!("[DEBUG] Declaration {} ty: {:?}", decl_kind, decl_node.ty);
             if let TypedDeclaration::Class(class) = &decl_node.node {
                 eprintln!("[DEBUG] Found Class '{}' with type: {:?}", class.name, decl_node.ty);
 
@@ -889,6 +898,21 @@ impl ZyntaxRuntime {
         // Generate automatic trait implementations for abstract types
         zyntax_compiler::generate_abstract_trait_impls(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e)))?;
+
+        // Debug: Check what declarations exist after generation
+        eprintln!("[DEBUG AFTER GENERATION] Total declarations: {}", program.declarations.len());
+        for decl_node in &program.declarations {
+            if let TypedDeclaration::Function(f) = &decl_node.node {
+                let name = f.name.resolve_global().unwrap_or_default();
+                if name.contains("Duration") || name.contains("$add") || name.contains("$sub") {
+                    eprintln!("[DEBUG AFTER GENERATION] Found Duration-related function: {}", name);
+                }
+            }
+        }
+
+        // Register the generated impl blocks
+        zyntax_compiler::register_impl_blocks(&mut program)
+            .map_err(|e| RuntimeError::Execution(format!("Failed to register generated impl blocks: {:?}", e)))?;
 
         // Wrap program's type registry in Arc for sharing (it now includes registered traits and impls)
         let type_registry_arc = std::sync::Arc::new(program.type_registry.clone());
@@ -2482,6 +2506,10 @@ impl TieredRuntime {
         // Generate automatic trait implementations for abstract types
         zyntax_compiler::generate_abstract_trait_impls(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e)))?;
+
+        // Register the generated impl blocks
+        zyntax_compiler::register_impl_blocks(&mut program)
+            .map_err(|e| RuntimeError::Execution(format!("Failed to register generated impl blocks: {:?}", e)))?;
 
         let arena = AstArena::new();
         let module_name = InternedString::new_global("main");

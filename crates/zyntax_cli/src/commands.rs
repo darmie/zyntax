@@ -914,6 +914,10 @@ fn eval_input(
     zyntax_compiler::generate_abstract_trait_impls(&mut typed_program)
         .map_err(|e| format!("Failed to generate abstract trait impls: {:?}", e))?;
 
+    // Register the generated impl blocks
+    zyntax_compiler::register_impl_blocks(&mut typed_program)
+        .map_err(|e| format!("Failed to register generated impl blocks: {:?}", e))?;
+
     // Lower to HIR
     let arena = AstArena::new();
     let module_name = InternedString::new_global("repl");

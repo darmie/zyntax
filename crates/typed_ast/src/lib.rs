@@ -125,7 +125,7 @@ pub use typed_ast::{
     // Lambda types
     TypedLambda, TypedLambdaBody,
     // Method types
-    TypedMethodCall,
+    TypedMethodCall, TypedMethod, TypedMethodParam,
     // Range type
     TypedRange,
     // Struct type
@@ -147,6 +147,8 @@ pub use typed_ast::{
     // Extern types for external declarations
     TypedExtern, TypedExternClass, TypedExternStruct, TypedExternEnum,
     TypedExternEnumVariant, TypedExternTypeDef, TypedExternMethod, TypedExternProperty,
+    // Trait implementation types
+    TypedTraitImpl, TypedImplAssociatedType,
 };
 
 pub use type_inference::{

@@ -2061,9 +2061,17 @@ impl AstHostFunctions for TypedAstBuilder {
 
         let binary_op = Self::string_to_binary_op(op);
 
-        // Don't hardcode result type - let type checker infer it from operands
-        // For operator overloading, the result type depends on the trait implementation
-        let result_type = Type::Any;
+        // Infer result type from operands
+        // Comparison operators return bool, arithmetic operators return left operand's type
+        let result_type = match binary_op {
+            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le
+            | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::And | BinaryOp::Or
+                => Type::Primitive(PrimitiveType::Bool),
+            _ => left_expr.ty.clone(),  // Arithmetic ops preserve left operand's type
+        };
+
+        eprintln!("[DEBUG create_binary_op] op={:?}, left_type={:?}, right_type={:?}, result_type={:?}",
+            binary_op, left_expr.ty, right_expr.ty, result_type);
 
         let expr = self.inner.binary(binary_op, left_expr, right_expr, result_type, span);
         self.store_expr(expr)
@@ -2083,9 +2091,12 @@ impl AstHostFunctions for TypedAstBuilder {
 
         let unary_op = Self::string_to_unary_op(op);
 
-        // Don't hardcode result type - let type checker infer it from operand
-        // For operator overloading, the result type depends on the trait implementation
-        let result_type = Type::Any;
+        // Infer result type from operand
+        // Most unary ops (neg, not) preserve the operand's type
+        let result_type = operand_expr.ty.clone();
+
+        eprintln!("[DEBUG create_unary_op] op={:?}, operand_type={:?}, result_type={:?}",
+            unary_op, operand_expr.ty, result_type);
 
         let expr = self.inner.unary(unary_op, operand_expr, result_type, span);
         self.store_expr(expr)
@@ -2943,7 +2954,12 @@ impl AstHostFunctions for TypedAstBuilder {
         // Look up the variable's declared type, default to I32 if not found
         let var_type = self.variable_types.get(name)
             .cloned()
-            .unwrap_or(Type::Primitive(PrimitiveType::I32));
+            .unwrap_or_else(|| {
+                eprintln!("[DEBUG create_variable] Variable '{}' NOT FOUND in variable_types, defaulting to I32", name);
+                eprintln!("[DEBUG create_variable] Available variables: {:?}",
+                    self.variable_types.keys().collect::<Vec<_>>());
+                Type::Primitive(PrimitiveType::I32)
+            });
         eprintln!("[DEBUG create_variable] Variable '{}' has type {:?}", name, var_type);
         let expr = self.inner.variable(name, var_type, span);
         self.store_expr(expr)

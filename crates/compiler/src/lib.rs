@@ -368,53 +368,670 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
 /// Generate automatic trait implementations for abstract types
 /// Abstract types wrapping numeric primitives automatically inherit numeric operation traits
 pub fn generate_abstract_trait_impls(program: &mut zyntax_typed_ast::TypedProgram) -> Result<(), CompilerError> {
-    use zyntax_typed_ast::type_registry::{TypeKind, PrimitiveType};
-    use zyntax_typed_ast::Type;
+    use zyntax_typed_ast::type_registry::{TypeKind, PrimitiveType, ImplDef, MethodImpl, MethodSig, Variance, NullabilityKind};
+    use zyntax_typed_ast::{Type, TypedDeclaration, TypedTraitImpl, TypedMethod, TypedFunction, TypedParameter, TypedBlock, TypedStatement, TypedExpression, TypedBinary, TypedUnary, TypedNode, BinaryOp, UnaryOp, TypedImplAssociatedType};
+    use zyntax_typed_ast::arena::InternedString;
+    use zyntax_typed_ast::source::Span;
+    use std::collections::HashMap;
 
     eprintln!("[AUTO_TRAITS] Generating automatic trait implementations for abstract types");
 
-    // List of numeric traits that should be automatically implemented
-    let numeric_traits = vec!["Add", "Sub", "Mul", "Div", "Mod", "Neg", "Eq", "Ord"];
+    // Binary operation traits that should be automatically implemented for numeric types
+    let binary_traits = vec![
+        ("Add", "add", BinaryOp::Add),
+        ("Sub", "sub", BinaryOp::Sub),
+        ("Mul", "mul", BinaryOp::Mul),
+        ("Div", "div", BinaryOp::Div),
+        ("Mod", "mod", BinaryOp::Rem),
+    ];
+
+    // Comparison traits
+    let comparison_traits = vec![
+        ("Eq", vec![("eq", BinaryOp::Eq), ("ne", BinaryOp::Ne)]),
+        ("Ord", vec![("lt", BinaryOp::Lt), ("gt", BinaryOp::Gt), ("le", BinaryOp::Le), ("ge", BinaryOp::Ge)]),
+    ];
+
+    // Unary operation traits
+    let unary_traits = vec![
+        ("Neg", "neg", UnaryOp::Minus),
+    ];
 
     // Iterate through all registered types
     let type_ids: Vec<_> = program.type_registry.get_all_types()
         .filter_map(|type_def| {
             if matches!(&type_def.kind, TypeKind::Abstract { .. }) {
-                Some(type_def.id)
+                Some((type_def.id, type_def.name, type_def.kind.clone()))
             } else {
                 None
             }
         })
         .collect();
 
-    for type_id in type_ids {
-        if let Some(type_def) = program.type_registry.get_type_by_id(type_id) {
-            if let TypeKind::Abstract { underlying_type, .. } = &type_def.kind {
-                // Check if underlying type is numeric
-                let is_numeric = matches!(underlying_type,
-                    Type::Primitive(PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 |
-                                   PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 |
-                                   PrimitiveType::F32 | PrimitiveType::F64)
-                );
+    let mut generated_impls: Vec<TypedNode<TypedDeclaration>> = Vec::new();
 
-                if is_numeric {
-                    let type_name_str = type_def.name.resolve_global().unwrap_or_default();
-                    eprintln!("[AUTO_TRAITS] Type '{}' wraps numeric type {:?}, generating trait impls",
-                        type_name_str, underlying_type);
+    for (type_id, type_name, kind) in type_ids {
+        if let TypeKind::Abstract { underlying_type, .. } = &kind {
+            // Check if underlying type is numeric
+            let is_numeric = matches!(underlying_type,
+                Type::Primitive(PrimitiveType::I8 | PrimitiveType::I16 | PrimitiveType::I32 | PrimitiveType::I64 |
+                               PrimitiveType::U8 | PrimitiveType::U16 | PrimitiveType::U32 | PrimitiveType::U64 |
+                               PrimitiveType::F32 | PrimitiveType::F64)
+            );
 
-                    // For each numeric trait, generate an implementation
-                    // TODO: Actual implementation generation
-                    // This would involve:
-                    // 1. Looking up the trait definition
-                    // 2. Creating TypedFunction nodes for each trait method
-                    // 3. Registering the impl in the type registry
-                    // 4. Adding the generated functions to program.declarations
+            if is_numeric {
+                let type_name_str = type_name.resolve_global().unwrap_or_default();
+                eprintln!("[AUTO_TRAITS] Type '{}' wraps numeric type {:?}, generating trait impls",
+                    type_name_str, underlying_type);
+
+                let abstract_type = Type::Named {
+                    id: type_id,
+                    type_args: vec![],
+                    const_args: vec![],
+                    variance: vec![],
+                    nullability: NullabilityKind::NonNull,
+                };
+
+                // Generate binary operation trait implementations
+                for (trait_name, method_name, op) in &binary_traits {
+                    if let Some((impl_decl, func_decl)) = generate_binary_trait_impl(
+                        program,
+                        &abstract_type,
+                        underlying_type,
+                        trait_name,
+                        method_name,
+                        *op,
+                    )? {
+                        generated_impls.push(impl_decl);
+                        generated_impls.push(func_decl);
+                    }
+                }
+
+                // Generate comparison trait implementations
+                for (trait_name, methods) in &comparison_traits {
+                    if let Some((impl_decl, func_decls)) = generate_comparison_trait_impl(
+                        program,
+                        &abstract_type,
+                        underlying_type,
+                        trait_name,
+                        methods,
+                    )? {
+                        generated_impls.push(impl_decl);
+                        generated_impls.extend(func_decls);
+                    }
+                }
+
+                // Generate unary operation trait implementations
+                for (trait_name, method_name, op) in &unary_traits {
+                    if let Some((impl_decl, func_decl)) = generate_unary_trait_impl(
+                        program,
+                        &abstract_type,
+                        underlying_type,
+                        trait_name,
+                        method_name,
+                        *op,
+                    )? {
+                        generated_impls.push(impl_decl);
+                        generated_impls.push(func_decl);
+                    }
                 }
             }
         }
     }
 
+    // Add generated implementations to the program
+    let count = generated_impls.len();
+    program.declarations.extend(generated_impls);
+
+    eprintln!("[AUTO_TRAITS] Generated {} declarations (impl blocks + functions)", count);
+
     Ok(())
+}
+
+/// Generate a binary operation trait implementation (Add, Sub, Mul, Div, Mod)
+/// Returns a tuple of (impl_block, function_decl) where function_decl is the standalone function
+fn generate_binary_trait_impl(
+    program: &mut zyntax_typed_ast::TypedProgram,
+    abstract_type: &zyntax_typed_ast::Type,
+    underlying_type: &zyntax_typed_ast::Type,
+    trait_name: &str,
+    method_name: &str,
+    op: zyntax_typed_ast::BinaryOp,
+) -> Result<Option<(zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedDeclaration>, zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedDeclaration>)>, CompilerError> {
+    use zyntax_typed_ast::{TypedNode, TypedDeclaration, TypedTraitImpl, TypedMethod, TypedFunction, TypedParameter, TypedBlock, TypedStatement, TypedExpression, TypedBinary, TypedImplAssociatedType, ParameterKind};
+    use zyntax_typed_ast::type_registry::Mutability;
+    use zyntax_typed_ast::arena::InternedString;
+    use zyntax_typed_ast::source::Span;
+
+    let trait_name_interned = InternedString::new_global(trait_name);
+
+    // Check if trait exists
+    if program.type_registry.get_trait_by_name(trait_name_interned).is_none() {
+        eprintln!("[AUTO_TRAITS] Trait '{}' not found in registry, skipping", trait_name);
+        return Ok(None);
+    }
+
+    let method_name_interned = InternedString::new_global(method_name);
+    let self_param = InternedString::new_global("self");
+    let rhs_param = InternedString::new_global("rhs");
+
+    // Create method: fn {method_name}(self, rhs: Self) -> Self { self {op} rhs }
+    use zyntax_typed_ast::TypedMethodParam;
+    let method = TypedMethod {
+        name: method_name_interned,
+        type_params: vec![],
+        params: vec![
+            TypedMethodParam {
+                name: self_param,
+                ty: abstract_type.clone(),
+                mutability: Mutability::Immutable,
+                is_self: true,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: Span::default(),
+            },
+            TypedMethodParam {
+                name: rhs_param,
+                ty: abstract_type.clone(),
+                mutability: Mutability::Immutable,
+                is_self: false,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: Span::default(),
+            },
+        ],
+        return_type: abstract_type.clone(),
+        body: Some(TypedBlock {
+            statements: vec![
+                TypedNode::new(
+                    TypedStatement::Expression(Box::new(TypedNode::new(
+                        TypedExpression::Binary(TypedBinary {
+                            left: Box::new(TypedNode::new(
+                                TypedExpression::Variable(self_param),
+                                underlying_type.clone(),
+                                Span::default(),
+                            )),
+                            op,
+                            right: Box::new(TypedNode::new(
+                                TypedExpression::Variable(rhs_param),
+                                underlying_type.clone(),
+                                Span::default(),
+                            )),
+                        }),
+                        abstract_type.clone(),
+                        Span::default(),
+                    ))),
+                    zyntax_typed_ast::Type::Any,
+                    Span::default(),
+                ),
+            ],
+            span: Span::default(),
+        }),
+        visibility: zyntax_typed_ast::type_registry::Visibility::Public,
+        is_static: false,
+        is_async: false,
+        is_override: false,
+        span: Span::default(),
+    };
+
+    // Create impl block
+    let impl_block = TypedTraitImpl {
+        trait_name: trait_name_interned,
+        trait_type_args: vec![abstract_type.clone()], // impl Add<Self> for Self
+        for_type: abstract_type.clone(),
+        methods: vec![method],
+        associated_types: vec![
+            TypedImplAssociatedType {
+                name: InternedString::new_global("Output"),
+                ty: abstract_type.clone(),
+                span: Span::default(),
+            }
+        ],
+        span: Span::default(),
+    };
+
+    let impl_decl = TypedNode::new(
+        TypedDeclaration::Impl(impl_block),
+        zyntax_typed_ast::Type::Any,
+        Span::default(),
+    );
+
+    // Create standalone function with mangled name: {TypeName}${method}
+    // Note: Operator overloading uses 2-part names (TypeName$method) not 3-part (TypeName$Trait$method)
+    // This matches the naming convention in ssa.rs:try_operator_trait_dispatch()
+    let type_name_str = if let zyntax_typed_ast::Type::Named { id, .. } = abstract_type {
+        program.type_registry.get_type_by_id(*id)
+            .map(|t| t.name.resolve_global().unwrap_or_default())
+            .unwrap_or_default()
+    } else {
+        "UnknownType".to_string()
+    };
+
+    let mangled_name = format!("{}${}", type_name_str, method_name);
+    let mangled_name_interned = InternedString::new_global(&mangled_name);
+
+    let standalone_func = TypedFunction {
+        name: mangled_name_interned,
+        type_params: vec![],
+        params: vec![
+            TypedParameter {
+                name: self_param,
+                ty: abstract_type.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: Span::default(),
+            },
+            TypedParameter {
+                name: rhs_param,
+                ty: abstract_type.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: Span::default(),
+            },
+        ],
+        return_type: abstract_type.clone(),
+        body: Some(TypedBlock {
+            statements: vec![
+                TypedNode::new(
+                    TypedStatement::Expression(Box::new(TypedNode::new(
+                        TypedExpression::Binary(TypedBinary {
+                            left: Box::new(TypedNode::new(
+                                TypedExpression::Variable(self_param),
+                                underlying_type.clone(),
+                                Span::default(),
+                            )),
+                            op,
+                            right: Box::new(TypedNode::new(
+                                TypedExpression::Variable(rhs_param),
+                                underlying_type.clone(),
+                                Span::default(),
+                            )),
+                        }),
+                        abstract_type.clone(),
+                        Span::default(),
+                    ))),
+                    zyntax_typed_ast::Type::Any,
+                    Span::default(),
+                ),
+            ],
+            span: Span::default(),
+        }),
+        visibility: zyntax_typed_ast::type_registry::Visibility::Public,
+        is_async: false,
+        is_external: false,
+        calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+        link_name: None,
+    };
+
+    let func_decl = TypedNode::new(
+        TypedDeclaration::Function(standalone_func),
+        zyntax_typed_ast::Type::Any,
+        Span::default(),
+    );
+
+    eprintln!("[AUTO_TRAITS] Generated {} impl and function {} for {:?}", trait_name, mangled_name, abstract_type);
+
+    Ok(Some((impl_decl, func_decl)))
+}
+
+/// Generate a comparison trait implementation (Eq, Ord)
+/// Returns (impl_block, vec of standalone functions)
+fn generate_comparison_trait_impl(
+    program: &mut zyntax_typed_ast::TypedProgram,
+    abstract_type: &zyntax_typed_ast::Type,
+    underlying_type: &zyntax_typed_ast::Type,
+    trait_name: &str,
+    methods: &[(&str, zyntax_typed_ast::BinaryOp)],
+) -> Result<Option<(zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedDeclaration>, Vec<zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedDeclaration>>)>, CompilerError> {
+    use zyntax_typed_ast::{TypedNode, TypedDeclaration, TypedTraitImpl, TypedMethod, TypedMethodParam, TypedFunction, TypedParameter, TypedBlock, TypedStatement, TypedExpression, TypedBinary, ParameterKind};
+    use zyntax_typed_ast::type_registry::{Mutability, PrimitiveType, CallingConvention, Visibility};
+    use zyntax_typed_ast::arena::InternedString;
+    use zyntax_typed_ast::source::Span;
+
+    let trait_name_interned = InternedString::new_global(trait_name);
+
+    // Check if trait exists
+    if program.type_registry.get_trait_by_name(trait_name_interned).is_none() {
+        eprintln!("[AUTO_TRAITS] Trait '{}' not found in registry, skipping", trait_name);
+        return Ok(None);
+    }
+
+    let self_param = InternedString::new_global("self");
+    let rhs_param = InternedString::new_global("rhs");
+
+    // Get type name for mangling
+    let type_name = if let zyntax_typed_ast::Type::Named { id, .. } = abstract_type {
+        program.type_registry.get_type_by_id(*id)
+            .ok_or_else(|| CompilerError::Analysis("Type not found in registry".to_string()))?
+            .name
+    } else {
+        return Err(CompilerError::Analysis("Abstract type must be Named".to_string()));
+    };
+    let type_name_str = type_name.resolve_global().unwrap_or_default();
+
+    // Generate impl block methods and standalone functions
+    let mut typed_methods = Vec::new();
+    let mut standalone_functions = Vec::new();
+
+    for (method_name, op) in methods {
+        let method_name_interned = InternedString::new_global(method_name);
+
+        // Generate TypedMethod for impl block
+        typed_methods.push(TypedMethod {
+            name: method_name_interned,
+            type_params: vec![],
+            params: vec![
+                TypedMethodParam {
+                    name: self_param,
+                    ty: abstract_type.clone(),
+                    mutability: Mutability::Immutable,
+                    is_self: true,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: vec![],
+                    span: Span::default(),
+                },
+                TypedMethodParam {
+                    name: rhs_param,
+                    ty: abstract_type.clone(),
+                    mutability: Mutability::Immutable,
+                    is_self: false,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: vec![],
+                    span: Span::default(),
+                },
+            ],
+            return_type: zyntax_typed_ast::Type::Primitive(PrimitiveType::Bool),
+            body: Some(TypedBlock {
+                statements: vec![
+                    TypedNode::new(
+                        TypedStatement::Expression(Box::new(TypedNode::new(
+                            TypedExpression::Binary(TypedBinary {
+                                left: Box::new(TypedNode::new(
+                                    TypedExpression::Variable(self_param),
+                                    underlying_type.clone(),
+                                    Span::default(),
+                                )),
+                                op: *op,
+                                right: Box::new(TypedNode::new(
+                                    TypedExpression::Variable(rhs_param),
+                                    underlying_type.clone(),
+                                    Span::default(),
+                                )),
+                            }),
+                            zyntax_typed_ast::Type::Primitive(PrimitiveType::Bool),
+                            Span::default(),
+                        ))),
+                        zyntax_typed_ast::Type::Any,
+                        Span::default(),
+                    ),
+                ],
+                span: Span::default(),
+            }),
+            visibility: Visibility::Public,
+            is_static: false,
+            is_async: false,
+            is_override: false,
+            span: Span::default(),
+        });
+
+        // Generate standalone function with 2-part mangled name (TypeName$method)
+        let mangled_name = format!("{}${}", type_name_str, method_name);
+        let mangled_name_interned = InternedString::new_global(&mangled_name);
+
+        let standalone_func = TypedFunction {
+            name: mangled_name_interned,
+            type_params: vec![],
+            params: vec![
+                TypedParameter {
+                    name: self_param,
+                    ty: abstract_type.clone(),
+                    mutability: Mutability::Immutable,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: vec![],
+                    span: Span::default(),
+                },
+                TypedParameter {
+                    name: rhs_param,
+                    ty: abstract_type.clone(),
+                    mutability: Mutability::Immutable,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: vec![],
+                    span: Span::default(),
+                },
+            ],
+            return_type: zyntax_typed_ast::Type::Primitive(PrimitiveType::Bool),
+            body: Some(TypedBlock {
+                statements: vec![
+                    TypedNode::new(
+                        TypedStatement::Expression(Box::new(TypedNode::new(
+                            TypedExpression::Binary(TypedBinary {
+                                left: Box::new(TypedNode::new(
+                                    TypedExpression::Variable(self_param),
+                                    underlying_type.clone(),
+                                    Span::default(),
+                                )),
+                                op: *op,
+                                right: Box::new(TypedNode::new(
+                                    TypedExpression::Variable(rhs_param),
+                                    underlying_type.clone(),
+                                    Span::default(),
+                                )),
+                            }),
+                            zyntax_typed_ast::Type::Primitive(PrimitiveType::Bool),
+                            Span::default(),
+                        ))),
+                        zyntax_typed_ast::Type::Any,
+                        Span::default(),
+                    ),
+                ],
+                span: Span::default(),
+            }),
+            visibility: Visibility::Public,
+            is_async: false,
+            is_external: false,
+            calling_convention: CallingConvention::Default,
+            link_name: None,
+        };
+
+        standalone_functions.push(TypedNode::new(
+            TypedDeclaration::Function(standalone_func),
+            zyntax_typed_ast::Type::Any,
+            Span::default(),
+        ));
+
+        eprintln!("[AUTO_TRAITS] Generated standalone function '{}' for {} trait", mangled_name, trait_name);
+    }
+
+    // Create impl block
+    let impl_block = TypedTraitImpl {
+        trait_name: trait_name_interned,
+        trait_type_args: vec![abstract_type.clone()], // impl Eq<Self> for Self
+        for_type: abstract_type.clone(),
+        methods: typed_methods,
+        associated_types: vec![],
+        span: Span::default(),
+    };
+
+    let impl_decl = TypedNode::new(
+        TypedDeclaration::Impl(impl_block),
+        zyntax_typed_ast::Type::Any,
+        Span::default(),
+    );
+
+    eprintln!("[AUTO_TRAITS] Generated {} impl for {:?}", trait_name, abstract_type);
+
+    Ok(Some((impl_decl, standalone_functions)))
+}
+
+/// Generate a unary operation trait implementation (Neg)
+/// Returns (impl_block, standalone_function)
+fn generate_unary_trait_impl(
+    program: &mut zyntax_typed_ast::TypedProgram,
+    abstract_type: &zyntax_typed_ast::Type,
+    underlying_type: &zyntax_typed_ast::Type,
+    trait_name: &str,
+    method_name: &str,
+    op: zyntax_typed_ast::UnaryOp,
+) -> Result<Option<(zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedDeclaration>, zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedDeclaration>)>, CompilerError> {
+    use zyntax_typed_ast::{TypedNode, TypedDeclaration, TypedTraitImpl, TypedMethod, TypedMethodParam, TypedFunction, TypedParameter, TypedBlock, TypedStatement, TypedExpression, TypedUnary, TypedImplAssociatedType, ParameterKind};
+    use zyntax_typed_ast::type_registry::{Mutability, CallingConvention, Visibility};
+    use zyntax_typed_ast::arena::InternedString;
+    use zyntax_typed_ast::source::Span;
+
+    let trait_name_interned = InternedString::new_global(trait_name);
+
+    // Check if trait exists
+    if program.type_registry.get_trait_by_name(trait_name_interned).is_none() {
+        eprintln!("[AUTO_TRAITS] Trait '{}' not found in registry, skipping", trait_name);
+        return Ok(None);
+    }
+
+    let method_name_interned = InternedString::new_global(method_name);
+    let self_param = InternedString::new_global("self");
+
+    // Get type name for mangling
+    let type_name = if let zyntax_typed_ast::Type::Named { id, .. } = abstract_type {
+        program.type_registry.get_type_by_id(*id)
+            .ok_or_else(|| CompilerError::Analysis("Type not found in registry".to_string()))?
+            .name
+    } else {
+        return Err(CompilerError::Analysis("Abstract type must be Named".to_string()));
+    };
+    let type_name_str = type_name.resolve_global().unwrap_or_default();
+
+    // Create method: fn {method_name}(self) -> Self { {op}self }
+    let method = TypedMethod {
+        name: method_name_interned,
+        type_params: vec![],
+        params: vec![
+            TypedMethodParam {
+                name: self_param,
+                ty: abstract_type.clone(),
+                mutability: Mutability::Immutable,
+                is_self: true,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: Span::default(),
+            },
+        ],
+        return_type: abstract_type.clone(),
+        body: Some(TypedBlock {
+            statements: vec![
+                TypedNode::new(
+                    TypedStatement::Expression(Box::new(TypedNode::new(
+                        TypedExpression::Unary(TypedUnary {
+                            op,
+                            operand: Box::new(TypedNode::new(
+                                TypedExpression::Variable(self_param),
+                                underlying_type.clone(),
+                                Span::default(),
+                            )),
+                        }),
+                        abstract_type.clone(),
+                        Span::default(),
+                    ))),
+                    zyntax_typed_ast::Type::Any,
+                    Span::default(),
+                ),
+            ],
+            span: Span::default(),
+        }),
+        visibility: Visibility::Public,
+        is_static: false,
+        is_async: false,
+        is_override: false,
+        span: Span::default(),
+    };
+
+    // Create impl block
+    let impl_block = TypedTraitImpl {
+        trait_name: trait_name_interned,
+        trait_type_args: vec![],
+        for_type: abstract_type.clone(),
+        methods: vec![method],
+        associated_types: vec![
+            TypedImplAssociatedType {
+                name: InternedString::new_global("Output"),
+                ty: abstract_type.clone(),
+                span: Span::default(),
+            }
+        ],
+        span: Span::default(),
+    };
+
+    let impl_decl = TypedNode::new(
+        TypedDeclaration::Impl(impl_block),
+        zyntax_typed_ast::Type::Any,
+        Span::default(),
+    );
+
+    // Generate standalone function with 2-part mangled name (TypeName$method)
+    let mangled_name = format!("{}${}", type_name_str, method_name);
+    let mangled_name_interned = InternedString::new_global(&mangled_name);
+
+    let standalone_func = TypedFunction {
+        name: mangled_name_interned,
+        type_params: vec![],
+        params: vec![
+            TypedParameter {
+                name: self_param,
+                ty: abstract_type.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: Span::default(),
+            },
+        ],
+        return_type: abstract_type.clone(),
+        body: Some(TypedBlock {
+            statements: vec![
+                TypedNode::new(
+                    TypedStatement::Expression(Box::new(TypedNode::new(
+                        TypedExpression::Unary(TypedUnary {
+                            op,
+                            operand: Box::new(TypedNode::new(
+                                TypedExpression::Variable(self_param),
+                                underlying_type.clone(),
+                                Span::default(),
+                            )),
+                        }),
+                        abstract_type.clone(),
+                        Span::default(),
+                    ))),
+                    zyntax_typed_ast::Type::Any,
+                    Span::default(),
+                ),
+            ],
+            span: Span::default(),
+        }),
+        visibility: Visibility::Public,
+        is_async: false,
+        is_external: false,
+        calling_convention: CallingConvention::Default,
+        link_name: None,
+    };
+
+    let func_decl = TypedNode::new(
+        TypedDeclaration::Function(standalone_func),
+        zyntax_typed_ast::Type::Any,
+        Span::default(),
+    );
+
+    eprintln!("[AUTO_TRAITS] Generated {} impl for {:?}", trait_name, abstract_type);
+    eprintln!("[AUTO_TRAITS] Generated standalone function '{}' for {} trait", mangled_name, trait_name);
+
+    Ok(Some((impl_decl, func_decl)))
 }
 
 /// 1. Lower TypedAST to HIR (with generic definitions intact)

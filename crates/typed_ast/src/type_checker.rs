@@ -802,6 +802,12 @@ impl TypeChecker {
                     self.apply_types_to_expr_node(elem);
                 }
             }
+            TypedExpression::MethodCall(method_call) => {
+                self.apply_types_to_expr_node(&mut method_call.receiver);
+                for arg in &mut method_call.positional_args {
+                    self.apply_types_to_expr_node(arg);
+                }
+            }
             // TODO: Handle other expression types
             _ => {}
         }
