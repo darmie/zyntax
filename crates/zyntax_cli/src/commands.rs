@@ -855,11 +855,21 @@ fn eval_input(
 
     // Rebuild type registry from declarations (TypeRegistry is not serializable)
     // Scan for struct definitions (TypedDeclaration::Class) and register them
+    // IMPORTANT: Only register types that don't already exist (abstract types are pre-registered by parser)
     use zyntax_typed_ast::{TypedDeclaration, type_registry::*};
     for decl_node in &typed_program.declarations {
         eprintln!("[DEBUG] Checking declaration, type: {:?}", decl_node.ty);
         if let TypedDeclaration::Class(class) = &decl_node.node {
             eprintln!("[DEBUG] Found Class declaration: {}, ty={:?}", class.name, decl_node.ty);
+
+            // Check if type is already registered (e.g., abstract types from parser)
+            if let Some(existing_type) = typed_program.type_registry.get_type_by_name(class.name) {
+                eprintln!("[DEBUG] Type '{}' already registered with kind: {:?}, skipping re-registration",
+                    class.name.resolve_global().unwrap_or("Unknown".to_string()),
+                    std::mem::discriminant(&existing_type.kind));
+                continue;
+            }
+
             // Check if this is a struct (no methods, just fields)
             // Create TypeDefinition and register it
             if let zyntax_typed_ast::Type::Named { id, .. } = &decl_node.ty {

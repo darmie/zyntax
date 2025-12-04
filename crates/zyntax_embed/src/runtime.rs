@@ -814,10 +814,20 @@ impl ZyntaxRuntime {
 
         // Rebuild type registry from declarations (TypeRegistry is not serializable)
         // Scan for struct definitions (TypedDeclaration::Class) and register them
+        // IMPORTANT: Only register types that don't already exist (abstract types are pre-registered by parser)
         for decl_node in &program.declarations {
             eprintln!("[DEBUG] Declaration node ty: {:?}", decl_node.ty);
             if let TypedDeclaration::Class(class) = &decl_node.node {
                 eprintln!("[DEBUG] Found Class '{}' with type: {:?}", class.name, decl_node.ty);
+
+                // Check if type is already registered (e.g., abstract types from parser)
+                if let Some(existing_type) = program.type_registry.get_type_by_name(class.name) {
+                    eprintln!("[DEBUG] Type '{}' already registered with kind: {:?}, skipping re-registration",
+                        class.name.resolve_global().unwrap_or("Unknown".to_string()),
+                        std::mem::discriminant(&existing_type.kind));
+                    continue;
+                }
+
                 // Check if this is a struct (no methods, just fields)
                 // Create TypeDefinition and register it
                 if let zyntax_typed_ast::Type::Named { id, .. } = &decl_node.ty {

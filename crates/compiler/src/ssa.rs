@@ -3138,7 +3138,22 @@ impl SsaBuilder {
                 // Look up the type definition in the registry
                 if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
                     use crate::hir::HirStructType;
+                    use zyntax_typed_ast::type_registry::TypeKind;
 
+                    // Special handling for Abstract types with suffixes
+                    // These should be represented as their underlying type in IR
+                    if let TypeKind::Abstract { underlying_type, suffixes, .. } = &type_def.kind {
+                        if !suffixes.is_empty() {
+                            // Abstract type with suffixes uses its underlying type for IR
+                            // Convention: the 'value' field holds the canonical representation
+                            eprintln!("[CONVERT TYPE] Abstract type '{}' with suffixes → underlying type {:?}",
+                                type_def.name.resolve_global().unwrap_or_default(),
+                                underlying_type);
+                            return self.convert_type(underlying_type);
+                        }
+                    }
+
+                    // Regular Named types (structs, classes, enums) convert to struct types
                     // Convert the fields to HIR types
                     let hir_fields: Vec<HirType> = type_def.fields.iter()
                         .map(|field| self.convert_type(&field.ty))
@@ -3219,6 +3234,18 @@ impl SsaBuilder {
                 Type::Any
             },
             HirType::Opaque(name) => {
+                // Check if this opaque type is actually a registered type (struct/abstract) in the registry
+                if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
+                    // It's a known type, return as Named so field access works
+                    return Type::Named {
+                        id: type_def.id,
+                        type_args: vec![],
+                        const_args: vec![],
+                        variance: vec![],
+                        nullability: NullabilityKind::NonNull,
+                    };
+                }
+                // Otherwise, it's a true extern/opaque type
                 Type::Extern {
                     name: *name,
                     layout: None,
@@ -3477,8 +3504,20 @@ impl SsaBuilder {
 
         match lit {
             TypedLiteral::Bool(b) => HirConstant::Bool(*b),
-            // Use I32 for integers (TypedAST builder defaults to I32)
-            TypedLiteral::Integer(i) => HirConstant::I32(*i as i32),
+            // Integer literals respect the target type
+            TypedLiteral::Integer(i) => {
+                match target_ty {
+                    HirType::I8 => HirConstant::I8(*i as i8),
+                    HirType::I16 => HirConstant::I16(*i as i16),
+                    HirType::I32 => HirConstant::I32(*i as i32),
+                    HirType::I64 => HirConstant::I64(*i as i64),
+                    HirType::U8 => HirConstant::U8(*i as u8),
+                    HirType::U16 => HirConstant::U16(*i as u16),
+                    HirType::U32 => HirConstant::U32(*i as u32),
+                    HirType::U64 => HirConstant::U64(*i as u64),
+                    _ => HirConstant::I32(*i as i32), // Default to I32
+                }
+            }
             // Float literals use the target type (F32 or F64)
             TypedLiteral::Float(f) => {
                 match target_ty {

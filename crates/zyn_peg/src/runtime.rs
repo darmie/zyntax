@@ -312,8 +312,15 @@ pub trait AstHostFunctions {
     /// Returns None if suffix is not registered
     fn lookup_suffix(&self, suffix: &str) -> Option<String>;
 
+    /// Lookup a declared type by name
+    /// Returns None if type is not declared
+    fn lookup_declared_type(&self, type_name: &str) -> Option<Type>;
+
     /// Get an expression node by handle (for extracting string literals, etc.)
     fn get_expr(&self, handle: NodeHandle) -> Option<TypedNode<TypedExpression>>;
+
+    /// Create a typed integer literal with explicit type annotation
+    fn create_typed_int_literal(&mut self, value: i64, ty: Type) -> NodeHandle;
 
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
@@ -1928,6 +1935,44 @@ impl AstHostFunctions for TypedAstBuilder {
             is_synthetic: false,
         }).collect();
 
+        // Validate abstract types with suffixes
+        if !suffixes.is_empty() {
+            // 1. Check numeric underlying type
+            let is_numeric = matches!(&underlying_type,
+                zyntax_typed_ast::Type::Primitive(zyntax_typed_ast::type_registry::PrimitiveType::I8 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::I16 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::I32 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::I64 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::U8 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::U16 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::U32 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::U64 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::F32 |
+                    zyntax_typed_ast::type_registry::PrimitiveType::F64)
+            );
+            if !is_numeric {
+                eprintln!("[WARNING] Abstract type '{}' uses Suffixes with non-numeric underlying type. This will be reported as an error during type checking.", name);
+            }
+
+            // 2. Enforce 'value' field convention
+            // Abstract types with suffixes MUST have exactly one field named 'value'
+            let has_value_field = typed_fields.iter().any(|f| {
+                f.name.resolve_global().unwrap_or_default() == "value"
+            });
+
+            if !has_value_field {
+                eprintln!("[ERROR] Abstract type '{}' with Suffixes must have a 'value' field", name);
+                eprintln!("       Convention: abstract {}({}) with Suffixes(...): value: {}",
+                    name,
+                    format!("{:?}", underlying_type).split("::").last().unwrap_or("Type"),
+                    format!("{:?}", underlying_type).split("::").last().unwrap_or("Type")
+                );
+                eprintln!("       The 'value' field represents the canonical IR representation.");
+            } else if typed_fields.len() > 1 {
+                eprintln!("[WARNING] Abstract type '{}' with Suffixes has multiple fields. Only the 'value' field will be used in IR.", name);
+            }
+        }
+
         let type_def = zyntax_typed_ast::type_registry::TypeDefinition {
             id: type_id,
             name: name_interned,
@@ -1984,6 +2029,10 @@ impl AstHostFunctions for TypedAstBuilder {
 
     fn lookup_suffix(&self, suffix: &str) -> Option<String> {
         self.suffix_registry.get(suffix).cloned()
+    }
+
+    fn lookup_declared_type(&self, type_name: &str) -> Option<Type> {
+        self.declared_types.get(type_name).cloned()
     }
 
     fn get_expr(&self, handle: NodeHandle) -> Option<TypedNode<TypedExpression>> {
@@ -2061,6 +2110,18 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_int_literal(&mut self, value: i64) -> NodeHandle {
         let span = self.default_span();
         let expr = self.inner.int_literal(value as i128, span);
+        self.store_expr(expr)
+    }
+
+    fn create_typed_int_literal(&mut self, value: i64, ty: Type) -> NodeHandle {
+        // Create an integer literal with an explicit type annotation
+        // This preserves Abstract types through the compilation pipeline
+        let span = self.default_span();
+        let expr = TypedNode::new(
+            TypedExpression::Literal(TypedLiteral::Integer(value as i128)),
+            ty,  // Use the provided type instead of inferring
+            span
+        );
         self.store_expr(expr)
     }
 
@@ -4329,37 +4390,79 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let num_str = &text[..num_end];
                 let suffix = &text[num_end..];
 
-                eprintln!("[DEBUG suffixed_literal] Parsing '{}': num='{}', suffix='{}'", text, num_str, suffix);
+                // Validate that we have both a number and a suffix
+                if num_str.is_empty() {
+                    return Err(crate::error::ZynPegError::CodeGenError(
+                        format!("Suffix literal '{}' must start with a number", text)
+                    ));
+                }
+                if suffix.is_empty() {
+                    return Err(crate::error::ZynPegError::CodeGenError(
+                        format!("Suffix literal '{}' must have a suffix after the number", text)
+                    ));
+                }
 
-                // Look up suffix in registry
+                eprintln!("[SUFFIX LITERAL] Parsing '{}': num='{}', suffix='{}'", text, num_str, suffix);
+
+                // Look up suffix in registry to find the abstract type
                 let type_name = match self.host.lookup_suffix(suffix) {
                     Some(name) => name,
                     None => {
-                        // Suffix not registered - could be a typo or undefined abstract type
+                        // Suffix not registered - provide helpful error message
                         return Err(crate::error::ZynPegError::CodeGenError(
-                            format!("suffixed_literal: unknown suffix '{}' - no abstract type registered with this suffix", suffix)
+                            format!(
+                                "Unknown suffix '{}' in literal '{}'. \
+                                No abstract type has been declared with this suffix. \
+                                \nHint: Declare an abstract type like: abstract Duration(i64) with Suffixes(\"ms, s\") to use '{}' suffix literals.",
+                                suffix, text, suffix
+                            )
                         ));
                     }
                 };
 
-                eprintln!("[DEBUG suffixed_literal] Suffix '{}' maps to type '{}'", suffix, type_name);
+                eprintln!("[SUFFIX LITERAL] Suffix '{}' maps to abstract type '{}'", suffix, type_name);
 
-                // Parse the number
+                // Parse the number value
                 let num: i64 = num_str.parse()
-                    .map_err(|_| crate::error::ZynPegError::CodeGenError(
-                        format!("suffixed_literal: invalid number '{}'", num_str)
+                    .map_err(|e| crate::error::ZynPegError::CodeGenError(
+                        format!("Invalid number '{}' in suffix literal '{}': {}", num_str, text, e)
                     ))?;
 
-                // Create method call: Type::from_{suffix}(num)
-                // e.g., "1000ms" -> Duration::from_ms(1000)
-                let method_name = format!("{}::from_{}", type_name, suffix);
+                // Validate that the abstract type is actually registered in declared_types
+                if self.host.lookup_declared_type(&type_name).is_none() {
+                    return Err(crate::error::ZynPegError::CodeGenError(
+                        format!(
+                            "Abstract type '{}' referenced by suffix '{}' is not defined. \
+                            \nThe suffix was registered but the type definition is missing.",
+                            type_name, suffix
+                        )
+                    ));
+                }
 
-                // Create the call expression
-                let num_literal = self.host.create_int_literal(num);
-                let method_var = self.host.create_variable(&method_name);
-                let handle = self.host.create_call(method_var, vec![num_literal]);
+                eprintln!("[SUFFIX LITERAL] Abstract type '{}' is registered in type registry", type_name);
 
-                eprintln!("[DEBUG suffixed_literal] Created call to '{}' with arg {}", method_name, num);
+                // Instead of creating a method call, create a literal with the Abstract type
+                // The suffix literal should maintain its Abstract type through the entire pipeline
+                // e.g., "1000ms" -> TypedLiteral::Integer(1000) with type Duration
+
+                // Get the abstract type from the registry
+                let abstract_type = if let Some(ty) = self.host.lookup_declared_type(&type_name) {
+                    ty
+                } else {
+                    // Should not reach here since we validated above, but handle gracefully
+                    return Err(crate::error::ZynPegError::CodeGenError(
+                        format!("Failed to retrieve abstract type '{}' after validation", type_name)
+                    ));
+                };
+
+                eprintln!("[SUFFIX LITERAL] Creating literal with Abstract type: {:?}", abstract_type);
+
+                // Create an integer literal node with the Abstract type annotation
+                // This preserves the type information throughout compilation
+                let handle = self.host.create_typed_int_literal(num, abstract_type);
+
+                eprintln!("[SUFFIX LITERAL] Successfully parsed suffix literal '{}' as typed literal with value {} and abstract type",
+                    text, num);
                 Ok(RuntimeValue::Node(handle))
             }
 

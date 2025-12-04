@@ -827,14 +827,21 @@ impl TypeChecker {
                 }
             }
             // Import and Class declarations are handled elsewhere
-            TypedDeclaration::Import(_) | TypedDeclaration::Class(_) => {
+            TypedDeclaration::Import(_) => {
                 // Import declarations are processed at the module level
-                // Class declarations (structs) are registered in the TypeRegistry
+            }
+            TypedDeclaration::Class(class) => {
+                // Class declarations (structs/abstract types) are registered in the TypeRegistry
+                // Validate abstract types with suffixes
+                self.check_abstract_type_suffixes(class.name, span);
+            }
+            TypedDeclaration::TypeAlias(alias) => {
+                // Type aliases might be abstract types
+                self.check_abstract_type_suffixes(alias.name, span);
             }
             // TODO: Implement other declaration types
             TypedDeclaration::Interface(_)
             | TypedDeclaration::Enum(_)
-            | TypedDeclaration::TypeAlias(_)
             | TypedDeclaration::Module(_) => {
                 // Placeholder for now - emit warning for unimplemented features
                 self.diagnostics
@@ -847,6 +854,61 @@ impl TypeChecker {
             TypedDeclaration::Extern(_) => {
                 // Extern declarations are validated at the grammar level,
                 // their methods are resolved to runtime symbols
+            }
+        }
+    }
+
+    /// Validate that abstract types with Suffixes only use numeric underlying types
+    fn check_abstract_type_suffixes(&mut self, type_name: InternedString, span: Span) {
+        let registry = self.constraint_solver.type_registry();
+
+        // Find the type definition by name
+        if let Some(type_def) = registry.get_type_by_name(type_name) {
+            // Check if this is an abstract type with suffixes
+            if let crate::type_registry::TypeKind::Abstract { underlying_type, suffixes, .. } = &type_def.kind {
+                if !suffixes.is_empty() {
+                    // Check if underlying type is numeric
+                    let is_numeric = matches!(
+                        underlying_type,
+                        Type::Primitive(PrimitiveType::I8)
+                            | Type::Primitive(PrimitiveType::I16)
+                            | Type::Primitive(PrimitiveType::I32)
+                            | Type::Primitive(PrimitiveType::I64)
+                            | Type::Primitive(PrimitiveType::U8)
+                            | Type::Primitive(PrimitiveType::U16)
+                            | Type::Primitive(PrimitiveType::U32)
+                            | Type::Primitive(PrimitiveType::U64)
+                            | Type::Primitive(PrimitiveType::F32)
+                            | Type::Primitive(PrimitiveType::F64)
+                    );
+
+                    if !is_numeric {
+                        let type_name_str = type_name.resolve_global().unwrap_or_else(|| "Unknown".to_string());
+                        let underlying_type_str = match underlying_type {
+                            Type::Primitive(prim) => format!("{:?}", prim),
+                            Type::Named { id, .. } => {
+                                if let Some(ut_def) = registry.get_type_by_id(*id) {
+                                    ut_def.name.resolve_global().unwrap_or_else(|| "Unknown".to_string())
+                                } else {
+                                    "Unknown".to_string()
+                                }
+                            }
+                            _ => "non-numeric type".to_string(),
+                        };
+
+                        self.diagnostics
+                            .error(format!(
+                                "Suffixes can only be used with numeric underlying types, but '{}' has underlying type '{}'",
+                                type_name_str, underlying_type_str
+                            ))
+                            .code(codes::E0002)
+                            .primary(span, "invalid use of Suffixes on non-numeric abstract type")
+                            .help("Suffixes are restricted to abstract types that wrap numeric primitives (i8, i16, i32, i64, u8, u16, u32, u64, f32, f64)")
+                            .note("Example: abstract Duration(i64) with Suffixes(\"ms, s\") for unit literals like 1000ms")
+                            .emit()
+                            .ok();
+                    }
+                }
             }
         }
     }
