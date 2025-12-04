@@ -514,8 +514,18 @@ fn generate_binary_trait_impl(
     let self_param = InternedString::new_global("self");
     let rhs_param = InternedString::new_global("rhs");
 
-    // Create method: fn {method_name}(self, rhs: Self) -> Self { self {op} rhs }
+    // Create method: fn {method_name}(self, rhs: Self) -> Self { TypeName { value: self.value {op} rhs.value } }
     use zyntax_typed_ast::TypedMethodParam;
+
+    // Get type name for struct literal
+    let type_name_for_literal = if let zyntax_typed_ast::Type::Named { id, .. } = abstract_type {
+        program.type_registry.get_type_by_id(*id)
+            .map(|t| t.name)
+            .unwrap_or_else(|| InternedString::new_global("Unknown"))
+    } else {
+        InternedString::new_global("Unknown")
+    };
+
     let method = TypedMethod {
         name: method_name_interned,
         type_params: vec![],
@@ -546,18 +556,47 @@ fn generate_binary_trait_impl(
             statements: vec![
                 TypedNode::new(
                     TypedStatement::Expression(Box::new(TypedNode::new(
-                        TypedExpression::Binary(TypedBinary {
-                            left: Box::new(TypedNode::new(
-                                TypedExpression::Variable(self_param),
-                                underlying_type.clone(),
-                                Span::default(),
-                            )),
-                            op,
-                            right: Box::new(TypedNode::new(
-                                TypedExpression::Variable(rhs_param),
-                                underlying_type.clone(),
-                                Span::default(),
-                            )),
+                        // Create struct literal: TypeName { value: self.value {op} rhs.value }
+                        TypedExpression::Struct(zyntax_typed_ast::TypedStructLiteral {
+                            name: type_name_for_literal,
+                            fields: vec![
+                                zyntax_typed_ast::TypedFieldInit {
+                                    name: InternedString::new_global("value"),
+                                    value: Box::new(TypedNode::new(
+                                        TypedExpression::Binary(TypedBinary {
+                                            // Extract self.value
+                                            left: Box::new(TypedNode::new(
+                                                TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                                    object: Box::new(TypedNode::new(
+                                                        TypedExpression::Variable(self_param),
+                                                        abstract_type.clone(),
+                                                        Span::default(),
+                                                    )),
+                                                    field: InternedString::new_global("value"),
+                                                }),
+                                                underlying_type.clone(),
+                                                Span::default(),
+                                            )),
+                                            op,
+                                            // Extract rhs.value
+                                            right: Box::new(TypedNode::new(
+                                                TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                                    object: Box::new(TypedNode::new(
+                                                        TypedExpression::Variable(rhs_param),
+                                                        abstract_type.clone(),
+                                                        Span::default(),
+                                                    )),
+                                                    field: InternedString::new_global("value"),
+                                                }),
+                                                underlying_type.clone(),
+                                                Span::default(),
+                                            )),
+                                        }),
+                                        underlying_type.clone(),
+                                        Span::default(),
+                                    )),
+                                },
+                            ],
                         }),
                         abstract_type.clone(),
                         Span::default(),
@@ -639,18 +678,47 @@ fn generate_binary_trait_impl(
             statements: vec![
                 TypedNode::new(
                     TypedStatement::Expression(Box::new(TypedNode::new(
-                        TypedExpression::Binary(TypedBinary {
-                            left: Box::new(TypedNode::new(
-                                TypedExpression::Variable(self_param),
-                                underlying_type.clone(),
-                                Span::default(),
-                            )),
-                            op,
-                            right: Box::new(TypedNode::new(
-                                TypedExpression::Variable(rhs_param),
-                                underlying_type.clone(),
-                                Span::default(),
-                            )),
+                        // Create struct literal: TypeName { value: self.value {op} rhs.value }
+                        TypedExpression::Struct(zyntax_typed_ast::TypedStructLiteral {
+                            name: type_name_for_literal,
+                            fields: vec![
+                                zyntax_typed_ast::TypedFieldInit {
+                                    name: InternedString::new_global("value"),
+                                    value: Box::new(TypedNode::new(
+                                        TypedExpression::Binary(TypedBinary {
+                                            // Extract self.value
+                                            left: Box::new(TypedNode::new(
+                                                TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                                    object: Box::new(TypedNode::new(
+                                                        TypedExpression::Variable(self_param),
+                                                        abstract_type.clone(),
+                                                        Span::default(),
+                                                    )),
+                                                    field: InternedString::new_global("value"),
+                                                }),
+                                                underlying_type.clone(),
+                                                Span::default(),
+                                            )),
+                                            op,
+                                            // Extract rhs.value
+                                            right: Box::new(TypedNode::new(
+                                                TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                                    object: Box::new(TypedNode::new(
+                                                        TypedExpression::Variable(rhs_param),
+                                                        abstract_type.clone(),
+                                                        Span::default(),
+                                                    )),
+                                                    field: InternedString::new_global("value"),
+                                                }),
+                                                underlying_type.clone(),
+                                                Span::default(),
+                                            )),
+                                        }),
+                                        underlying_type.clone(),
+                                        Span::default(),
+                                    )),
+                                },
+                            ],
                         }),
                         abstract_type.clone(),
                         Span::default(),
@@ -753,14 +821,30 @@ fn generate_comparison_trait_impl(
                     TypedNode::new(
                         TypedStatement::Expression(Box::new(TypedNode::new(
                             TypedExpression::Binary(TypedBinary {
+                                // Extract self.value
                                 left: Box::new(TypedNode::new(
-                                    TypedExpression::Variable(self_param),
+                                    TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                        object: Box::new(TypedNode::new(
+                                            TypedExpression::Variable(self_param),
+                                            abstract_type.clone(),
+                                            Span::default(),
+                                        )),
+                                        field: InternedString::new_global("value"),
+                                    }),
                                     underlying_type.clone(),
                                     Span::default(),
                                 )),
                                 op: *op,
+                                // Extract rhs.value
                                 right: Box::new(TypedNode::new(
-                                    TypedExpression::Variable(rhs_param),
+                                    TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                        object: Box::new(TypedNode::new(
+                                            TypedExpression::Variable(rhs_param),
+                                            abstract_type.clone(),
+                                            Span::default(),
+                                        )),
+                                        field: InternedString::new_global("value"),
+                                    }),
                                     underlying_type.clone(),
                                     Span::default(),
                                 )),
@@ -814,14 +898,30 @@ fn generate_comparison_trait_impl(
                     TypedNode::new(
                         TypedStatement::Expression(Box::new(TypedNode::new(
                             TypedExpression::Binary(TypedBinary {
+                                // Extract self.value
                                 left: Box::new(TypedNode::new(
-                                    TypedExpression::Variable(self_param),
+                                    TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                        object: Box::new(TypedNode::new(
+                                            TypedExpression::Variable(self_param),
+                                            abstract_type.clone(),
+                                            Span::default(),
+                                        )),
+                                        field: InternedString::new_global("value"),
+                                    }),
                                     underlying_type.clone(),
                                     Span::default(),
                                 )),
                                 op: *op,
+                                // Extract rhs.value
                                 right: Box::new(TypedNode::new(
-                                    TypedExpression::Variable(rhs_param),
+                                    TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                        object: Box::new(TypedNode::new(
+                                            TypedExpression::Variable(rhs_param),
+                                            abstract_type.clone(),
+                                            Span::default(),
+                                        )),
+                                        field: InternedString::new_global("value"),
+                                    }),
                                     underlying_type.clone(),
                                     Span::default(),
                                 )),
@@ -898,7 +998,7 @@ fn generate_unary_trait_impl(
     let method_name_interned = InternedString::new_global(method_name);
     let self_param = InternedString::new_global("self");
 
-    // Get type name for mangling
+    // Get type name for mangling and struct literal construction
     let type_name = if let zyntax_typed_ast::Type::Named { id, .. } = abstract_type {
         program.type_registry.get_type_by_id(*id)
             .ok_or_else(|| CompilerError::Analysis("Type not found in registry".to_string()))?
@@ -908,7 +1008,7 @@ fn generate_unary_trait_impl(
     };
     let type_name_str = type_name.resolve_global().unwrap_or_default();
 
-    // Create method: fn {method_name}(self) -> Self { {op}self }
+    // Create method: fn {method_name}(self) -> Self { TypeName { value: {op}self.value } }
     let method = TypedMethod {
         name: method_name_interned,
         type_params: vec![],
@@ -929,13 +1029,34 @@ fn generate_unary_trait_impl(
             statements: vec![
                 TypedNode::new(
                     TypedStatement::Expression(Box::new(TypedNode::new(
-                        TypedExpression::Unary(TypedUnary {
-                            op,
-                            operand: Box::new(TypedNode::new(
-                                TypedExpression::Variable(self_param),
-                                underlying_type.clone(),
-                                Span::default(),
-                            )),
+                        // Create struct literal: TypeName { value: {op}self.value }
+                        TypedExpression::Struct(zyntax_typed_ast::TypedStructLiteral {
+                            name: type_name,
+                            fields: vec![
+                                zyntax_typed_ast::TypedFieldInit {
+                                    name: InternedString::new_global("value"),
+                                    value: Box::new(TypedNode::new(
+                                        TypedExpression::Unary(TypedUnary {
+                                            op,
+                                            operand: Box::new(TypedNode::new(
+                                                // Extract self.value
+                                                TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                                    object: Box::new(TypedNode::new(
+                                                        TypedExpression::Variable(self_param),
+                                                        abstract_type.clone(),
+                                                        Span::default(),
+                                                    )),
+                                                    field: InternedString::new_global("value"),
+                                                }),
+                                                underlying_type.clone(),
+                                                Span::default(),
+                                            )),
+                                        }),
+                                        underlying_type.clone(),
+                                        Span::default(),
+                                    )),
+                                },
+                            ],
                         }),
                         abstract_type.clone(),
                         Span::default(),
@@ -998,13 +1119,34 @@ fn generate_unary_trait_impl(
             statements: vec![
                 TypedNode::new(
                     TypedStatement::Expression(Box::new(TypedNode::new(
-                        TypedExpression::Unary(TypedUnary {
-                            op,
-                            operand: Box::new(TypedNode::new(
-                                TypedExpression::Variable(self_param),
-                                underlying_type.clone(),
-                                Span::default(),
-                            )),
+                        // Create struct literal: TypeName { value: {op}self.value }
+                        TypedExpression::Struct(zyntax_typed_ast::TypedStructLiteral {
+                            name: type_name,
+                            fields: vec![
+                                zyntax_typed_ast::TypedFieldInit {
+                                    name: InternedString::new_global("value"),
+                                    value: Box::new(TypedNode::new(
+                                        TypedExpression::Unary(TypedUnary {
+                                            op,
+                                            operand: Box::new(TypedNode::new(
+                                                // Extract self.value
+                                                TypedExpression::Field(zyntax_typed_ast::TypedFieldAccess {
+                                                    object: Box::new(TypedNode::new(
+                                                        TypedExpression::Variable(self_param),
+                                                        abstract_type.clone(),
+                                                        Span::default(),
+                                                    )),
+                                                    field: InternedString::new_global("value"),
+                                                }),
+                                                underlying_type.clone(),
+                                                Span::default(),
+                                            )),
+                                        }),
+                                        underlying_type.clone(),
+                                        Span::default(),
+                                    )),
+                                },
+                            ],
                         }),
                         abstract_type.clone(),
                         Span::default(),

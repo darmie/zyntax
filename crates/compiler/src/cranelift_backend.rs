@@ -1855,12 +1855,6 @@ impl CraneliftBackend {
 
                         HirInstruction::InsertValue { result, ty: _, aggregate, value, indices } => {
                             // Insert value into aggregate (struct/array)
-                            // Strategy: Use GEP-like logic to calculate pointer, then Store the value
-
-                            // aggregate is a POINTER to the struct/array
-                            let base_ptr = self.value_map[aggregate];
-                            let val = self.value_map[value];
-                            let mut current_ptr = base_ptr;
 
                             // Get the type of the aggregate from our cache
                             let mut current_type = value_type_cache.get(aggregate)
@@ -1871,6 +1865,27 @@ impl CraneliftBackend {
                             if let HirType::Ptr(inner) = &current_type {
                                 current_type = (**inner).clone();
                             }
+
+                            // Special case: single-field struct being returned by value
+                            // In this case, the struct is flattened and we just return the value
+                            if let HirType::Struct(struct_ty) = &current_type {
+                                if struct_ty.fields.len() == 1 && indices.len() == 1 && indices[0] == 0 {
+                                    // Check if the aggregate is Undef (building a new struct for return)
+                                    if let Some(agg_value) = function.values.get(aggregate) {
+                                        if matches!(agg_value.kind, crate::hir::HirValueKind::Undef) {
+                                            // Flattened single-field struct: just return the value directly
+                                            let val = self.value_map[value];
+                                            self.value_map.insert(*result, val);
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Standard case: aggregate is a POINTER to the struct/array
+                            let base_ptr = self.value_map[aggregate];
+                            let val = self.value_map[value];
+                            let mut current_ptr = base_ptr;
 
                             if indices.is_empty() {
                                 // No indices - just store at the pointer
@@ -2463,8 +2478,23 @@ impl CraneliftBackend {
                 // Arrays decay to pointers in Cranelift
                 Ok(self.module.target_config().pointer_type())
             }
-            HirType::Struct(_) => {
-                // Structs are passed by reference
+            HirType::Struct(struct_ty) => {
+                // Small structs with a single scalar field are passed by value (flattened)
+                if struct_ty.fields.len() == 1 {
+                    if let Some(field_ty) = struct_ty.fields.first() {
+                        // Check if it's a scalar type
+                        match field_ty {
+                            HirType::I8 | HirType::I16 | HirType::I32 | HirType::I64 | HirType::I128 |
+                            HirType::U8 | HirType::U16 | HirType::U32 | HirType::U64 | HirType::U128 |
+                            HirType::F32 | HirType::F64 | HirType::Bool => {
+                                // Pass single-scalar-field structs by value
+                                return self.translate_type(field_ty);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // Multi-field or complex structs are passed by reference
                 Ok(self.module.target_config().pointer_type())
             }
             HirType::Function(_) => {

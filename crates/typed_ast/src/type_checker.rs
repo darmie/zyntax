@@ -471,6 +471,8 @@ impl TypeChecker {
     fn emit_inference_error(&mut self, error: InferenceError, span: Span) {
         match error {
             InferenceError::TypeMismatch { expected, found } => {
+                eprintln!("[EMIT_ERROR] TypeMismatch at span ({}, {}): expected={:?}, found={:?}",
+                    span.start, span.end, expected, found);
                 let expected_str = self.format_type(&expected);
                 let found_str = self.format_type(&found);
                 self.diagnostics
@@ -921,8 +923,11 @@ impl TypeChecker {
 
     /// Type check an impl block
     fn check_impl_block(&mut self, impl_block: &TypedTraitImpl) -> Result<(), TypeError> {
+        eprintln!("[TYPE_CHECK] check_impl_block: for_type={:?}, {} methods",
+            impl_block.for_type, impl_block.methods.len());
         // Type check each method in the impl block
         for method in &impl_block.methods {
+            eprintln!("[TYPE_CHECK] Checking method: {}", method.name.resolve_global().unwrap_or_default());
             // FIRST: Add constraints for self parameters so inference can propagate through body
             for param in &method.params {
                 if param.is_self && (matches!(param.ty, Type::Any) || matches!(param.ty, Type::Unresolved(_))) {
