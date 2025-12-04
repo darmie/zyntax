@@ -1182,6 +1182,13 @@ impl TypeRegistry {
         self.impl_cache.get(&(trait_id, for_type.clone()))
     }
 
+    /// Add a method to an existing type definition (for inherent methods)
+    pub fn add_method_to_type(&mut self, type_id: TypeId, method: MethodSig) {
+        if let Some(type_def) = self.types.get_mut(&type_id) {
+            type_def.methods.push(method);
+        }
+    }
+
     /// Iterate over all trait implementations
     /// Returns an iterator over (trait_id, implementations) pairs
     pub fn iter_implementations(&self) -> impl Iterator<Item = (&TypeId, &Vec<ImplDef>)> {

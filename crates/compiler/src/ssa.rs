@@ -2965,6 +2965,29 @@ impl SsaBuilder {
             }
         };
 
+        // First, check for inherent methods (impl Type { ... } without trait)
+        // Inherent methods take priority over trait methods
+        if let Some(type_def) = self.type_registry.get_type_by_id(type_id) {
+            for method in &type_def.methods {
+                if method.name == method_name {
+                    // Found inherent method!
+                    // Format for inherent methods: {TypeName}${method_name}
+                    let mangled = {
+                        let arena = self.arena.lock().unwrap();
+                        let type_name_str = arena.resolve_string(type_def.name)
+                            .unwrap_or_default();
+                        let method_name_str = arena.resolve_string(method_name)
+                            .unwrap_or_default();
+                        format!("{}${}", type_name_str, method_name_str)
+                    };
+
+                    eprintln!("[METHOD DISPATCH] Found inherent method '{}' for type '{}'",
+                        method_name, type_def.name);
+                    return Ok(InternedString::new_global(&mangled));
+                }
+            }
+        }
+
         // Look up which traits this type implements
         // Check all implementations in the type registry
         for (_trait_id, impls) in self.type_registry.iter_implementations() {
@@ -2987,17 +3010,19 @@ impl SsaBuilder {
                                         format!("Trait {:?} not found in registry", impl_def.trait_id)
                                     ))?;
 
-                                let arena = self.arena.lock().unwrap();
-                                let type_name_str = arena.resolve_string(type_def.name)
-                                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve type name".into()))?;
-                                let trait_name_str = arena.resolve_string(trait_def.name)
-                                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve trait name".into()))?;
-                                let method_name_str = arena.resolve_string(method_name)
-                                    .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve method name".into()))?;
+                                let mangled = {
+                                    let arena = self.arena.lock().unwrap();
+                                    let type_name_str = arena.resolve_string(type_def.name)
+                                        .unwrap_or_default();
+                                    let trait_name_str = arena.resolve_string(trait_def.name)
+                                        .unwrap_or_default();
+                                    let method_name_str = arena.resolve_string(method_name)
+                                        .unwrap_or_default();
+                                    format!("{}${}${}", type_name_str, trait_name_str, method_name_str)
+                                };
 
-                                let mangled = format!("{}${}${}", type_name_str, trait_name_str, method_name_str);
-                                drop(arena);
-
+                                eprintln!("[METHOD DISPATCH] Found trait method (trait: {:?})",
+                                    impl_def.trait_id);
                                 return Ok(InternedString::new_global(&mangled));
                             }
                         }

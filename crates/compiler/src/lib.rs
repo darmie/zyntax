@@ -213,8 +213,68 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
 
             // Check if this is an inherent impl (empty trait name)
             let trait_name_str = impl_block.trait_name.resolve_global().unwrap_or_else(|| String::new());
-            if trait_name_str.is_empty() {
-                eprintln!("[REGISTER_IMPL] Skipping inherent impl block (no trait)");
+            let is_inherent = trait_name_str.is_empty();
+
+            if is_inherent {
+                eprintln!("[REGISTER_IMPL] Found inherent impl block (no trait), registering methods on type");
+
+                // For inherent impls, register methods directly on the type
+                // Resolve the implementing type
+                let implementing_type_id = match &impl_block.for_type {
+                    Type::Unresolved(name) => {
+                        if let Some(type_def) = program.type_registry.get_type_by_name(*name) {
+                            Some(type_def.id)
+                        } else {
+                            eprintln!("[REGISTER_IMPL] Could not resolve type {:?} for inherent impl", name);
+                            None
+                        }
+                    }
+                    Type::Named { id, .. } => Some(*id),
+                    _ => None,
+                };
+
+                if let Some(type_id) = implementing_type_id {
+                    // Build MethodSig list for inherent methods
+                    for method in &impl_block.methods {
+                        let params: Vec<ParamDef> = method.params.iter().map(|p| {
+                            ParamDef {
+                                name: p.name,
+                                ty: p.ty.clone(),
+                                is_self: p.is_self,
+                                is_varargs: false,
+                                is_mut: matches!(p.mutability, zyntax_typed_ast::type_registry::Mutability::Mutable),
+                            }
+                        }).collect();
+
+                        let type_params: Vec<zyntax_typed_ast::type_registry::TypeParam> = method.type_params.iter().map(|tp| {
+                            zyntax_typed_ast::type_registry::TypeParam {
+                                name: tp.name,
+                                bounds: vec![],
+                                variance: zyntax_typed_ast::type_registry::Variance::Invariant,
+                                default: tp.default.clone(),
+                                span: tp.span,
+                            }
+                        }).collect();
+
+                        let method_sig = MethodSig {
+                            name: method.name,
+                            type_params,
+                            params,
+                            return_type: method.return_type.clone(),
+                            where_clause: vec![],
+                            is_static: false,
+                            is_async: method.is_async,
+                            visibility: zyntax_typed_ast::type_registry::Visibility::Public,
+                            span: method.span,
+                            is_extension: false,
+                        };
+
+                        // Register the inherent method on the type
+                        program.type_registry.add_method_to_type(type_id, method_sig.clone());
+                        eprintln!("[REGISTER_IMPL] Registered inherent method '{}' on type {:?}",
+                            method.name.resolve_global().unwrap_or_default(), type_id);
+                    }
+                }
                 continue;
             }
 
