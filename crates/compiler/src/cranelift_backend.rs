@@ -532,8 +532,8 @@ impl CraneliftBackend {
         }
 
         // Build function body
-        eprintln!("[Cranelift] Building function body with signature:");
-        eprintln!("[Cranelift]   sig.returns = {:?}", sig.returns);
+        log::debug!("[Cranelift] Building function body with signature:");
+        log::debug!("[Cranelift]   sig.returns = {:?}", sig.returns);
         self.codegen_context.func = cranelift_codegen::ir::Function::with_name_signature(
             UserFuncName::user(0, func_id.as_u32()),
             sig.clone(),
@@ -546,20 +546,20 @@ impl CraneliftBackend {
 
             // Phase 1: Analyze function structure
             let block_order = self.compute_block_order(function);
-            eprintln!("[Cranelift] Compiling function: {:?}", function.name);
-            eprintln!("[Cranelift] Block order: {:?} blocks", block_order.len());
-            eprintln!("[Cranelift] Entry block: {:?}", function.entry_block);
-            eprintln!("[Cranelift] Total blocks in function: {:?}", function.blocks.len());
-            eprintln!("[Cranelift] Values count: {:?}", function.values.len());
+            log::debug!("[Cranelift] Compiling function: {:?}", function.name);
+            log::debug!("[Cranelift] Block order: {:?} blocks", block_order.len());
+            log::debug!("[Cranelift] Entry block: {:?}", function.entry_block);
+            log::debug!("[Cranelift] Total blocks in function: {:?}", function.blocks.len());
+            log::debug!("[Cranelift] Values count: {:?}", function.values.len());
             for (i, block_id) in block_order.iter().enumerate() {
                 if let Some(block) = function.blocks.get(block_id) {
-                    eprintln!("[Cranelift]   [{}] {:?} - {} instructions, terminator: {:?}",
+                    log::debug!("[Cranelift]   [{}] {:?} - {} instructions, terminator: {:?}",
                         i, block_id, block.instructions.len(), block.terminator);
                     for (j, inst) in block.instructions.iter().enumerate() {
-                        eprintln!("[Cranelift]     inst[{}]: {:?}", j, inst);
+                        log::debug!("[Cranelift]     inst[{}]: {:?}", j, inst);
                     }
                 } else {
-                    eprintln!("[Cranelift]   [{}] {:?} - MISSING!", i, block_id);
+                    log::debug!("[Cranelift]   [{}] {:?} - MISSING!", i, block_id);
                 }
             }
             let predecessor_map = self.build_predecessor_map(function);
@@ -647,9 +647,9 @@ impl CraneliftBackend {
             }
 
             // Map all constant values (needs active block for instruction creation)
-            eprintln!("[Cranelift] Processing {} values", function.values.len());
+            log::debug!("[Cranelift] Processing {} values", function.values.len());
             for value in function.values.values() {
-                eprintln!("[Cranelift]   Value {:?} kind={:?}", value.id, value.kind);
+                log::debug!("[Cranelift]   Value {:?} kind={:?}", value.id, value.kind);
                 if let HirValueKind::Constant(constant) = &value.kind {
                     let cranelift_val = match constant {
                         // For narrow integer types, Cranelift expects zero-extended values, not sign-extended
@@ -1989,7 +1989,7 @@ impl CraneliftBackend {
                 // Process terminator (inline to avoid borrow checker)
                 match &hir_block.terminator {
                     HirTerminator::Return { values } => {
-                        eprintln!("[Cranelift] Return terminator with values: {:?}", values);
+                        log::debug!("[Cranelift] Return terminator with values: {:?}", values);
                         let cranelift_vals: Vec<_> = values.iter()
                             .filter_map(|v| {
                                 let result = self.value_map.get(v).copied();
@@ -1999,7 +1999,7 @@ impl CraneliftBackend {
                                 result
                             })
                             .collect();
-                        eprintln!("[Cranelift] Returning {} values", cranelift_vals.len());
+                        log::debug!("[Cranelift] Returning {} values", cranelift_vals.len());
                         builder.ins().return_(&cranelift_vals);
                     }
 
@@ -2295,13 +2295,13 @@ impl CraneliftBackend {
         }
 
         // Debug: Print IR after finalize
-        eprintln!("[Cranelift] IR after finalize (inside compile_function_body):\n{}", self.codegen_context.func);
+        log::debug!("[Cranelift] IR after finalize (inside compile_function_body):\n{}", self.codegen_context.func);
 
         // Debug: Uncomment to dump IR for all functions
         // self.dump_cranelift_ir(&function.name.to_string());
 
         // Compile the function
-        eprintln!("[Cranelift] About to call define_function for {:?}", function.name);
+        log::debug!("[Cranelift] About to call define_function for {:?}", function.name);
         let code = self.module.define_function(
             func_id,
             &mut self.codegen_context,
@@ -2415,9 +2415,9 @@ impl CraneliftBackend {
 
     /// Translate function signature
     pub fn translate_signature(&self, function: &HirFunction) -> CompilerResult<Signature> {
-        eprintln!("[Cranelift] translate_signature for function {:?}", function.name);
-        eprintln!("[Cranelift]   params: {:?}", function.signature.params.len());
-        eprintln!("[Cranelift]   returns: {:?}", function.signature.returns);
+        log::debug!("[Cranelift] translate_signature for function {:?}", function.name);
+        log::debug!("[Cranelift]   params: {:?}", function.signature.params.len());
+        log::debug!("[Cranelift]   returns: {:?}", function.signature.returns);
 
         let mut cranelift_sig = self.module.make_signature();
 
