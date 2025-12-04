@@ -983,11 +983,12 @@ impl LoweringContext {
     /// Convert function signature
     fn convert_function_signature(&self, func: &TypedFunction) -> CompilerResult<HirFunctionSignature> {
         let mut params = Vec::new();
-        
+
         for param in &func.params {
+            // Keep abstract types as nominal for method dispatch
             let hir_type = self.convert_type(&param.ty);
             let attributes = self.compute_param_attributes(&param.ty, param.mutability);
-            
+
             params.push(HirParam {
                 id: crate::hir::HirId::new(),
                 name: param.name,
@@ -995,7 +996,8 @@ impl LoweringContext {
                 attributes,
             });
         }
-        
+
+        // Keep abstract types as nominal for method dispatch
         let returns = vec![self.convert_type(&func.return_type)];
         
         // Convert type params from TypedFunction to HirTypeParam
@@ -1092,9 +1094,26 @@ impl LoweringContext {
     }
     
     /// Convert frontend type to HIR type
+    /// Convert a type to its ABI representation (for function signatures)
+    /// Abstract types are converted to their underlying types for zero-cost abstraction
+    fn convert_type_to_abi(&self, ty: &Type) -> HirType {
+        // For abstract types, use the underlying type for ABI
+        if let Type::Named { id, .. } = ty {
+            if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                if let zyntax_typed_ast::TypeKind::Abstract { underlying_type, .. } = &type_def.kind {
+                    eprintln!("[CONVERT_ABI] Abstract type '{}' → underlying ABI type",
+                        type_def.name.resolve_global().unwrap_or_default());
+                    return self.convert_type(underlying_type);
+                }
+            }
+        }
+        // For non-abstract types, use normal conversion
+        self.convert_type(ty)
+    }
+
     fn convert_type(&self, ty: &Type) -> HirType {
         use zyntax_typed_ast::PrimitiveType;
-        
+
         match ty {
             Type::Primitive(prim) => match prim {
                 PrimitiveType::Bool => HirType::Bool,
@@ -1257,6 +1276,25 @@ impl LoweringContext {
                                 discriminant_type: Box::new(HirType::U32),
                                 is_c_union: false,
                             }))
+                        }
+
+                        zyntax_typed_ast::TypeKind::Abstract { .. } => {
+                            // Abstract types are zero-cost wrappers with struct layout
+                            // Convert them as structs so field access works
+                            // Fields are stored in type_def.fields, not in the TypeKind::Abstract itself
+                            let field_types: Vec<_> = type_def.fields.iter()
+                                .map(|field| self.convert_type(&field.ty))
+                                .collect();
+
+                            eprintln!("[CONVERT TYPE] Abstract type '{}' → struct with {} fields",
+                                type_def.name.resolve_global().unwrap_or_default(),
+                                field_types.len());
+
+                            HirType::Struct(crate::hir::HirStructType {
+                                name: Some(type_def.name),
+                                fields: field_types,
+                                packed: false,
+                            })
                         }
 
                         zyntax_typed_ast::TypeKind::Interface { .. } => {
@@ -1764,10 +1802,29 @@ impl LoweringContext {
                 result
             });
 
-            // For return type, only resolve if it's unresolved AND matches the pattern
-            // of being a self-referential type that needs resolution
-            // In practice, return types should be explicitly typed in the source
-            let resolved_return_type = method.return_type.clone();
+            // Resolve return type: convert Self -> implementing_type, Unresolved -> lookup
+            let resolved_return_type = match &method.return_type {
+                Type::Any => {
+                    // Self type in return position -> use implementing type
+                    eprintln!("[LOWERING] Resolving return type Self -> {:?}", implementing_type);
+                    implementing_type.clone()
+                }
+                Type::Unresolved(name) => {
+                    // Try to resolve from registry
+                    if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
+                        Type::Named {
+                            id: type_def.id,
+                            type_args: vec![],
+                            const_args: vec![],
+                            variance: vec![],
+                            nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                        }
+                    } else {
+                        method.return_type.clone()
+                    }
+                }
+                _ => method.return_type.clone(),
+            };
 
             // Mangle the method name to include trait and type info
             // Format for inherent: {TypeName}${method_name}

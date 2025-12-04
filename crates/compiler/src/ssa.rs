@@ -3207,14 +3207,23 @@ impl SsaBuilder {
                     use crate::hir::HirStructType;
                     use zyntax_typed_ast::type_registry::TypeKind;
 
-                    // Abstract types are zero-cost abstractions - they directly use their underlying type
-                    // Method dispatch resolves at compile time to the correct mangled function names
-                    if let TypeKind::Abstract { underlying_type, .. } = &type_def.kind {
-                        eprintln!("[CONVERT TYPE] Abstract type '{}' → underlying type (zero-cost)",
-                            type_def.name.resolve_global().unwrap_or_default());
+                    // Abstract types are zero-cost wrappers with struct layout
+                    // They must be treated as structs for field access to work
+                    // The backend will optimize away the wrapper at codegen time
+                    if let TypeKind::Abstract { .. } = &type_def.kind {
+                        eprintln!("[CONVERT TYPE SSA] Abstract type '{}' → struct with {} fields",
+                            type_def.name.resolve_global().unwrap_or_default(),
+                            type_def.fields.len());
 
-                        // Directly use the underlying type - abstract types are completely transparent at IR level
-                        return self.convert_type(underlying_type);
+                        let hir_fields: Vec<HirType> = type_def.fields.iter()
+                            .map(|field| self.convert_type(&field.ty))
+                            .collect();
+
+                        return HirType::Struct(HirStructType {
+                            name: Some(type_def.name),
+                            fields: hir_fields,
+                            packed: false,
+                        });
                     }
 
                     // Regular Named types (structs, classes, enums) convert to struct types

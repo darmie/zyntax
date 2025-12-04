@@ -419,6 +419,9 @@ pub trait AstHostFunctions {
     /// Create a method call expression
     fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle;
 
+    /// Create a static method call expression: TypeName::method(args)
+    fn create_static_method_call(&mut self, type_name: &str, method: &str, args: Vec<NodeHandle>) -> NodeHandle;
+
     /// Create an array/index access expression
     fn create_index(&mut self, array: NodeHandle, index: NodeHandle) -> NodeHandle;
 
@@ -2968,8 +2971,15 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle {
         let span = self.default_span();
 
-        let receiver_expr = self.get_expr(receiver)
-            .unwrap_or_else(|| self.inner.variable("self", Type::Primitive(PrimitiveType::I32), span));
+        // Get the receiver expression - it must exist
+        let receiver_expr = match self.get_expr(receiver) {
+            Some(expr) => expr,
+            None => {
+                // If receiver doesn't exist, create a placeholder error literal
+                // Don't assume language-specific constructs like "self"
+                self.inner.int_literal(0, span)
+            }
+        };
 
         let arg_exprs: Vec<_> = args.iter()
             .filter_map(|h| self.get_expr(*h))
@@ -2978,6 +2988,27 @@ impl AstHostFunctions for TypedAstBuilder {
         // Use Type::Any for method call return type - will be resolved during type checking/lowering
         let expr = self.inner.method_call(receiver_expr, method, arg_exprs, Type::Any, span);
         self.store_expr(expr)
+    }
+
+    fn create_static_method_call(&mut self, type_name: &str, method: &str, args: Vec<NodeHandle>) -> NodeHandle {
+        let span = self.default_span();
+
+        // Get the type from the registry
+        let type_ty = self.get_type_by_name(type_name);
+
+        let arg_exprs: Vec<_> = args.iter()
+            .filter_map(|h| self.get_expr(*h))
+            .collect();
+
+        // Create a call to the static method using the mangled name format: TypeName$method
+        // This matches the inherent method naming convention used in SSA/lowering
+        let mangled_name = format!("{}${}", type_name, method);
+        eprintln!("[STATIC_CALL] Creating static method call to '{}' with return type {:?}", mangled_name, type_ty);
+
+        let callee = self.inner.variable(&mangled_name, Type::Any, span);
+        let call_expr = self.inner.call_positional(callee, arg_exprs, type_ty, span);
+
+        self.store_expr(call_expr)
     }
 
     fn create_array(&mut self, elements: Vec<NodeHandle>) -> NodeHandle {
@@ -4457,9 +4488,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                 eprintln!("[SUFFIX LITERAL] Abstract type '{}' is registered in type registry", type_name);
 
-                // Instead of creating a method call, create a literal with the Abstract type
-                // The suffix literal should maintain its Abstract type through the entire pipeline
-                // e.g., "1000ms" -> TypedLiteral::Integer(1000) with type Duration
+                // Call the appropriate from_<suffix> constructor function
+                // e.g., "1000ms" -> Duration::from_ms(1000)
+                // e.g., "2s" -> Duration::from_s(2)
 
                 // Get the abstract type from the registry
                 let abstract_type = if let Some(ty) = self.host.lookup_declared_type(&type_name) {
@@ -4471,14 +4502,21 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     ));
                 };
 
-                eprintln!("[SUFFIX LITERAL] Creating literal with Abstract type: {:?}", abstract_type);
+                // Construct the constructor function name: from_<suffix>
+                let constructor_name = format!("from_{}", suffix);
+                eprintln!("[SUFFIX LITERAL] Looking for constructor function '{}' for type '{}'", constructor_name, type_name);
 
-                // Create an integer literal node with the Abstract type annotation
-                // This preserves the type information throughout compilation
-                let handle = self.host.create_typed_int_literal(num, abstract_type);
+                // Create a function call: TypeName::from_suffix(num)
+                // This is represented as a static method call
+                let num_literal = self.host.create_int_literal(num);
+                let handle = self.host.create_static_method_call(
+                    &type_name,
+                    &constructor_name,
+                    vec![num_literal]
+                );
 
-                eprintln!("[SUFFIX LITERAL] Successfully parsed suffix literal '{}' as typed literal with value {} and abstract type",
-                    text, num);
+                eprintln!("[SUFFIX LITERAL] Successfully parsed suffix literal '{}' as constructor call {}::{}({})",
+                    text, type_name, constructor_name, num);
                 Ok(RuntimeValue::Node(handle))
             }
 

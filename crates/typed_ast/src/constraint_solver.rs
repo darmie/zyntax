@@ -7,7 +7,7 @@
 use crate::arena::InternedString;
 use crate::source::Span;
 use crate::type_registry::{
-    Lifetime, LifetimeBound, Mutability, ParamInfo, PrimitiveType, Type, TypeBound, TypeKind,
+    Lifetime, Mutability, ParamInfo, PrimitiveType, Type, TypeBound, TypeKind,
     TypeVar, TypeVarKind, Variance,
 };
 use crate::{ConstValue, TypeVarId};
