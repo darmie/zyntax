@@ -109,8 +109,8 @@ impl TypedCfgBuilder {
         // Use the provided entry block ID (from HirFunction)
         let entry_id = entry_block_id;
 
-        // Process block with control flow splitting
-        let (blocks, entry_id_final, exit_id) = self.split_at_control_flow(block, entry_id)?;
+        // Process block with control flow splitting (this is a function body)
+        let (blocks, entry_id_final, exit_id) = self.split_at_control_flow(block, entry_id, true)?;
 
         // Add all blocks to graph and create mapping
         for typed_block in blocks {
@@ -201,10 +201,13 @@ impl TypedCfgBuilder {
 
     /// Split a block at control flow boundaries
     /// Returns (all_blocks, entry_block_id, exit_block_id)
+    ///
+    /// `is_function_body`: if true, treat a single trailing expression as an implicit return
     fn split_at_control_flow(
         &mut self,
         block: &TypedBlock,
         entry_id: HirId,
+        is_function_body: bool,
     ) -> CompilerResult<(Vec<TypedBasicBlock>, HirId, HirId)> {
         log::debug!("[CFG] split_at_control_flow: entry_id={:?}, statements={}", entry_id, block.statements.len());
         let mut all_blocks = Vec::new();
@@ -239,38 +242,44 @@ impl TypedCfgBuilder {
                         pattern_check: None,
                     });
 
-                    // Process then block
-                    let (then_blocks, _, then_exit) = self.split_at_control_flow(&if_stmt.then_block, then_id)?;
+                    // Process then block (not a function body)
+                    let (then_blocks, _, then_exit) = self.split_at_control_flow(&if_stmt.then_block, then_id, false)?;
                     all_blocks.extend(then_blocks);
 
-                    // Make then block jump to merge
-                    if let Some(last_block) = all_blocks.iter_mut().rev().find(|b| b.id == then_exit) {
-                        if matches!(last_block.terminator, TypedTerminator::Unreachable) {
-                            last_block.terminator = TypedTerminator::Jump(merge_id);
+                    // Check if then block has a definite terminator (return) BEFORE modifying
+                    let then_returns = all_blocks.iter().rev().find(|b| b.id == then_exit)
+                        .map(|b| matches!(b.terminator, TypedTerminator::Return(_)))
+                        .unwrap_or(false);
+
+                    // Make then block jump to merge if it doesn't already have a definite terminator
+                    if !then_returns {
+                        if let Some(last_block) = all_blocks.iter_mut().rev().find(|b| b.id == then_exit) {
+                            if matches!(last_block.terminator, TypedTerminator::Unreachable) {
+                                last_block.terminator = TypedTerminator::Jump(merge_id);
+                            }
                         }
                     }
 
-                    // Check if then block has a definite terminator (return, break, continue)
-                    let then_returns = all_blocks.iter().rev().find(|b| b.id == then_exit)
-                        .map(|b| !matches!(b.terminator, TypedTerminator::Unreachable))
-                        .unwrap_or(false);
-
                     // Process else block or create empty else
                     let else_returns = if let Some(ref else_block) = if_stmt.else_block {
-                        let (else_blocks, _, else_exit) = self.split_at_control_flow(else_block, else_id)?;
+                        let (else_blocks, _, else_exit) = self.split_at_control_flow(else_block, else_id, false)?;
                         all_blocks.extend(else_blocks);
 
-                        // Make else block jump to merge
-                        if let Some(last_block) = all_blocks.iter_mut().rev().find(|b| b.id == else_exit) {
-                            if matches!(last_block.terminator, TypedTerminator::Unreachable) {
-                                last_block.terminator = TypedTerminator::Jump(merge_id);
-                                false
-                            } else {
-                                true // else has definite terminator
+                        // Check if else block has a definite terminator (return) BEFORE modifying
+                        let has_definite_terminator = all_blocks.iter().rev().find(|b| b.id == else_exit)
+                            .map(|b| matches!(b.terminator, TypedTerminator::Return(_)))
+                            .unwrap_or(false);
+
+                        // Make else block jump to merge if it doesn't have a definite terminator
+                        if !has_definite_terminator {
+                            if let Some(last_block) = all_blocks.iter_mut().rev().find(|b| b.id == else_exit) {
+                                if matches!(last_block.terminator, TypedTerminator::Unreachable) {
+                                    last_block.terminator = TypedTerminator::Jump(merge_id);
+                                }
                             }
-                        } else {
-                            false
                         }
+
+                        has_definite_terminator
                     } else {
                         // Empty else block jumps directly to merge
                         all_blocks.push(TypedBasicBlock {
@@ -335,7 +344,7 @@ impl TypedCfgBuilder {
 
                     // Process body block
                     log::debug!("[CFG] While: processing body with entry={:?}", body_id);
-                    let (body_blocks, _, body_exit) = self.split_at_control_flow(&while_stmt.body, body_id)?;
+                    let (body_blocks, _, body_exit) = self.split_at_control_flow(&while_stmt.body, body_id, false)?;
                     log::debug!("[CFG] While: body returned {} blocks, body_exit={:?}", body_blocks.len(), body_exit);
                     all_blocks.extend(body_blocks);
 
@@ -394,7 +403,7 @@ impl TypedCfgBuilder {
                             self.loop_stack.push((header_id, after_id));
 
                             // Process body block
-                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id)?;
+                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id, false)?;
                             all_blocks.extend(body_blocks);
 
                             // Pop loop context
@@ -447,7 +456,7 @@ impl TypedCfgBuilder {
                             self.loop_stack.push((header_id, after_id));
 
                             // Process body block
-                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id)?;
+                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id, false)?;
                             all_blocks.extend(body_blocks);
 
                             // Pop loop context
@@ -519,7 +528,7 @@ impl TypedCfgBuilder {
                             self.loop_stack.push((update_id, after_id));
 
                             // Process body
-                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id)?;
+                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id, false)?;
                             all_blocks.extend(body_blocks);
 
                             // Pop loop context
@@ -585,7 +594,7 @@ impl TypedCfgBuilder {
                             });
 
                             self.loop_stack.push((header_id, after_id));
-                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id)?;
+                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id, false)?;
                             all_blocks.extend(body_blocks);
                             self.loop_stack.pop();
 
@@ -618,7 +627,7 @@ impl TypedCfgBuilder {
                             });
 
                             self.loop_stack.push((header_id, after_id));
-                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id)?;
+                            let (body_blocks, _, body_exit) = self.split_at_control_flow(body, body_id, false)?;
                             all_blocks.extend(body_blocks);
                             self.loop_stack.pop();
 
@@ -674,7 +683,7 @@ impl TypedCfgBuilder {
                     });
 
                     self.loop_stack.push((header_id, after_id));
-                    let (body_blocks, _, body_exit) = self.split_at_control_flow(&for_stmt.body, body_id)?;
+                    let (body_blocks, _, body_exit) = self.split_at_control_flow(&for_stmt.body, body_id, false)?;
                     all_blocks.extend(body_blocks);
                     self.loop_stack.pop();
 
@@ -735,7 +744,7 @@ impl TypedCfgBuilder {
                     }
 
                     self.loop_stack.push((update_id, after_id));
-                    let (body_blocks, _, body_exit) = self.split_at_control_flow(&for_c_stmt.body, body_id)?;
+                    let (body_blocks, _, body_exit) = self.split_at_control_flow(&for_c_stmt.body, body_id, false)?;
                     all_blocks.extend(body_blocks);
                     self.loop_stack.pop();
 
@@ -770,7 +779,7 @@ impl TypedCfgBuilder {
 
                 TypedStatement::Block(block) => {
                     // Nested block - recursively process
-                    let (block_blocks, block_entry, block_exit) = self.split_at_control_flow(block, current_block_id)?;
+                    let (block_blocks, block_entry, block_exit) = self.split_at_control_flow(block, current_block_id, false)?;
 
                     // Add all blocks from the nested block
                     all_blocks.extend(block_blocks);
@@ -786,7 +795,7 @@ impl TypedCfgBuilder {
                     if let TypedExpression::Block(block) = &expr.node {
                         log::debug!("[CFG] Expression(Block): flattening block with {} statements", block.statements.len());
                         // Recursively process the block's statements
-                        let (block_blocks, _block_entry, block_exit) = self.split_at_control_flow(block, current_block_id)?;
+                        let (block_blocks, _block_entry, block_exit) = self.split_at_control_flow(block, current_block_id, false)?;
                         all_blocks.extend(block_blocks);
                         current_statements = Vec::new();
                         current_block_id = block_exit;
@@ -1040,19 +1049,20 @@ impl TypedCfgBuilder {
         if !all_blocks.iter().any(|b| b.id == current_block_id) {
             log::debug!("[CFG] End: creating final block with {} statements", current_statements.len());
 
-            // Special case: If the function body has exactly one statement and it's an expression,
+            // Special case: If this is a function body and has exactly one statement that's an expression,
             // treat it as an implicit return. This handles cases like:
             //   fn add(self, rhs: Tensor) -> Tensor { extern tensor_add(self, rhs) }
             // where the single expression should be returned.
-            let (final_statements, terminator) = if current_statements.len() == 1 {
+            // Do NOT apply this to blocks inside control flow (if, match, etc.) - those should not implicitly return.
+            let (final_statements, terminator) = if is_function_body && current_statements.len() == 1 {
                 if let TypedStatement::Expression(expr) = &current_statements[0].node {
-                    // Single expression - implicitly return it
+                    // Single expression in function body - implicitly return it
                     (vec![], TypedTerminator::Return(Some(Box::new((**expr).clone()))))
                 } else {
                     (current_statements, TypedTerminator::Unreachable)
                 }
             } else {
-                // Multiple statements or no statements - keep as unreachable
+                // Multiple statements, no statements, or not a function body - keep as unreachable
                 (current_statements, TypedTerminator::Unreachable)
             };
 
