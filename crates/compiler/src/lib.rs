@@ -211,6 +211,13 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
             impl_count += 1;
             eprintln!("[REGISTER_IMPL] Found impl block #{} for trait {:?}", impl_count, impl_block.trait_name);
 
+            // Check if this is an inherent impl (empty trait name)
+            let trait_name_str = impl_block.trait_name.resolve_global().unwrap_or_else(|| String::new());
+            if trait_name_str.is_empty() {
+                eprintln!("[REGISTER_IMPL] Skipping inherent impl block (no trait)");
+                continue;
+            }
+
             // Find the trait by name
             let trait_def = program.type_registry.get_trait_by_name(impl_block.trait_name)
                 .ok_or_else(|| {

@@ -427,53 +427,45 @@ struct_field = { identifier ~ ":" ~ type_expr }
 // Abstract types are zero-cost wrappers with implicit conversions
 // Can have fields like structs, with underlying type for direct conversions
 // Suffix/Suffixes enables literal syntax like 1000ms, 5s, 3ns
-abstract_def = { abstract_with_modifiers | abstract_simple }
+abstract_def = { abstract_with_suffixes | abstract_with_suffix | abstract_simple }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
 
 // abstract Name(Type) with Suffix("x"):  or  with Suffixes("x, y, z"):
-abstract_with_modifiers = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ abstract_modifier ~ ":" ~ struct_def_fields }
+abstract_with_suffix = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffix" ~ "(" ~ string_literal ~ ")" ~ ":" ~ struct_def_fields }
   -> TypedDeclaration {
-      "define": "abstract_type",
-      "args": {
-          "name": "$1",
-          "underlying_type": "$3",
-          "suffixes": "$6",
-          "fields": "$8"
-      }
+      "commands": [
+          { "define": "abstract_with_single_suffix", "args": {
+              "name": "$1",
+              "underlying_type": "$2",
+              "suffix_literal": "$3",
+              "fields": "$4"
+          }}
+      ]
+  }
+
+abstract_with_suffixes = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffixes" ~ "(" ~ string_literal ~ ")" ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "abstract_with_multiple_suffixes", "args": {
+              "name": "$1",
+              "underlying_type": "$2",
+              "suffixes_literal": "$3",
+              "fields": "$4"
+          }}
+      ]
   }
 
 // abstract Name(Type)
 abstract_simple = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" }
   -> TypedDeclaration {
-      "define": "abstract_type",
-      "args": {
-          "name": "$1",
-          "underlying_type": "$2"
-      }
-  }
-
-// Suffix modifier: Suffix("ms") or Suffixes("ms, s, ns")
-abstract_modifier = { suffixes_attr | suffix_attr }
-  -> List {
-      "get_child": { "index": 0 }
-  }
-
-// Single suffix: Suffix("ms")
-suffix_attr = { "Suffix" ~ "(" ~ string_literal ~ ")" }
-  -> List {
-      "get_text": true,
-      "define": "single_suffix",
-      "args": { "suffix": "$2" }
-  }
-
-// Multiple suffixes: Suffixes("ms, s, ns, m, h")
-suffixes_attr = { "Suffixes" ~ "(" ~ string_literal ~ ")" }
-  -> List {
-      "get_text": true,
-      "define": "multiple_suffixes",
-      "args": { "suffixes": "$2" }
+      "commands": [
+          { "define": "abstract_type", "args": {
+              "name": "$1",
+              "underlying_type": "$2"
+          }}
+      ]
   }
 
 // ============================================================================
@@ -510,19 +502,32 @@ struct_def_field = { identifier ~ ":" ~ type_expr }
   }
 
 // ============================================================================
-// Impl Block (Trait Implementation)
+// Impl Block (Trait Implementation + Inherent Methods)
 // ============================================================================
 
-// impl Display for Tensor { fn to_string(self) -> String { ... } }
-// impl Add<Tensor> for Tensor { type Output = Tensor; fn add(...) { ... } }
-// Split into two rules to avoid optional capture index shifting
-impl_block = { impl_block_with_args | impl_block_simple }
+// impl Display for Tensor: fn to_string(self) -> String { ... }
+// impl Add<Tensor> for Tensor: type Output = Tensor; fn add(...) { ... }
+// impl Duration(i64): fn from_ms(value: i64) -> Self { ... }
+// Split into multiple rules to avoid optional capture index shifting
+impl_block = { impl_abstract_inherent | impl_block_with_args | impl_block_simple }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
 
-// impl Trait<Args> for Type { ... }
-impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
+// Inherent impl for abstract types: impl TypeName(UnderlyingType): methods
+impl_abstract_inherent = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ ":" ~ impl_items }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_abstract_inherent", "args": {
+              "type_name": "$1",
+              "underlying_type": "$2",
+              "items": "$3"
+          }}
+      ]
+  }
+
+// impl Trait<Args> for Type: ...
+impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identifier ~ ":" ~ impl_items }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
@@ -534,8 +539,8 @@ impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identif
       ]
   }
 
-// impl Trait for Type { ... }
-impl_block_simple = { "impl" ~ identifier ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
+// impl Trait for Type: ...
+impl_block_simple = { "impl" ~ identifier ~ "for" ~ identifier ~ ":" ~ impl_items }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
@@ -552,7 +557,7 @@ impl_items = { impl_item* }
       "get_all_children": true
   }
 
-impl_item = { impl_assoc_type | impl_method_return | impl_method_params | impl_method_simple }
+impl_item = { impl_assoc_type | impl_method_return_expr | impl_method_params_expr | impl_method_return | impl_method_params | impl_method_simple }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -571,6 +576,34 @@ impl_assoc_type = { "type" ~ identifier ~ "=" ~ type_expr }
 // Impl methods can't have their own type params (they use the impl block's)
 // So we define specific impl method rules without type params
 
+// Expression-bodied methods (with colon instead of braces)
+// fn add(self, rhs: T) -> ReturnType: expression
+impl_method_return_expr = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ expr_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// fn process(self, other: T): expression
+impl_method_params_expr = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ ":" ~ expr_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "void",
+              "body": "$3"
+          }}
+      ]
+  }
+
+// Block-bodied methods (with braces)
 // fn add(self, rhs: T) -> ReturnType { ... }
 // NOTE: Impl methods are initially typed as functions but marked with is_self on parameters
 // The compiler will re-type the body expressions with correct self type during lowering
@@ -849,6 +882,17 @@ block = { "{" ~ statement* ~ "}" }
       "get_all_children": true,
       "define": "block",
       "args": { "statements": "$result" }
+  }
+
+// Expression block (for colon-based function syntax)
+// Wraps a single expression as a block with one expression statement
+expr_block = { expr }
+  -> TypedBlock {
+      "commands": [
+          { "define": "expr_block", "args": {
+              "expr": "$1"
+          }}
+      ]
   }
 
 // ============================================================================

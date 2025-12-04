@@ -291,6 +291,14 @@ pub trait AstHostFunctions {
         items: Vec<NodeHandle>,
     ) -> NodeHandle;
 
+    /// Create an inherent impl block for abstract types
+    fn create_abstract_inherent_impl(
+        &mut self,
+        type_name: &str,
+        underlying_type: NodeHandle,
+        items: Vec<NodeHandle>,
+    ) -> NodeHandle;
+
     /// Create an opaque type declaration (@opaque("$ExternName") type TypeName)
     fn create_opaque_type(&mut self, name: &str, external_name: &str) -> NodeHandle;
 
@@ -303,6 +311,9 @@ pub trait AstHostFunctions {
     /// Lookup suffix in suffix registry to find the abstract type name
     /// Returns None if suffix is not registered
     fn lookup_suffix(&self, suffix: &str) -> Option<String>;
+
+    /// Get an expression node by handle (for extracting string literals, etc.)
+    fn get_expr(&self, handle: NodeHandle) -> Option<TypedNode<TypedExpression>>;
 
     /// Create a function parameter
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle;
@@ -1640,6 +1651,83 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_decl(impl_decl)
     }
 
+    fn create_abstract_inherent_impl(
+        &mut self,
+        type_name: &str,
+        underlying_type: NodeHandle,
+        items: Vec<NodeHandle>,
+    ) -> NodeHandle {
+        let span = self.default_span();
+        eprintln!("DEBUG: create_abstract_inherent_impl type_name={} span=({}, {})", type_name, span.start, span.end);
+
+        // Get the underlying type from the handle
+        let underlying = self.get_type_from_handle(underlying_type)
+            .unwrap_or(Type::Any);
+
+        // Create named type for the abstract type
+        let for_type = self.get_type_by_name(type_name);
+
+        // Process items (methods) - same as trait impl blocks
+        let mut methods = Vec::new();
+
+        eprintln!("[DEBUG] Processing {} items for inherent impl block", items.len());
+        for item_handle in items {
+            eprintln!("[DEBUG] Processing item handle: {:?}", item_handle);
+            if let Some(decl) = self.declarations.get(&item_handle) {
+                eprintln!("[DEBUG] Found declaration: {:?}", decl.node);
+                match &decl.node {
+                    TypedDeclaration::Function(func) => {
+                        eprintln!("[DEBUG] Processing function: {:?}", func.name);
+
+                        // Convert function parameters to method parameters
+                        let self_name = self.inner.intern("self");
+                        let method_params: Vec<TypedMethodParam> = func.params.iter().map(|p| {
+                            let is_self_param = p.name == self_name;
+                            TypedMethodParam {
+                                name: p.name,
+                                ty: p.ty.clone(),
+                                mutability: p.mutability,
+                                is_self: is_self_param,
+                                default_value: None,
+                                attributes: vec![],
+                                kind: ParameterKind::Regular,
+                                span: p.span,
+                            }
+                        }).collect();
+
+                        let method = TypedMethod {
+                            name: func.name,
+                            type_params: func.type_params.clone(),
+                            params: method_params,
+                            return_type: func.return_type.clone(),
+                            body: func.body.clone(),
+                            visibility: func.visibility.clone(),
+                            is_static: false,
+                            is_async: func.is_async,
+                            is_override: false,
+                            span: span,
+                        };
+                        methods.push(method);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Create an inherent impl block (no trait)
+        // We'll use empty trait name to indicate this is an inherent impl
+        let impl_decl = self.inner.impl_block(
+            "", // Empty trait name for inherent impl
+            vec![], // No trait type args
+            for_type,
+            methods,
+            vec![], // No associated types in inherent impls
+            span,
+        );
+
+        self.store_decl(impl_decl)
+    }
+
     fn create_opaque_type(&mut self, name: &str, external_name: &str) -> NodeHandle {
         // Create an external struct declaration for the opaque type
         // This declares a type like: extern struct Tensor (backed by $Tensor)
@@ -1896,6 +1984,10 @@ impl AstHostFunctions for TypedAstBuilder {
 
     fn lookup_suffix(&self, suffix: &str) -> Option<String> {
         self.suffix_registry.get(suffix).cloned()
+    }
+
+    fn get_expr(&self, handle: NodeHandle) -> Option<TypedNode<TypedExpression>> {
+        self.expressions.get(&handle).cloned()
     }
 
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
@@ -4597,6 +4689,18 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "expr_block" => {
+                // Expression block: wraps a single expression in a block
+                let expr = match args.get("expr") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("expr_block: missing expr".into())),
+                };
+
+                // create_block will automatically wrap expressions in expression statements
+                let handle = self.host.create_block(vec![expr]);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "param" => {
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
@@ -5731,6 +5835,66 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "impl_abstract_inherent" => {
+                eprintln!("[GRAMMAR impl_abstract_inherent] Creating inherent impl block");
+                eprintln!("[GRAMMAR impl_abstract_inherent] All args: {:?}", args);
+
+                let type_name = match args.get("type_name") {
+                    Some(RuntimeValue::String(s)) => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] type_name: {}", s);
+                        s.clone()
+                    },
+                    Some(other) => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] ERROR: type_name is not a string, it's: {:?}", other);
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: type_name is not a string".into()));
+                    },
+                    None => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] ERROR: missing type_name");
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: missing type_name".into()));
+                    }
+                };
+
+                let underlying_type = match args.get("underlying_type") {
+                    Some(RuntimeValue::Node(h)) => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] underlying_type handle: {:?}", h);
+                        *h
+                    },
+                    Some(other) => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] ERROR: underlying_type is not a node, it's: {:?}", other);
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: underlying_type is not a node".into()));
+                    },
+                    None => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] ERROR: missing underlying_type");
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: missing underlying_type".into()));
+                    }
+                };
+
+                let items: Vec<NodeHandle> = match args.get("items") {
+                    Some(RuntimeValue::List(vals)) => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] items list has {} values", vals.len());
+                        vals.iter().filter_map(|v| {
+                            if let RuntimeValue::Node(h) = v {
+                                Some(*h)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    },
+                    Some(other) => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] items is not a list, it's: {:?}", other);
+                        vec![]
+                    },
+                    None => {
+                        eprintln!("[GRAMMAR impl_abstract_inherent] items arg is None");
+                        vec![]
+                    }
+                };
+
+                let handle = self.host.create_abstract_inherent_impl(&type_name, underlying_type, items);
+                eprintln!("[GRAMMAR impl_abstract_inherent] Created inherent impl block with handle: {:?}", handle);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "impl_block" => {
                 eprintln!("[GRAMMAR impl_block] Creating impl block");
                 eprintln!("[GRAMMAR impl_block] All args: {:?}", args);
@@ -5931,9 +6095,14 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 // Suffixes are optional (can be multiple)
+                // Debug what we're receiving
+                eprintln!("[DEBUG abstract_type] suffixes arg: {:?}", args.get("suffixes"));
+
                 let suffixes = match args.get("suffixes") {
                     Some(RuntimeValue::List(values)) => {
+                        eprintln!("[DEBUG abstract_type] Got suffixes list with {} items", values.len());
                         values.iter().filter_map(|v| {
+                            eprintln!("[DEBUG abstract_type] Suffix item: {:?}", v);
                             if let RuntimeValue::String(s) = v {
                                 Some(s.clone())
                             } else {
@@ -5941,7 +6110,10 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                             }
                         }).collect()
                     }
-                    _ => vec![],
+                    _ => {
+                        eprintln!("[DEBUG abstract_type] No suffixes list found");
+                        vec![]
+                    }
                 };
 
                 eprintln!("[DEBUG abstract_type] Creating abstract type: name='{}', {} fields, suffixes={:?}", name, fields.len(), suffixes);
@@ -5951,34 +6123,105 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
-            "single_suffix" => {
-                // Suffix("ms") -> ["ms"]
-                let suffix_str = match args.get("suffix") {
+            "abstract_with_single_suffix" => {
+                eprintln!("[DEBUG abstract_with_single_suffix] Handler called with args: {:?}", args);
+
+                let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("single_suffix: missing suffix string".into())),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_single_suffix: missing name".into())),
                 };
 
-                // Remove quotes from the string if present
-                let suffix = suffix_str.trim_matches('"');
+                let underlying_type = match args.get("underlying_type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_single_suffix: missing underlying_type".into())),
+                };
 
-                Ok(RuntimeValue::List(vec![RuntimeValue::String(suffix.to_string())]))
+                let fields: Vec<NodeHandle> = match args.get("fields") {
+                    Some(RuntimeValue::List(values)) => {
+                        values.iter().filter_map(|v| {
+                            if let RuntimeValue::Node(handle) = v {
+                                Some(*handle)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    }
+                    _ => vec![],
+                };
+
+                // Extract suffix from the string literal node
+                let suffix_str = match args.get("suffix_literal") {
+                    Some(RuntimeValue::Node(h)) => {
+                        if let Some(expr) = self.host.get_expr(*h) {
+                            if let TypedExpression::Literal(TypedLiteral::String(s)) = &expr.node {
+                                s.resolve_global().unwrap_or_default()
+                            } else {
+                                return Err(crate::error::ZynPegError::CodeGenError(format!("Expected string literal for suffix, got {:?}", expr.node)));
+                            }
+                        } else {
+                            return Err(crate::error::ZynPegError::CodeGenError("Failed to get string literal expression".into()));
+                        }
+                    }
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_single_suffix: missing or invalid suffix_literal".into())),
+                };
+
+                let suffix = suffix_str.trim_matches('"');
+                let suffixes = vec![suffix.to_string()];
+
+                let handle = self.host.create_abstract_def(&name, underlying_type, fields, suffixes);
+                Ok(RuntimeValue::Node(handle))
             }
 
-            "multiple_suffixes" => {
-                // Suffixes("ms, s, ns, m") -> ["ms", "s", "ns", "m"]
-                let suffixes_str = match args.get("suffixes") {
+            "abstract_with_multiple_suffixes" => {
+                eprintln!("[DEBUG abstract_with_multiple_suffixes] Handler called with args: {:?}", args);
+
+                let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("multiple_suffixes: missing suffixes string".into())),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_multiple_suffixes: missing name".into())),
                 };
 
-                // Remove quotes and split by comma
+                let underlying_type = match args.get("underlying_type") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_multiple_suffixes: missing underlying_type".into())),
+                };
+
+                let fields: Vec<NodeHandle> = match args.get("fields") {
+                    Some(RuntimeValue::List(values)) => {
+                        values.iter().filter_map(|v| {
+                            if let RuntimeValue::Node(handle) = v {
+                                Some(*handle)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    }
+                    _ => vec![],
+                };
+
+                // Extract suffixes from the string literal node
+                let suffixes_str = match args.get("suffixes_literal") {
+                    Some(RuntimeValue::Node(h)) => {
+                        if let Some(expr) = self.host.get_expr(*h) {
+                            if let TypedExpression::Literal(TypedLiteral::String(s)) = &expr.node {
+                                s.resolve_global().unwrap_or_default()
+                            } else {
+                                return Err(crate::error::ZynPegError::CodeGenError(format!("Expected string literal for suffixes, got {:?}", expr.node)));
+                            }
+                        } else {
+                            return Err(crate::error::ZynPegError::CodeGenError("Failed to get string literal expression".into()));
+                        }
+                    }
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_multiple_suffixes: missing or invalid suffixes_literal".into())),
+                };
+
                 let suffixes_clean = suffixes_str.trim_matches('"');
-                let suffixes: Vec<RuntimeValue> = suffixes_clean
+                let suffixes: Vec<String> = suffixes_clean
                     .split(',')
-                    .map(|s| RuntimeValue::String(s.trim().to_string()))
+                    .map(|s| s.trim().to_string())
                     .collect();
 
-                Ok(RuntimeValue::List(suffixes))
+                let handle = self.host.create_abstract_def(&name, underlying_type, fields, suffixes);
+                Ok(RuntimeValue::Node(handle))
             }
 
             "ternary" => {

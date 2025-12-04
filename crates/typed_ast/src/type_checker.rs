@@ -98,6 +98,13 @@ pub enum TypeError {
         method_name: InternedString,
         span: Span,
     },
+    /// Suffix function not implemented for abstract type
+    MissingSuffixFunction {
+        type_name: String,
+        suffix: String,
+        available_suffixes: Vec<String>,
+        span: Span,
+    },
     /// Arity mismatch (generic - covers both too many and too few)
     ArityMismatch {
         expected: usize,
@@ -337,6 +344,27 @@ impl TypeChecker {
                         error_span.clone(),
                         format!("expected {} arguments, found {}", expected, found),
                     )
+                    .emit()
+                    .ok();
+            }
+            TypeError::MissingSuffixFunction {
+                type_name,
+                suffix,
+                available_suffixes,
+                span: error_span,
+            } => {
+                let suffix_list = available_suffixes.join(", ");
+                self.diagnostics
+                    .error(format!("suffix '{}' not registered for abstract type '{}'", suffix, type_name))
+                    .code(codes::E0002)
+                    .primary(
+                        error_span.clone(),
+                        format!("unknown suffix '{}' for abstract type", suffix),
+                    )
+                    .help(format!(
+                        "Available suffixes for '{}': [{}]. Use one of these or add this suffix to the abstract type declaration.",
+                        type_name, suffix_list
+                    ))
                     .emit()
                     .ok();
             }
@@ -1194,6 +1222,39 @@ impl TypeChecker {
 
     /// Type check call expression
     fn check_call_expr(&mut self, call: &TypedCall) -> Result<Type, TypeError> {
+        // Special check for abstract type suffix constructors (e.g., Duration::from_ms)
+        // These are generated from suffixed literals like "1000ms"
+        if let TypedExpression::Variable(var_name) = &call.callee.node {
+            let name_str = var_name.resolve_global().unwrap_or_default();
+            if let Some((type_name_str, suffix_part)) = name_str.split_once("::from_") {
+                // This looks like a suffix constructor call
+                // Check all types in the registry to find if any abstract type matches this name
+                let registry = self.constraint_solver.type_registry();
+
+                for type_def in registry.get_all_types() {
+                    // Check if this type's name matches
+                    let type_name_resolved = type_def.name.resolve_global().unwrap_or_default();
+                    if type_name_resolved == type_name_str {
+                        // Found the type, check if it's abstract with suffixes
+                        if let crate::type_registry::TypeKind::Abstract { suffixes, .. } = &type_def.kind {
+                            // Check if this suffix is registered for this abstract type
+                            if !suffixes.contains(&suffix_part.to_string()) {
+                                return Err(TypeError::MissingSuffixFunction {
+                                    type_name: type_name_str.to_string(),
+                                    suffix: suffix_part.to_string(),
+                                    available_suffixes: suffixes.clone(),
+                                    span: call.callee.span,
+                                });
+                            }
+                            // If suffix is valid but the from_{suffix} function isn't implemented,
+                            // that will be caught when we try to resolve the variable below
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
         // Type check the callee
         let callee_type = self.check_expression(&call.callee.node)?;
 

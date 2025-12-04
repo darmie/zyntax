@@ -21,77 +21,59 @@ struct Tensor:
     ptr: TensorPtr
 
 // Implement Display trait for Tensor
-impl Display for Tensor {
-    fn to_string(self) -> String {
+impl Display for Tensor:
+    fn to_string(self) -> String:
         extern tensor_to_string(self.ptr)
-    }
-}
 
 // Implement Clone trait for Tensor
-impl Clone for Tensor {
-    fn clone(self) -> Tensor {
+impl Clone for Tensor:
+    fn clone(self) -> Tensor:
         Tensor { ptr: extern tensor_clone(self.ptr) }
-    }
-}
 
 // Implement Drop trait for Tensor
-impl Drop for Tensor {
-    fn drop(self) {
+impl Drop for Tensor:
+    fn drop(self):
         extern tensor_free(self.ptr)
-    }
-}
 
 // ============================================================================
 // Operator Trait Implementations
 // ============================================================================
 
 // Tensor + Tensor
-impl Add<Tensor> for Tensor {
+impl Add<Tensor> for Tensor:
     type Output = Tensor
-    fn add(self, rhs: Tensor) -> Tensor {
+    fn add(self, rhs: Tensor) -> Tensor:
         Tensor { ptr: extern tensor_add(self.ptr, rhs.ptr) }
-    }
-}
 
 // Tensor - Tensor
-impl Sub<Tensor> for Tensor {
+impl Sub<Tensor> for Tensor:
     type Output = Tensor
-    fn sub(self, rhs: Tensor) -> Tensor {
+    fn sub(self, rhs: Tensor) -> Tensor:
         Tensor { ptr: extern tensor_sub(self.ptr, rhs.ptr) }
-    }
-}
 
 // Tensor * Tensor (element-wise)
-impl Mul<Tensor> for Tensor {
+impl Mul<Tensor> for Tensor:
     type Output = Tensor
-    fn mul(self, rhs: Tensor) -> Tensor {
+    fn mul(self, rhs: Tensor) -> Tensor:
         Tensor { ptr: extern tensor_mul(self.ptr, rhs.ptr) }
-    }
-}
 
 // Tensor / Tensor (element-wise)
-impl Div<Tensor> for Tensor {
+impl Div<Tensor> for Tensor:
     type Output = Tensor
-    fn div(self, rhs: Tensor) -> Tensor {
+    fn div(self, rhs: Tensor) -> Tensor:
         Tensor { ptr: extern tensor_div(self.ptr, rhs.ptr) }
-    }
-}
 
 // Tensor @ Tensor (matrix multiplication / dot product)
-impl MatMul<Tensor> for Tensor {
+impl MatMul<Tensor> for Tensor:
     type Output = f32  // Returns scalar for vector dot product
-    fn matmul(self, rhs: Tensor) -> f32 {
+    fn matmul(self, rhs: Tensor) -> f32:
         extern tensor_dot(self.ptr, rhs.ptr)
-    }
-}
 
 // Tensor negation (-x)
-impl Neg for Tensor {
+impl Neg for Tensor:
     type Output = Tensor
-    fn neg(self) -> Tensor {
+    fn neg(self) -> Tensor:
         Tensor { ptr: extern tensor_neg(self.ptr) }
-    }
-}
 
 // ============================================================================
 // Tensor Creation Functions

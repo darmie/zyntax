@@ -1614,16 +1614,27 @@ impl LoweringContext {
         };
         eprintln!("[LOWERING] Impl block implementing_type after resolution: {:?}", implementing_type);
 
-        // Register the implementation in the type registry
-        // First, find the trait by name
-        let trait_def = self.type_registry.get_trait_by_name(impl_block.trait_name)
-            .ok_or_else(|| {
-                let arena = self.arena.lock().unwrap();
-                let trait_name_str = arena.resolve_string(impl_block.trait_name)
-                    .unwrap_or("Unknown");
-                crate::CompilerError::Analysis(format!("Trait '{}' not found in registry", trait_name_str))
-            })?;
-        let trait_id = trait_def.id;
+        // Check if this is an inherent impl (empty trait name) or a trait impl
+        let trait_name_str = {
+            let arena = self.arena.lock().unwrap();
+            arena.resolve_string(impl_block.trait_name)
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| String::new())
+        };
+
+        let is_inherent = trait_name_str.is_empty();
+        eprintln!("[LOWERING] Impl block is_inherent: {}, trait_name: '{}'", is_inherent, trait_name_str);
+
+        // For trait impls, register the implementation in the type registry
+        let trait_id = if !is_inherent {
+            let trait_def = self.type_registry.get_trait_by_name(impl_block.trait_name)
+                .ok_or_else(|| {
+                    crate::CompilerError::Analysis(format!("Trait '{}' not found in registry", trait_name_str))
+                })?;
+            Some(trait_def.id)
+        } else {
+            None
+        };
 
         // Build MethodImpl list from the impl block methods
         let method_impls: Vec<zyntax_typed_ast::type_registry::MethodImpl> = impl_block.methods.iter().map(|method| {
@@ -1695,22 +1706,26 @@ impl LoweringContext {
             }
         }).collect();
 
-        // Create ImplDef and register it
-        let impl_def = zyntax_typed_ast::type_registry::ImplDef {
-            trait_id,
-            for_type: implementing_type.clone(),
-            type_args: vec![],
-            methods: method_impls,
-            associated_types: std::collections::HashMap::new(),
-            where_clause: vec![],
-            span: impl_block.span,
-        };
+        // Create ImplDef and register it (only for trait impls, not inherent impls)
+        if let Some(tid) = trait_id {
+            let impl_def = zyntax_typed_ast::type_registry::ImplDef {
+                trait_id: tid,
+                for_type: implementing_type.clone(),
+                type_args: vec![],
+                methods: method_impls,
+                associated_types: std::collections::HashMap::new(),
+                where_clause: vec![],
+                span: impl_block.span,
+            };
 
-        // TODO: Register impl in type registry before lowering starts
-        // self.type_registry is Arc (immutable), so we can't register here
-        // For now, method resolution relies on mangled names being available in SSA phase
-        eprintln!("[LOWERING] Built impl def for trait {:?} for type {:?} (registration TODO)", trait_id, implementing_type);
-        eprintln!("[LOWERING] ImplDef has {} methods", impl_def.methods.len());
+            // TODO: Register impl in type registry before lowering starts
+            // self.type_registry is Arc (immutable), so we can't register here
+            // For now, method resolution relies on mangled names being available in SSA phase
+            eprintln!("[LOWERING] Built impl def for trait {:?} for type {:?} (registration TODO)", tid, implementing_type);
+            eprintln!("[LOWERING] ImplDef has {} methods", impl_def.methods.len());
+        } else {
+            eprintln!("[LOWERING] Skipping ImplDef creation for inherent impl (no trait)");
+        }
 
         // For each method in the impl block, convert it to a function and lower it
         for method in &impl_block.methods {

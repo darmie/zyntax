@@ -420,6 +420,11 @@ impl ConstraintSolver {
         })
     }
 
+    /// Get a reference to the type registry
+    pub fn type_registry(&self) -> &crate::type_registry::TypeRegistry {
+        &self.type_registry
+    }
+
     /// Add a constraint
     pub fn add_constraint(&mut self, constraint: Constraint) {
         self.constraints.push(constraint);
