@@ -1704,42 +1704,48 @@ impl SsaBuilder {
             }
 
             TypedExpression::Struct(struct_lit) => {
-                // Allocate struct on stack
+                // Build struct value directly using InsertValue operations
                 let struct_ty = self.convert_type(&expr.ty);
-                let alloc_result = self.create_value(
-                    HirType::Ptr(Box::new(struct_ty.clone())),
-                    HirValueKind::Instruction
+
+                eprintln!("[SSA STRUCT LIT] Building struct literal with type {:?}, {} fields",
+                    struct_ty, struct_lit.fields.len());
+
+                // Start with an undefined struct value
+                let mut current_struct = self.create_value(
+                    struct_ty.clone(),
+                    HirValueKind::Undef
                 );
 
-                self.add_instruction(block_id, HirInstruction::Alloca {
-                    result: alloc_result,
-                    ty: struct_ty.clone(),
-                    count: None,
-                    align: 8,
-                });
-
-                // Store each field value at the appropriate offset
+                // Insert each field value into the struct
                 for (i, field) in struct_lit.fields.iter().enumerate() {
                     let field_val = self.translate_expression(block_id, &field.value)?;
 
-                    // Use InsertValue with the alloc as the aggregate (pointer)
-                    let insert_result = self.create_value(
-                        HirType::Ptr(Box::new(struct_ty.clone())),
+                    eprintln!("[SSA STRUCT LIT] Inserting field {}", i);
+
+                    // Create new struct value with the field inserted
+                    let next_struct = self.create_value(
+                        struct_ty.clone(),
                         HirValueKind::Instruction
                     );
+
                     self.add_instruction(block_id, HirInstruction::InsertValue {
-                        result: insert_result,
+                        result: next_struct,
                         ty: struct_ty.clone(),
-                        aggregate: alloc_result,
+                        aggregate: current_struct,
                         value: field_val,
                         indices: vec![i as u32],
                     });
-                    self.add_use(alloc_result, insert_result);
-                    self.add_use(field_val, insert_result);
+
+                    self.add_use(current_struct, next_struct);
+                    self.add_use(field_val, next_struct);
+
+                    current_struct = next_struct;
                 }
 
-                // Return the pointer to the allocated struct
-                Ok(alloc_result)
+                eprintln!("[SSA STRUCT LIT] Returning struct value");
+
+                // Return the final struct value (not a pointer!)
+                Ok(current_struct)
             }
 
             TypedExpression::Array(elements) => {
