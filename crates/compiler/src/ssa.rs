@@ -1539,21 +1539,42 @@ impl SsaBuilder {
                     object.ty.clone()
                 };
 
+                // Special case: accessing 'value' field on an abstract type
+                // Abstract types are zero-cost - they ARE their underlying value
+                // So accessing the 'value' field just returns the value itself
+                if let Type::Named { id, .. } = &object_type {
+                    if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                        if matches!(&type_def.kind, zyntax_typed_ast::type_registry::TypeKind::Abstract { .. }) {
+                            let field_name_str = {
+                                let arena = self.arena.lock().unwrap();
+                                arena.resolve_string(*field).map(|s| s.to_string()).unwrap_or_default()
+                            };
+
+                            if field_name_str == "value" {
+                                // For abstract types, accessing 'value' just returns the object itself
+                                // since abstract types ARE their underlying value (zero-cost abstraction)
+                                eprintln!("[FIELD ACCESS] Abstract type field access optimization: returning object directly");
+                                return Ok(object_val);
+                            }
+                        }
+                    }
+                }
+
                 // Calculate field index
                 let field_index = self.get_field_index(&object_type, field)?;
                 let result_type = self.convert_type(&expr.ty);
                 let result = self.create_value(result_type.clone(), HirValueKind::Instruction);
-                
+
                 let inst = HirInstruction::ExtractValue {
                     result,
                     ty: result_type,
                     aggregate: object_val,
                     indices: vec![field_index],
                 };
-                
+
                 self.add_instruction(block_id, inst);
                 self.add_use(object_val, result);
-                
+
                 Ok(result)
             }
             
@@ -1893,18 +1914,10 @@ impl SsaBuilder {
             }
 
             TypedExpression::MethodCall(method_call) => {
-                // Resolve actual receiver type - if receiver is a variable, look up its type from var_types
-                let receiver_type = if let TypedExpression::Variable(var_name) = &method_call.receiver.node {
-                    // Variable - get actual type from var_types (which was updated during type resolution)
-                    if let Some(hir_type) = self.var_types.get(var_name) {
-                        // Convert HIR type back to TypedAST Type
-                        self.hir_type_to_typed_ast_type(hir_type)
-                    } else {
-                        method_call.receiver.ty.clone()
-                    }
-                } else {
-                    method_call.receiver.ty.clone()
-                };
+                // Use the receiver's TypedAST type directly for method resolution
+                // This preserves nominal type information (e.g., Duration) even if the HIR type is primitive (e.g., i64)
+                // This is essential for abstract types which are zero-cost but need method dispatch
+                let receiver_type = method_call.receiver.ty.clone();
 
                 // Resolve method to mangled function name
                 let mangled_name = self.resolve_method_to_function(
@@ -3165,23 +3178,14 @@ impl SsaBuilder {
                     use crate::hir::HirStructType;
                     use zyntax_typed_ast::type_registry::TypeKind;
 
-                    // Abstract types (including those with suffixes) remain as nominal types in HIR
-                    // This allows method dispatch to work while still maintaining zero-cost abstraction
-                    // The backend will handle the actual representation
+                    // Abstract types are zero-cost abstractions - they directly use their underlying type
+                    // Method dispatch resolves at compile time to the correct mangled function names
                     if let TypeKind::Abstract { underlying_type, .. } = &type_def.kind {
-                        // For abstract types, we represent them as a single-field struct in HIR
-                        // containing their underlying type (the 'value' field)
-                        let underlying_hir_type = self.convert_type(underlying_type);
+                        eprintln!("[CONVERT TYPE] Abstract type '{}' → underlying type (zero-cost)",
+                            type_def.name.resolve_global().unwrap_or_default());
 
-                        eprintln!("[CONVERT TYPE] Abstract type '{}' → struct wrapping {:?}",
-                            type_def.name.resolve_global().unwrap_or_default(),
-                            underlying_hir_type);
-
-                        return HirType::Struct(HirStructType {
-                            name: Some(type_def.name),
-                            fields: vec![underlying_hir_type],
-                            packed: false,
-                        });
+                        // Directly use the underlying type - abstract types are completely transparent at IR level
+                        return self.convert_type(underlying_type);
                     }
 
                     // Regular Named types (structs, classes, enums) convert to struct types

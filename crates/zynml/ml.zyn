@@ -514,8 +514,8 @@ impl_block = { impl_abstract_inherent | impl_block_with_args | impl_block_simple
       "get_child": { "index": 0 }
   }
 
-// Inherent impl for abstract types: impl TypeName(UnderlyingType): methods
-impl_abstract_inherent = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ ":" ~ impl_items }
+// Inherent impl for abstract types: impl TypeName(UnderlyingType) { methods }
+impl_abstract_inherent = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_abstract_inherent", "args": {
@@ -526,8 +526,8 @@ impl_abstract_inherent = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ ":" ~ i
       ]
   }
 
-// impl Trait<Args> for Type: ...
-impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identifier ~ ":" ~ impl_items }
+// impl Trait<Args> for Type { ... }
+impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
@@ -539,8 +539,8 @@ impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identif
       ]
   }
 
-// impl Trait for Type: ...
-impl_block_simple = { "impl" ~ identifier ~ "for" ~ identifier ~ ":" ~ impl_items }
+// impl Trait for Type { ... }
+impl_block_simple = { "impl" ~ identifier ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
