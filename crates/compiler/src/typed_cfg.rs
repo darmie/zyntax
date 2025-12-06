@@ -778,16 +778,35 @@ impl TypedCfgBuilder {
                 }
 
                 TypedStatement::Block(block) => {
+                    // Close current block before processing nested block
+                    let block_entry_id = self.new_block_id();
+                    let after_block_id = self.new_block_id();
+
+                    all_blocks.push(TypedBasicBlock {
+                        id: current_block_id,
+                        label: None,
+                        statements: current_statements.clone(),
+                        terminator: TypedTerminator::Jump(block_entry_id),
+                        pattern_check: None,
+                    });
+
                     // Nested block - recursively process
-                    let (block_blocks, block_entry, block_exit) = self.split_at_control_flow(block, current_block_id, false)?;
+                    let (block_blocks, _, block_exit) = self.split_at_control_flow(block, block_entry_id, false)?;
 
                     // Add all blocks from the nested block
                     all_blocks.extend(block_blocks);
 
-                    // Continue after the nested block
+                    // Make the block exit jump to the continuation block
+                    if let Some(last_block) = all_blocks.iter_mut().rev().find(|b| b.id == block_exit) {
+                        if matches!(last_block.terminator, TypedTerminator::Unreachable) {
+                            last_block.terminator = TypedTerminator::Jump(after_block_id);
+                        }
+                    }
+
+                    // Continue after the nested block with a fresh block
                     current_statements = Vec::new();
-                    current_block_id = block_exit;
-                    exit_id = block_exit;
+                    current_block_id = after_block_id;
+                    exit_id = after_block_id;
                 }
 
                 TypedStatement::Expression(expr) => {

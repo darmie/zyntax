@@ -6441,6 +6441,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "range" => {
+                // Range expression: start..end or start..=end
+                let start = args.get("start")
+                    .and_then(|v| if let RuntimeValue::Node(h) = v { Some(*h) } else { None });
+                let end = args.get("end")
+                    .and_then(|v| if let RuntimeValue::Node(h) = v { Some(*h) } else { None });
+                let inclusive = args.get("inclusive")
+                    .and_then(|v| if let RuntimeValue::Bool(b) = v { Some(*b) } else { None })
+                    .unwrap_or(false);
+                let handle = self.host.create_range(start, end, inclusive);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             _ => {
                 Err(crate::error::ZynPegError::CodeGenError(format!("Unknown node type: {}", node_type)))
             }

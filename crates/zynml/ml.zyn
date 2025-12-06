@@ -988,7 +988,7 @@ and_expr = { comparison_expr ~ ("&&" ~ comparison_expr)* }
   }
 
 // Comparison: ==, !=, <, >, <=, >=
-comparison_expr = { additive_expr ~ (comparison_op ~ additive_expr)? }
+comparison_expr = { range_expr ~ (comparison_op ~ range_expr)? }
   -> TypedExpression {
       "get_all_children": true,
       "fold_binary": true
@@ -997,6 +997,34 @@ comparison_expr = { additive_expr ~ (comparison_op ~ additive_expr)? }
 comparison_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
   -> String {
       "get_text": true
+  }
+
+// Range: 0..10 (exclusive), 0..=10 (inclusive)
+range_expr = { range_inclusive | range_exclusive | additive_expr }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+range_exclusive = { additive_expr ~ ".." ~ additive_expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "range", "args": {
+              "start": "$1",
+              "end": "$2",
+              "inclusive": false
+          }}
+      ]
+  }
+
+range_inclusive = { additive_expr ~ "..=" ~ additive_expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "range", "args": {
+              "start": "$1",
+              "end": "$2",
+              "inclusive": true
+          }}
+      ]
   }
 
 // Addition and subtraction
