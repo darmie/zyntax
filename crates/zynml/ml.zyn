@@ -862,8 +862,8 @@ for_stmt = { "for" ~ identifier ~ "in" ~ expr ~ block }
   -> TypedStatement {
       "commands": [
           { "define": "for_stmt", "args": {
-              "var": "$1",
-              "iter": "$2",
+              "variable": "$1",
+              "iterable": "$2",
               "body": "$3"
           }}
       ]
