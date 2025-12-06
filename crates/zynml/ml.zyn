@@ -803,7 +803,7 @@ fn_param = { identifier ~ (":" ~ type_expr)? }
 // Statements
 // ============================================================================
 
-statement = { let_stmt | assign_stmt | if_stmt | while_stmt | for_stmt | return_stmt | expr_stmt }
+statement = { let_stmt | assign_stmt | if_stmt | while_stmt | for_stmt | return_stmt | break_stmt | continue_stmt | expr_stmt }
   -> TypedStatement {
       "get_child": { "index": 0 }
   }
@@ -876,6 +876,24 @@ return_stmt = { "return" ~ expr? }
           { "define": "return_stmt", "args": {
               "value": "$1"
           }}
+      ]
+  }
+
+// break
+break_stmt = { "break" ~ expr? }
+  -> TypedStatement {
+      "commands": [
+          { "define": "break_stmt", "args": {
+              "value": "$1"
+          }}
+      ]
+  }
+
+// continue
+continue_stmt = { "continue" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "continue_stmt", "args": {} }
       ]
   }
 
