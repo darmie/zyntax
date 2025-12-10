@@ -250,7 +250,7 @@ top_level_items = { top_level_item* }
       "args": { "declarations": "$result" }
   }
 
-top_level_item = { trait_def | impl_block | abstract_def | struct_def | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
+top_level_item = { trait_def | impl_block | abstract_def | enum_def | struct_def | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -489,12 +489,13 @@ abstract_simple = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" }
 //     x: float
 //     y: float
 // Note: Whitespace is handled implicitly by WHITESPACE rule
-struct_def = { "struct" ~ identifier ~ ":" ~ struct_def_fields }
+struct_def = { "struct" ~ identifier ~ type_params? ~ ":" ~ struct_def_fields }
   -> TypedDeclaration {
       "commands": [
           { "define": "struct_type", "args": {
               "name": "$1",
-              "fields": "$2"
+              "type_params": "$2",
+              "fields": "$3"
           }}
       ]
   }
@@ -515,6 +516,43 @@ struct_def_field = { identifier ~ ":" ~ type_expr }
   }
 
 // ============================================================================
+// Enum Definition
+// ============================================================================
+
+// enum Option<T> {
+//     Some(T),
+//     None
+// }
+enum_def = { "enum" ~ identifier ~ type_params? ~ "{" ~ enum_variant ~ ("," ~ enum_variant)* ~ ","? ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "enum_type", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "variants": "$result"
+          }}
+      ],
+      "collect_results_from": [3, 4]
+  }
+
+// Enum variant: Name or Name(T1, T2, ...)
+enum_variant = { identifier ~ enum_variant_data? }
+  -> TypedEnumVariant {
+      "commands": [
+          { "define": "enum_variant", "args": {
+              "name": "$1",
+              "data": "$2"
+          }}
+      ]
+  }
+
+// Variant data: (T1, T2, ...) for tuple variants
+enum_variant_data = { "(" ~ type_expr ~ ("," ~ type_expr)* ~ ")" }
+  -> List {
+      "collect_results_from": [1, 2]
+  }
+
+// ============================================================================
 // Impl Block (Trait Implementation + Inherent Methods)
 // ============================================================================
 
@@ -527,40 +565,43 @@ impl_block = { impl_abstract_inherent | impl_block_with_args | impl_block_simple
       "get_child": { "index": 0 }
   }
 
-// Inherent impl for abstract types: impl TypeName(UnderlyingType) { methods }
-impl_abstract_inherent = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
+// Inherent impl for abstract types: impl<T> TypeName(UnderlyingType) { methods }
+impl_abstract_inherent = { "impl" ~ type_params? ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_abstract_inherent", "args": {
-              "type_name": "$1",
-              "underlying_type": "$2",
-              "items": "$3"
-          }}
-      ]
-  }
-
-// impl Trait<Args> for Type { ... }
-impl_block_with_args = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_block", "args": {
-              "trait_name": "$1",
-              "trait_args": "$2",
-              "type_name": "$3",
+              "type_params": "$1",
+              "type_name": "$2",
+              "underlying_type": "$3",
               "items": "$4"
           }}
       ]
   }
 
-// impl Trait for Type { ... }
-impl_block_simple = { "impl" ~ identifier ~ "for" ~ identifier ~ "{" ~ impl_items ~ "}" }
+// impl<T> Trait<Args> for Type<T> { ... }
+impl_block_with_args = { "impl" ~ type_params? ~ identifier ~ type_args_angle ~ "for" ~ type_application ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
-              "trait_name": "$1",
+              "type_params": "$1",
+              "trait_name": "$2",
+              "trait_args": "$3",
+              "type_name": "$4",
+              "items": "$5"
+          }}
+      ]
+  }
+
+// impl<T> Trait for Type<T> { ... } or impl<T> Type<T> { ... } (inherent)
+impl_block_simple = { "impl" ~ type_params? ~ identifier ~ ("for" ~ type_application)? ~ "{" ~ impl_items ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_block", "args": {
+              "type_params": "$1",
+              "trait_name": "$2",
               "trait_args": "none",
-              "type_name": "$2",
-              "items": "$3"
+              "type_name": "$3",
+              "items": "$4"
           }}
       ]
   }
