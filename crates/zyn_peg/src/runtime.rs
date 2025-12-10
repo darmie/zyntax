@@ -2486,39 +2486,78 @@ impl AstHostFunctions for TypedAstBuilder {
             // Register the iterator variable type
             self.variable_types.insert(iterator.to_string(), Type::Primitive(PrimitiveType::I32));
 
-            // Create: var i = start
+            // Transform for-loop to handle continue correctly:
+            // The challenge: continue always jumps to loop header, but we need increment between iterations.
+            // Solution: Start one before range and unconditionally increment at loop header.
+            //
+            // Desugar to:
+            // {
+            //   let mut i = start - 1
+            //   loop {
+            //     i = i + 1         // <-- Continue jumps here, ALWAYS incrementing
+            //     if i >= end { break }
+            //     { body }
+            //   }
+            // }
+            //
+            // With this structure:
+            // - First iteration: i = (start-1) + 1 = start
+            // - continue jumps to loop header, incrementing i before next iteration
+            // - Body always sees the post-increment value
+
+            // Create: let mut i = start - 1
+            let one = self.inner.int_literal(1, span);
+            let start_minus_one = self.inner.binary(BinaryOp::Sub, start_expr.clone(), one.clone(), Type::Primitive(PrimitiveType::I32), span);
+            let iter_str = &iterator.to_string();
             let init_stmt = self.inner.let_statement(
-                iterator,
+                iter_str,
                 Type::Primitive(PrimitiveType::I32),
-                Mutability::Mutable, // For-loop iterator must be mutable
-                Some(start_expr.clone()),
+                Mutability::Mutable,
+                Some(start_minus_one),
                 span,
             );
 
-            // Create condition: i < end (or i <= end if inclusive)
-            let var_ref = self.inner.variable(iterator, Type::Primitive(PrimitiveType::I32), span);
-            let cond_op = if range.inclusive { BinaryOp::Le } else { BinaryOp::Lt };
-            let cond_expr = self.inner.binary(cond_op, var_ref.clone(), end_expr, Type::Primitive(PrimitiveType::Bool), span);
+            // Create: i = i + 1
+            let iter_ref1 = self.inner.variable(iter_str, Type::Primitive(PrimitiveType::I32), span);
+            let iter_inc = self.inner.binary(BinaryOp::Add, iter_ref1.clone(), one, Type::Primitive(PrimitiveType::I32), span);
+            let iter_assign = self.inner.binary(BinaryOp::Assign, iter_ref1, iter_inc, Type::Primitive(PrimitiveType::I32), span);
+            let incr_stmt = self.inner.expression_statement(iter_assign, span);
 
-            // Create increment: i = i + 1
-            let one = self.inner.int_literal(1, span);
-            let var_ref2 = self.inner.variable(iterator, Type::Primitive(PrimitiveType::I32), span);
-            let add_expr = self.inner.binary(BinaryOp::Add, var_ref2.clone(), one, Type::Primitive(PrimitiveType::I32), span);
-            // Assignment: i = i + 1 as binary expression wrapped in expression statement
-            let assign_expr = self.inner.binary(BinaryOp::Assign, var_ref2, add_expr, Type::Primitive(PrimitiveType::I32), span);
-            let incr_stmt = self.inner.expression_statement(assign_expr, span);
+            // Create condition check: if i >= end { break }
+            let iter_ref2 = self.inner.variable(iter_str, Type::Primitive(PrimitiveType::I32), span);
+            let cond_op = if range.inclusive { BinaryOp::Gt } else { BinaryOp::Ge };
+            let break_cond = self.inner.binary(cond_op, iter_ref2, end_expr, Type::Primitive(PrimitiveType::Bool), span);
 
-            // Create while body with original body + increment
-            let mut while_body_stmts = body_block.statements.clone();
-            while_body_stmts.push(incr_stmt);
-            let while_body = TypedBlock { statements: while_body_stmts, span };
+            let break_stmt = TypedNode::new(
+                TypedStatement::Break(None),
+                Type::Primitive(PrimitiveType::Unit),
+                span,
+            );
+            let break_block = TypedBlock {
+                statements: vec![break_stmt],
+                span,
+            };
+            let guard_if = self.inner.if_statement(break_cond, break_block, None, span);
 
-            // Create while loop
-            let while_stmt = self.inner.while_loop(cond_expr, while_body, span);
+            // Wrap user body in a block
+            let body_wrapped = TypedNode::new(
+                TypedStatement::Block(body_block.clone()),
+                Type::Primitive(PrimitiveType::Unit),
+                span,
+            );
 
-            // Wrap in block: { var i = start; while (i < end) { body; i = i + 1; } }
+            // Create loop body: { i++; if i >= end break; body }
+            let loop_body = TypedBlock {
+                statements: vec![incr_stmt, guard_if, body_wrapped],
+                span,
+            };
+
+            // Create infinite loop
+            let infinite_loop = self.inner.loop_stmt(loop_body, span);
+
+            // Wrap in outer block: { let i = start - 1; loop { ... } }
             let outer_block = TypedBlock {
-                statements: vec![init_stmt, while_stmt],
+                statements: vec![init_stmt, infinite_loop],
                 span,
             };
             let block_stmt = TypedNode::new(
