@@ -2529,6 +2529,10 @@ impl AstHostFunctions for TypedAstBuilder {
             return self.store_stmt(block_stmt);
         }
 
+        // For non-range iterables, we don't have full iterator trait support yet
+        // Fall back to the original TypedLoop::For which will need to be implemented in lowering
+        // TODO: Implement proper iterator desugaring when method calls and trait resolution work
+
         let stmt = self.inner.for_loop(iterator, iter_expr, body_block, span);
         self.store_stmt(stmt)
     }

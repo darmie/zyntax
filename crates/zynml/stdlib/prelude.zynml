@@ -180,3 +180,82 @@ trait From<T> {
 trait Into<T> {
     fn into(self) -> T
 }
+
+// ============================================================================
+// Core Types
+// ============================================================================
+
+// Option type - represents an optional value
+enum Option<T> {
+    Some(T),
+    None
+}
+
+// Result type - represents either success or failure
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+// ============================================================================
+// Collections
+// ============================================================================
+
+// List - dynamically sized array backed by ZRTL runtime
+// This is a simple wrapper around raw pointers with length/capacity tracking
+struct List<T>:
+    data: i64      // Pointer to data (will be properly typed when we have generics in runtime)
+    len: i64       // Number of elements
+    capacity: i64  // Allocated capacity
+
+impl<T> List<T> {
+    // Create an empty list
+    fn new() -> List<T> {
+        List { data: 0, len: 0, capacity: 0 }
+    }
+
+    // Get the length of the list
+    fn length(self) -> i64 {
+        self.len
+    }
+
+    // Check if list is empty
+    fn is_empty(self) -> bool {
+        self.len == 0
+    }
+}
+
+// ListIterator - iterator over a list
+struct ListIterator<T>:
+    list_data: i64   // Pointer to list data
+    list_len: i64    // Total length
+    index: i64       // Current index
+
+impl<T> Iterator for ListIterator<T> {
+    type Item = T
+
+    fn next(self) -> Option<T> {
+        if self.index >= self.list_len {
+            Option::None
+        } else {
+            // This will need proper pointer arithmetic and load in the actual implementation
+            // For now, this is the interface that the compiler will recognize
+            let value = extern list_get_at(self.list_data, self.index)
+            self.index = self.index + 1
+            Option::Some(value)
+        }
+    }
+}
+
+impl<T> IntoIterator for List<T> {
+    type Item = T
+    type IntoIter = ListIterator<T>
+
+    fn into_iter(self) -> ListIterator<T> {
+        ListIterator {
+            list_data: self.data,
+            list_len: self.len,
+            index: 0
+        }
+    }
+}
