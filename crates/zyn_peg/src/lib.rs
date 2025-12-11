@@ -47,6 +47,7 @@ pub mod runtime;
 pub mod grammar;
 pub mod runtime2;
 pub mod codegen;
+pub mod typed_ast;
 
 // Parser for .zyn grammar files
 #[derive(Parser)]
