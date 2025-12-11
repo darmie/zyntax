@@ -768,11 +768,49 @@ impl LoweringContext {
                 }
 
                 TypedDeclaration::Impl(impl_block) => {
-                    // Pre-register impl block methods in symbol table
+                    // Pre-register impl block methods in symbol table WITH MANGLED NAMES
+                    // This must match the mangling done in lower_impl_block
+
+                    // Get the implementing type name
+                    let type_name = match &impl_block.for_type {
+                        zyntax_typed_ast::Type::Named { id, .. } => {
+                            if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                                type_def.name
+                            } else {
+                                continue; // Can't resolve type, skip
+                            }
+                        }
+                        zyntax_typed_ast::Type::Unresolved(name) => {
+                            if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
+                                type_def.name
+                            } else {
+                                continue; // Can't resolve type, skip
+                            }
+                        }
+                        _ => continue, // Non-named types, skip
+                    };
+
+                    // Check if this is an inherent impl (empty trait name)
+                    let trait_name_str = impl_block.trait_name.resolve_global().unwrap_or_default();
+                    let is_inherent = trait_name_str.is_empty();
+
                     for method in &impl_block.methods {
                         let method_id = crate::hir::HirId::new();
-                        // Register method with its name (TODO: Consider name mangling for trait methods)
-                        self.symbols.functions.insert(method.name, method_id);
+
+                        // Generate mangled name matching lower_impl_block
+                        let mangled_name = if is_inherent {
+                            // Inherent method: {TypeName}${method_name}
+                            let type_name_str = type_name.resolve_global()
+                                .unwrap_or_else(|| "UnknownType".to_string());
+                            let method_name_str = method.name.resolve_global()
+                                .unwrap_or_else(|| "unknown_method".to_string());
+                            InternedString::new_global(&format!("{}${}", type_name_str, method_name_str))
+                        } else {
+                            // Trait method: {TypeName}${TraitName}${method_name}
+                            self.mangle_trait_method_name(type_name, impl_block.trait_name, method.name)
+                        };
+
+                        self.symbols.functions.insert(mangled_name, method_id);
                     }
                 }
 
@@ -785,6 +823,7 @@ impl LoweringContext {
     
     /// Lower a declaration
     fn lower_declaration(&mut self, decl: &TypedNode<TypedDeclaration>) -> CompilerResult<()> {
+        eprintln!("[LOWER_DECL] Processing: {:?}", std::mem::discriminant(&decl.node));
         match &decl.node {
             TypedDeclaration::Function(func) => {
                 self.lower_function(func)?;
@@ -1533,6 +1572,33 @@ impl LoweringContext {
                 }))
             }
             TypedStatement::Break(_) | TypedStatement::Continue => stmt_node.node.clone(),
+            TypedStatement::If(if_stmt) => {
+                use zyntax_typed_ast::TypedIf;
+                TypedStatement::If(TypedIf {
+                    condition: Box::new(self.retype_expression_node_with_self(&if_stmt.condition, self_params)),
+                    then_block: self.retype_block_with_self(&if_stmt.then_block, self_params),
+                    else_block: if_stmt.else_block.as_ref().map(|block| {
+                        self.retype_block_with_self(block, self_params)
+                    }),
+                    span: if_stmt.span,
+                })
+            }
+            TypedStatement::While(while_stmt) => {
+                use zyntax_typed_ast::TypedWhile;
+                TypedStatement::While(TypedWhile {
+                    condition: Box::new(self.retype_expression_node_with_self(&while_stmt.condition, self_params)),
+                    body: self.retype_block_with_self(&while_stmt.body, self_params),
+                    span: while_stmt.span,
+                })
+            }
+            TypedStatement::For(for_stmt) => {
+                use zyntax_typed_ast::TypedFor;
+                TypedStatement::For(TypedFor {
+                    pattern: for_stmt.pattern.clone(),
+                    iterator: Box::new(self.retype_expression_node_with_self(&for_stmt.iterator, self_params)),
+                    body: self.retype_block_with_self(&for_stmt.body, self_params),
+                })
+            }
             // Handle other statement types that may contain expressions
             _ => stmt_node.node.clone(),
         };
@@ -1639,6 +1705,9 @@ impl LoweringContext {
     /// Lower an impl block by extracting and lowering its methods
     fn lower_impl_block(&mut self, impl_block: &zyntax_typed_ast::typed_ast::TypedTraitImpl) -> CompilerResult<()> {
         use zyntax_typed_ast::{TypedFunction, Type, TypeId};
+
+        eprintln!("[LOWERING IMPL] Starting lower_impl_block for_type={:?}, trait_name={:?}, {} methods",
+            impl_block.for_type, impl_block.trait_name, impl_block.methods.len());
 
         // Resolve the implementing type if it's still unresolved
         // The parser uses Unresolved types, we need to look them up in the registry
@@ -1880,9 +1949,18 @@ impl LoweringContext {
 
             eprintln!("[LOWERING] Mangled method name: {:?}", mangled_name);
 
-            // Register the mangled function name in the symbol table
-            let function_id = crate::hir::HirId::new();
-            self.symbols.functions.insert(mangled_name, function_id);
+            // Get the existing function_id from collect_declarations, or create new if missing
+            // This ensures consistency between the two phases
+            let function_id = if let Some(&existing_id) = self.symbols.functions.get(&mangled_name) {
+                eprintln!("[LOWERING] Using existing function_id for {:?}", mangled_name);
+                existing_id
+            } else {
+                // Fallback: create new (shouldn't happen if collect_declarations ran first)
+                eprintln!("[LOWERING] WARNING: Creating new function_id for {:?} (should have been pre-registered)", mangled_name);
+                let new_id = crate::hir::HirId::new();
+                self.symbols.functions.insert(mangled_name, new_id);
+                new_id
+            };
 
             // Create a function from the method
             let func = TypedFunction {

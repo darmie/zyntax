@@ -78,6 +78,9 @@ pub const ZYNML_STDLIB_PRELUDE: &str = include_str!("../stdlib/prelude.zynml");
 /// The embedded ZynML standard library - tensor
 pub const ZYNML_STDLIB_TENSOR: &str = include_str!("../stdlib/tensor.zynml");
 
+/// The embedded ZynML standard library - collections
+pub const ZYNML_STDLIB_COLLECTIONS: &str = include_str!("../stdlib/collections.zynml");
+
 /// Required ZRTL plugins for ZynML
 pub const REQUIRED_PLUGINS: &[&str] = &[
     "zrtl_tensor",
@@ -147,11 +150,12 @@ impl ZynML {
         runtime.register_grammar("zynml", grammar.clone());
 
         // Register stdlib import resolver
-        // This allows `import prelude` and `import tensor` to resolve
+        // This allows `import prelude`, `import tensor`, and `import collections` to resolve
         runtime.add_import_resolver(Box::new(|module_name| {
             match module_name {
                 "prelude" => Ok(Some(ZYNML_STDLIB_PRELUDE.to_string())),
                 "tensor" => Ok(Some(ZYNML_STDLIB_TENSOR.to_string())),
+                "collections" => Ok(Some(ZYNML_STDLIB_COLLECTIONS.to_string())),
                 _ => Ok(None), // Not a stdlib module
             }
         }));

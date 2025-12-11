@@ -629,6 +629,7 @@ impl_abstract_inherent = { impl_abstract_inherent_generic | impl_abstract_inhere
   }
 
 // impl<T> Container<T>(i64) { ... }
+// Captures: $1=type_params, $2=identifier, $3=type_expr, $4=impl_items (literals not counted!)
 impl_abstract_inherent_generic = { "impl" ~ type_params ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
@@ -642,6 +643,7 @@ impl_abstract_inherent_generic = { "impl" ~ type_params ~ identifier ~ "(" ~ typ
   }
 
 // impl Duration(i64) { ... }
+// Captures: $1=identifier, $2=type_expr, $3=impl_items (literals not counted!)
 impl_abstract_inherent_simple = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
@@ -661,6 +663,7 @@ impl_block_with_args = { impl_block_with_args_generic | impl_block_with_args_sim
   }
 
 // impl<T> Add<T> for Container<T> { ... }
+// Captures: $1=type_params, $2=identifier(trait), $3=type_args_angle, $4=type_expr, $5=impl_items (literals not counted!)
 impl_block_with_args_generic = { "impl" ~ type_params ~ identifier ~ type_args_angle ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
@@ -675,6 +678,7 @@ impl_block_with_args_generic = { "impl" ~ type_params ~ identifier ~ type_args_a
   }
 
 // impl Add<Tensor> for Tensor { ... }
+// Captures: $1=identifier(trait), $2=type_args_angle, $3=type_expr, $4=impl_items (literals not counted!)
 impl_block_with_args_simple = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
@@ -695,6 +699,7 @@ impl_block_trait = { impl_block_trait_generic | impl_block_trait_simple }
   }
 
 // impl<T> Iterator for ListIterator<T> { ... }
+// Captures: $1=type_params, $2=identifier(trait), $3=type_expr, $4=impl_items (literals not counted!)
 impl_block_trait_generic = { "impl" ~ type_params ~ identifier ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
@@ -709,6 +714,7 @@ impl_block_trait_generic = { "impl" ~ type_params ~ identifier ~ "for" ~ type_ex
   }
 
 // impl Display for Point { ... }
+// Captures: $1=identifier(trait), $2=type_expr, $3=impl_items (literals not counted!)
 impl_block_trait_simple = { "impl" ~ identifier ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
@@ -729,6 +735,7 @@ impl_block_inherent = { impl_block_inherent_generic | impl_block_inherent_simple
   }
 
 // impl<T> List<T> { ... }
+// Captures: $1=type_params, $2=impl_type_name_generic, $3=impl_items (literals not counted!)
 impl_block_inherent_generic = { "impl" ~ type_params ~ impl_type_name_generic ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
@@ -741,6 +748,7 @@ impl_block_inherent_generic = { "impl" ~ type_params ~ impl_type_name_generic ~ 
   }
 
 // impl List { ... }
+// Captures: $1=identifier, $2=impl_items (literals not counted!)
 impl_block_inherent_simple = { "impl" ~ identifier ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [

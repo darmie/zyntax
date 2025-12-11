@@ -3044,8 +3044,15 @@ impl SsaBuilder {
 
         // First, check for inherent methods (impl Type { ... } without trait)
         // Inherent methods take priority over trait methods
+        eprintln!("[METHOD DISPATCH] Looking up type_id {:?} in type_registry", type_id);
         if let Some(type_def) = self.type_registry.get_type_by_id(type_id) {
+            eprintln!("[METHOD DISPATCH] Checking type {} ({:?}), {} inherent methods",
+                type_def.name.resolve_global().unwrap_or_default(), type_id, type_def.methods.len());
+            eprintln!("[METHOD DISPATCH] Looking for method: {} ({:?})",
+                method_name.resolve_global().unwrap_or_default(), method_name);
             for method in &type_def.methods {
+                eprintln!("[METHOD DISPATCH]   Available method: {} ({:?}), match={}",
+                    method.name.resolve_global().unwrap_or_default(), method.name, method.name == method_name);
                 if method.name == method_name {
                     // Found inherent method!
                     // Format for inherent methods: {TypeName}${method_name}
@@ -3063,6 +3070,8 @@ impl SsaBuilder {
                     return Ok(InternedString::new_global(&mangled));
                 }
             }
+        } else {
+            eprintln!("[METHOD DISPATCH] Type {:?} not found in type_registry!", type_id);
         }
 
         // Look up which traits this type implements

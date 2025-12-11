@@ -891,6 +891,10 @@ impl ZyntaxRuntime {
         // The compiler's type checker and SSA builder need resolved types
         self.resolve_unresolved_types(&mut program, &type_registry);
 
+        // IMPORTANT: Sync the program's type_registry with our local copy that has merged imports
+        // This is needed because process_imports_for_traits merges into `type_registry` not `program.type_registry`
+        program.type_registry = type_registry;
+
         // Register impl blocks before lowering
         zyntax_compiler::register_impl_blocks(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
@@ -926,6 +930,14 @@ impl ZyntaxRuntime {
 
         // Don't skip type checking - enable type inference for trait resolution
         // The parser produces TypedAST with Type::Any and placeholder TypeIds that need inference
+
+        // Debug: Print all declaration types before lowering
+        eprintln!("[DEBUG BEFORE LOWERING] Total declarations: {}", program.declarations.len());
+        for (idx, decl) in program.declarations.iter().enumerate() {
+            if idx < 20 || matches!(&decl.node, TypedDeclaration::Impl(_)) {
+                eprintln!("[DEBUG BEFORE LOWERING] Decl {}: {:?}", idx, std::mem::discriminant(&decl.node));
+            }
+        }
 
         let mut hir_module = lowering_ctx
             .lower_program(&mut program)
@@ -1168,11 +1180,24 @@ impl ZyntaxRuntime {
 
         match ty {
             Type::Unresolved(name) => {
-                // Look up in TypeRegistry aliases
+                // First try type aliases
                 if let Some(resolved) = type_registry.resolve_alias(*name) {
-                    log::debug!("Resolved type '{}' from Unresolved to {:?}",
+                    log::debug!("Resolved type '{}' from alias to {:?}",
                         name.resolve_global().unwrap_or_default(), resolved);
                     *ty = resolved.clone();
+                }
+                // Then try looking up by name in the type definitions (for structs, enums, etc.)
+                else if let Some(type_def) = type_registry.get_type_by_name(*name) {
+                    let resolved = Type::Named {
+                        id: type_def.id,
+                        type_args: vec![],
+                        const_args: vec![],
+                        variance: vec![],
+                        nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                    };
+                    log::debug!("Resolved type '{}' from Unresolved to Named({:?})",
+                        name.resolve_global().unwrap_or_default(), type_def.id);
+                    *ty = resolved;
                 } else {
                     log::warn!("Could not resolve type '{}'",
                         name.resolve_global().unwrap_or_default());

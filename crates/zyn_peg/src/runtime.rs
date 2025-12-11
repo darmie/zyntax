@@ -2051,30 +2051,38 @@ impl AstHostFunctions for TypedAstBuilder {
         // Try to get the type from the handle and extract its name
         if let Some(ty) = self.get_type_from_handle(handle) {
             match &ty {
-                Type::Named { .. } => {
-                    // Look up the type name in declared_types by checking if the type matches
+                Type::Named { id, .. } => {
+                    // Look up the type name in declared_types by matching TypeId
                     for (name, declared_ty) in &self.declared_types {
-                        if std::mem::discriminant(&ty) == std::mem::discriminant(declared_ty) {
-                            return Some(name.clone());
+                        if let Type::Named { id: declared_id, .. } = declared_ty {
+                            if id == declared_id {
+                                return Some(name.clone());
+                            }
                         }
                     }
                 }
-                Type::Unresolved(name) => return Some(name.resolve_global().unwrap_or_default().to_string()),
+                Type::Unresolved(name) => {
+                    return Some(name.resolve_global().unwrap_or_default().to_string());
+                }
                 _ => {}
             }
         }
         // Try to find in types map
         if let Some(ty) = self.types.get(&handle) {
             match ty {
-                Type::Named { .. } => {
-                    // Look up by type match
+                Type::Named { id, .. } => {
+                    // Look up by TypeId match
                     for (name, declared_ty) in &self.declared_types {
-                        if std::mem::discriminant(ty) == std::mem::discriminant(declared_ty) {
-                            return Some(name.clone());
+                        if let Type::Named { id: declared_id, .. } = declared_ty {
+                            if id == declared_id {
+                                return Some(name.clone());
+                            }
                         }
                     }
                 }
-                Type::Unresolved(name) => return Some(name.resolve_global().unwrap_or_default().to_string()),
+                Type::Unresolved(name) => {
+                    return Some(name.resolve_global().unwrap_or_default().to_string());
+                }
                 _ => {}
             }
         }
@@ -5621,6 +5629,20 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "generic_type" => {
+                // Generic type like List<T>, Option<Item>, etc.
+                // Extract the base type name (e.g., "List" from "List<T>")
+                let name = match args.get("name") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => "Unknown".to_string(),
+                };
+                // For now, just create a named type with the base name
+                // The type arguments are stored separately but not used yet
+                let handle = self.host.create_named_type(&name);
+                eprintln!("[DEBUG generic_type] Created generic type: name='{}', handle={:?}", name, handle);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "function_type" => {
                 let params: Vec<NodeHandle> = match args.get("params") {
                     Some(RuntimeValue::List(list)) => {
@@ -6214,12 +6236,26 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                 let for_type = match args.get("type_name") {
                     Some(RuntimeValue::String(s)) => {
-                        eprintln!("[GRAMMAR impl_block] type_name: {}", s);
+                        eprintln!("[GRAMMAR impl_block] type_name string: {}", s);
                         s.clone()
                     },
+                    Some(RuntimeValue::Node(h)) => {
+                        // type_expr returns a Node, extract the type name from it
+                        if let Some(name) = self.host.get_type_name(*h) {
+                            eprintln!("[GRAMMAR impl_block] type_name from node: {}", name);
+                            name
+                        } else {
+                            eprintln!("[GRAMMAR impl_block] ERROR: could not extract type name from node {:?}", h);
+                            return Err(crate::error::ZynPegError::CodeGenError("impl_block: could not extract type name from node".into()));
+                        }
+                    },
+                    Some(RuntimeValue::Null) => {
+                        eprintln!("[GRAMMAR impl_block] ERROR: type_name is Null");
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: type_name is Null".into()));
+                    },
                     Some(other) => {
-                        eprintln!("[GRAMMAR impl_block] ERROR: type_name is not a string, it's: {:?}", other);
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: type_name is not a string".into()));
+                        eprintln!("[GRAMMAR impl_block] ERROR: type_name is unexpected type: {:?}", other);
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: type_name is not a string or node".into()));
                     },
                     None => {
                         eprintln!("[GRAMMAR impl_block] ERROR: missing type_name");
@@ -6902,7 +6938,7 @@ mod tests {
                 file_extensions: vec![".test".to_string()],
                 entry_point: None,
                 zpeg_version: "0.1.0".to_string(),
-                builtins: HashMap::new(),
+                builtins: BuiltinMappings::default(),
                 types: TypeDeclarations::default(),
             },
             pest_grammar: "program = { expr }".to_string(),
