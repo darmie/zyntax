@@ -46,6 +46,7 @@ pub mod runtime;
 // ZynPEG 2.0 - New grammar IR with named bindings
 pub mod grammar;
 pub mod runtime2;
+pub mod codegen;
 
 // Parser for .zyn grammar files
 #[derive(Parser)]
