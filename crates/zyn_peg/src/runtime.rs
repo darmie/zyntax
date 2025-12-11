@@ -319,6 +319,9 @@ pub trait AstHostFunctions {
     /// Get an expression node by handle (for extracting string literals, etc.)
     fn get_expr(&self, handle: NodeHandle) -> Option<TypedNode<TypedExpression>>;
 
+    /// Get the type name from a type node handle (for generic types like List<T> returns "List")
+    fn get_type_name(&self, handle: NodeHandle) -> Option<String>;
+
     /// Create a typed integer literal with explicit type annotation
     fn create_typed_int_literal(&mut self, value: i64, ty: Type) -> NodeHandle;
 
@@ -2042,6 +2045,40 @@ impl AstHostFunctions for TypedAstBuilder {
 
     fn get_expr(&self, handle: NodeHandle) -> Option<TypedNode<TypedExpression>> {
         self.expressions.get(&handle).cloned()
+    }
+
+    fn get_type_name(&self, handle: NodeHandle) -> Option<String> {
+        // Try to get the type from the handle and extract its name
+        if let Some(ty) = self.get_type_from_handle(handle) {
+            match &ty {
+                Type::Named { .. } => {
+                    // Look up the type name in declared_types by checking if the type matches
+                    for (name, declared_ty) in &self.declared_types {
+                        if std::mem::discriminant(&ty) == std::mem::discriminant(declared_ty) {
+                            return Some(name.clone());
+                        }
+                    }
+                }
+                Type::Unresolved(name) => return Some(name.resolve_global().unwrap_or_default().to_string()),
+                _ => {}
+            }
+        }
+        // Try to find in types map
+        if let Some(ty) = self.types.get(&handle) {
+            match ty {
+                Type::Named { .. } => {
+                    // Look up by type match
+                    for (name, declared_ty) in &self.declared_types {
+                        if std::mem::discriminant(ty) == std::mem::discriminant(declared_ty) {
+                            return Some(name.clone());
+                        }
+                    }
+                }
+                Type::Unresolved(name) => return Some(name.resolve_global().unwrap_or_default().to_string()),
+                _ => {}
+            }
+        }
+        None
     }
 
     fn create_param(&mut self, name: &str, ty: NodeHandle) -> NodeHandle {
@@ -5431,6 +5468,29 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 Ok(RuntimeValue::Node(handle))
             }
 
+            "field_assignment" => {
+                log::trace!("[define_node] field_assignment args: {:?}", args);
+                // Field assignment: object.field = value
+                let object_name = match args.get("object") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_assignment: missing object".into())),
+                };
+                let field_name = match args.get("field") {
+                    Some(RuntimeValue::String(s)) => s.clone(),
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_assignment: missing field".into())),
+                };
+                let value = match args.get("value") {
+                    Some(RuntimeValue::Node(h)) => *h,
+                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_assignment: missing value".into())),
+                };
+
+                // Create field access expression as target
+                let object = self.host.create_variable(&object_name);
+                let field_access = self.host.create_field_access(object, &field_name);
+                let handle = self.host.create_assignment(field_access, value);
+                Ok(RuntimeValue::Node(handle))
+            }
+
             "if_stmt" | "if" => {
                 let condition = match args.get("condition") {
                     Some(RuntimeValue::Node(h)) => *h,
@@ -6219,6 +6279,82 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                 let handle = self.host.create_impl_block(&trait_name, &for_type, trait_args, items);
                 eprintln!("[GRAMMAR impl_block] Created impl block with handle: {:?}", handle);
+                Ok(RuntimeValue::Node(handle))
+            }
+
+            "impl_inherent" => {
+                eprintln!("[GRAMMAR impl_inherent] Creating inherent impl block");
+                eprintln!("[GRAMMAR impl_inherent] All args: {:?}", args);
+
+                // Extract the type name - can be a simple identifier or a generic type like List<T>
+                let type_name = match args.get("type_name") {
+                    Some(RuntimeValue::String(s)) => {
+                        eprintln!("[GRAMMAR impl_inherent] type_name string: {}", s);
+                        s.clone()
+                    },
+                    Some(RuntimeValue::List(vals)) => {
+                        // For generic types like List<T>, extract the base name from the node
+                        if let Some(RuntimeValue::Node(h)) = vals.first() {
+                            // Get the type name from the node
+                            if let Some(name) = self.host.get_type_name(*h) {
+                                eprintln!("[GRAMMAR impl_inherent] type_name from node: {}", name);
+                                name
+                            } else {
+                                eprintln!("[GRAMMAR impl_inherent] Could not get type name from node {:?}", h);
+                                return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: could not resolve type_name".into()));
+                            }
+                        } else {
+                            eprintln!("[GRAMMAR impl_inherent] Empty list for type_name");
+                            return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: empty type_name list".into()));
+                        }
+                    },
+                    Some(RuntimeValue::Node(h)) => {
+                        // Direct node - get type name from it
+                        if let Some(name) = self.host.get_type_name(*h) {
+                            eprintln!("[GRAMMAR impl_inherent] type_name from direct node: {}", name);
+                            name
+                        } else {
+                            eprintln!("[GRAMMAR impl_inherent] Could not get type name from direct node {:?}", h);
+                            return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: could not resolve type_name from node".into()));
+                        }
+                    },
+                    Some(other) => {
+                        eprintln!("[GRAMMAR impl_inherent] ERROR: type_name is unexpected type: {:?}", other);
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: type_name is not a string".into()));
+                    },
+                    None => {
+                        eprintln!("[GRAMMAR impl_inherent] ERROR: missing type_name");
+                        return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: missing type_name".into()));
+                    }
+                };
+
+                // Extract impl items (methods)
+                eprintln!("[DEBUG impl_inherent] items arg: {:?}", args.get("items"));
+                let items: Vec<NodeHandle> = match args.get("items") {
+                    Some(RuntimeValue::List(vals)) => {
+                        eprintln!("[DEBUG impl_inherent] items list has {} values", vals.len());
+                        vals.iter().filter_map(|v| {
+                            eprintln!("[DEBUG impl_inherent] item value: {:?}", v);
+                            if let RuntimeValue::Node(h) = v {
+                                Some(*h)
+                            } else {
+                                None
+                            }
+                        }).collect()
+                    },
+                    Some(other) => {
+                        eprintln!("[DEBUG impl_inherent] items is not a list, it's: {:?}", other);
+                        vec![]
+                    },
+                    None => {
+                        eprintln!("[DEBUG impl_inherent] items arg is None");
+                        vec![]
+                    }
+                };
+
+                // Create inherent impl block - uses empty string for trait_name to indicate inherent impl
+                let handle = self.host.create_impl_block("", &type_name, vec![], items);
+                eprintln!("[GRAMMAR impl_inherent] Created inherent impl block with handle: {:?}", handle);
                 Ok(RuntimeValue::Node(handle))
             }
 

@@ -489,13 +489,33 @@ abstract_simple = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" }
 //     x: float
 //     y: float
 // Note: Whitespace is handled implicitly by WHITESPACE rule
-struct_def = { "struct" ~ identifier ~ type_params? ~ ":" ~ struct_def_fields }
+// Split into generic and non-generic variants (optional not supported in grammar)
+struct_def = { struct_def_generic | struct_def_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// struct List<T>:
+//     ...
+struct_def_generic = { "struct" ~ identifier ~ type_params ~ ":" ~ struct_def_fields }
   -> TypedDeclaration {
       "commands": [
           { "define": "struct_type", "args": {
               "name": "$1",
               "type_params": "$2",
               "fields": "$3"
+          }}
+      ]
+  }
+
+// struct Point:
+//     ...
+struct_def_simple = { "struct" ~ identifier ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "struct_type", "args": {
+              "name": "$1",
+              "fields": "$2"
           }}
       ]
   }
@@ -523,33 +543,68 @@ struct_def_field = { identifier ~ ":" ~ type_expr }
 //     Some(T),
 //     None
 // }
-enum_def = { "enum" ~ identifier ~ type_params? ~ "{" ~ enum_variant ~ ("," ~ enum_variant)* ~ ","? ~ "}" }
+// Split into generic and non-generic variants
+enum_def = { enum_def_generic | enum_def_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// enum Option<T> { ... }
+enum_def_generic = { "enum" ~ identifier ~ type_params ~ "{" ~ enum_variants ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "enum_type", "args": {
               "name": "$1",
               "type_params": "$2",
-              "variants": "$result"
-          }}
-      ],
-      "collect_results_from": [3, 4]
-  }
-
-// Enum variant: Name or Name(T1, T2, ...)
-enum_variant = { identifier ~ enum_variant_data? }
-  -> TypedEnumVariant {
-      "commands": [
-          { "define": "enum_variant", "args": {
-              "name": "$1",
-              "data": "$2"
+              "variants": "$3"
           }}
       ]
   }
 
-// Variant data: (T1, T2, ...) for tuple variants
-enum_variant_data = { "(" ~ type_expr ~ ("," ~ type_expr)* ~ ")" }
+// enum Color { Red, Green, Blue }
+enum_def_simple = { "enum" ~ identifier ~ "{" ~ enum_variants ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "enum_type", "args": {
+              "name": "$1",
+              "variants": "$2"
+          }}
+      ]
+  }
+
+// Enum variants list
+enum_variants = { enum_variant ~ ("," ~ enum_variant)* ~ ","? }
   -> List {
-      "collect_results_from": [1, 2]
+      "get_all_children": true
+  }
+
+// Enum variant: Name or Name(T1, T2, ...)
+// Split into tuple variant and unit variant
+enum_variant = { enum_variant_tuple | enum_variant_unit }
+  -> TypedEnumVariant {
+      "get_child": { "index": 0 }
+  }
+
+// Some(T)
+enum_variant_tuple = { identifier ~ "(" ~ type_expr ~ ("," ~ type_expr)* ~ ")" }
+  -> TypedEnumVariant {
+      "commands": [
+          { "define": "enum_variant", "args": {
+              "name": "$1",
+              "data": "$result"
+          }}
+      ],
+      "collect_results_from": [2, 3]
+  }
+
+// None
+enum_variant_unit = { identifier }
+  -> TypedEnumVariant {
+      "commands": [
+          { "define": "enum_variant", "args": {
+              "name": "$1"
+          }}
+      ]
   }
 
 // ============================================================================
@@ -560,13 +615,21 @@ enum_variant_data = { "(" ~ type_expr ~ ("," ~ type_expr)* ~ ")" }
 // impl Add<Tensor> for Tensor: type Output = Tensor; fn add(...) { ... }
 // impl Duration(i64): fn from_ms(value: i64) -> Self { ... }
 // Split into multiple rules to avoid optional capture index shifting
-impl_block = { impl_abstract_inherent | impl_block_with_args | impl_block_simple }
+// Order matters: try more specific rules first
+impl_block = { impl_abstract_inherent | impl_block_with_args | impl_block_trait | impl_block_inherent }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
 
 // Inherent impl for abstract types: impl<T> TypeName(UnderlyingType) { methods }
-impl_abstract_inherent = { "impl" ~ type_params? ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
+// Split into generic and non-generic variants
+impl_abstract_inherent = { impl_abstract_inherent_generic | impl_abstract_inherent_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// impl<T> Container<T>(i64) { ... }
+impl_abstract_inherent_generic = { "impl" ~ type_params ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_abstract_inherent", "args": {
@@ -578,8 +641,27 @@ impl_abstract_inherent = { "impl" ~ type_params? ~ identifier ~ "(" ~ type_expr 
       ]
   }
 
+// impl Duration(i64) { ... }
+impl_abstract_inherent_simple = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_abstract_inherent", "args": {
+              "type_name": "$1",
+              "underlying_type": "$2",
+              "items": "$3"
+          }}
+      ]
+  }
+
 // impl<T> Trait<Args> for Type<T> { ... }
-impl_block_with_args = { "impl" ~ type_params? ~ identifier ~ type_args_angle ~ "for" ~ type_application ~ "{" ~ impl_items ~ "}" }
+// Split into generic and non-generic variants
+impl_block_with_args = { impl_block_with_args_generic | impl_block_with_args_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// impl<T> Add<T> for Container<T> { ... }
+impl_block_with_args_generic = { "impl" ~ type_params ~ identifier ~ type_args_angle ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
@@ -592,8 +674,28 @@ impl_block_with_args = { "impl" ~ type_params? ~ identifier ~ type_args_angle ~ 
       ]
   }
 
-// impl<T> Trait for Type<T> { ... } or impl<T> Type<T> { ... } (inherent)
-impl_block_simple = { "impl" ~ type_params? ~ identifier ~ ("for" ~ type_application)? ~ "{" ~ impl_items ~ "}" }
+// impl Add<Tensor> for Tensor { ... }
+impl_block_with_args_simple = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_block", "args": {
+              "trait_name": "$1",
+              "trait_args": "$2",
+              "type_name": "$3",
+              "items": "$4"
+          }}
+      ]
+  }
+
+// impl<T> Trait for Type<T> { ... } - trait implementation
+// Split into generic and non-generic variants
+impl_block_trait = { impl_block_trait_generic | impl_block_trait_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// impl<T> Iterator for ListIterator<T> { ... }
+impl_block_trait_generic = { "impl" ~ type_params ~ identifier ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
   -> TypedDeclaration {
       "commands": [
           { "define": "impl_block", "args": {
@@ -604,6 +706,55 @@ impl_block_simple = { "impl" ~ type_params? ~ identifier ~ ("for" ~ type_applica
               "items": "$4"
           }}
       ]
+  }
+
+// impl Display for Point { ... }
+impl_block_trait_simple = { "impl" ~ identifier ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_block", "args": {
+              "trait_name": "$1",
+              "trait_args": "none",
+              "type_name": "$2",
+              "items": "$3"
+          }}
+      ]
+  }
+
+// impl<T> Type<T> { ... } - inherent implementation (no trait)
+// Split into generic and non-generic variants (optional not supported)
+impl_block_inherent = { impl_block_inherent_generic | impl_block_inherent_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// impl<T> List<T> { ... }
+impl_block_inherent_generic = { "impl" ~ type_params ~ impl_type_name_generic ~ "{" ~ impl_items ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_inherent", "args": {
+              "type_params": "$1",
+              "type_name": "$2",
+              "items": "$3"
+          }}
+      ]
+  }
+
+// impl List { ... }
+impl_block_inherent_simple = { "impl" ~ identifier ~ "{" ~ impl_items ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "impl_inherent", "args": {
+              "type_name": "$1",
+              "items": "$2"
+          }}
+      ]
+  }
+
+// Type name for generic impl blocks - captures the base identifier
+impl_type_name_generic = { identifier ~ "<" ~ type_args ~ ">" }
+  -> String {
+      "get_child": { "index": 0 }
   }
 
 impl_items = { impl_item* }
@@ -864,7 +1015,25 @@ let_stmt = { "let" ~ identifier ~ "=" ~ expr }
   }
 
 // x = expr
-assign_stmt = { identifier ~ "=" ~ expr }
+assign_stmt = { field_assign_stmt | simple_assign_stmt }
+  -> TypedStatement {
+      "get_child": { "index": 0 }
+  }
+
+// self.field = expr
+field_assign_stmt = { identifier ~ "." ~ identifier ~ "=" ~ expr }
+  -> TypedStatement {
+      "commands": [
+          { "define": "field_assignment", "args": {
+              "object": "$1",
+              "field": "$2",
+              "value": "$3"
+          }}
+      ]
+  }
+
+// x = expr
+simple_assign_stmt = { identifier ~ "=" ~ expr }
   -> TypedStatement {
       "commands": [
           { "define": "assignment", "args": {
