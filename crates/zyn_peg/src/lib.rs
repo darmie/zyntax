@@ -43,6 +43,10 @@ pub mod generator;
 pub mod error;
 pub mod runtime;
 
+// ZynPEG 2.0 - New grammar IR with named bindings
+pub mod grammar;
+pub mod runtime2;
+
 // Parser for .zyn grammar files
 #[derive(Parser)]
 #[grammar = "zyn_grammar.pest"]
