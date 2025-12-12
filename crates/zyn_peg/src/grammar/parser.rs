@@ -520,20 +520,24 @@ impl<'a> GrammarParser<'a> {
 
     /// Parse an action block
     fn parse_action(&mut self) -> ParseResult<(ActionIR, String)> {
-        // Parse return type path
-        let return_type = self.parse_type_path()?;
+        // Parse first identifier/type path
+        let first_path = self.parse_type_path()?;
         self.skip_ws();
 
-        // Check for simple pass-through
+        // Check for simple pass-through: -> binding (no '{' follows)
+        // If the first_path is a simple identifier (no ::) and no '{' follows,
+        // it's a pass-through action
         if !self.check_str("{") {
-            // Simple pass-through: -> binding
-            if let Some(c) = self.peek_char() {
-                if c.is_ascii_alphabetic() || c == '_' {
-                    let binding = self.parse_identifier()?;
-                    return Ok((ActionIR::PassThrough { binding }, return_type));
-                }
+            // Check if it's a simple identifier (no :: in path) - that's pass-through
+            if !first_path.contains("::") {
+                // No '::' means it's just a binding name, not a type path
+                return Ok((ActionIR::PassThrough { binding: first_path.clone() }, first_path));
             }
+            // If it has ::, then there should be a { with fields
+            return Err(self.error(&format!("Expected '{{' after type path '{}'", first_path)));
         }
+
+        let return_type = first_path;
 
         // Full action block
         self.expect_char('{')?;
@@ -934,7 +938,7 @@ impl<'a> GrammarParser<'a> {
         }
     }
 
-    /// Parse argument list (comma-separated expressions)
+    /// Parse argument list (comma-separated expressions, allows trailing comma)
     fn parse_arg_list(&mut self) -> ParseResult<Vec<ExprIR>> {
         let mut args = Vec::new();
         self.skip_ws();
@@ -950,6 +954,10 @@ impl<'a> GrammarParser<'a> {
             if self.peek_char() == Some(',') {
                 self.advance();
                 self.skip_ws();
+                // Check for trailing comma (next is ) or ])
+                if self.peek_char() == Some(')') || self.peek_char() == Some(']') {
+                    break;
+                }
                 args.push(self.parse_expr()?);
             } else {
                 break;
@@ -1457,6 +1465,128 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_nested_struct_in_list() {
+        let input = r#"
+@language { name: "Test", version: "1.0" }
+
+test_rule = { "test" }
+  -> Foo::Bar {
+      args: [X::Y { f: v }],
+  }
+"#;
+
+        match parse_grammar(input) {
+            Ok(grammar) => {
+                println!("OK: {} rules", grammar.rules.len());
+                let rule = grammar.rules.get("test_rule").unwrap();
+                println!("Rule action: {:?}", rule.action);
+            }
+            Err(e) => {
+                panic!("Failed to parse: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_box_new_call() {
+        let input = r#"
+@language { name: "Test", version: "1.0" }
+
+test_rule = { "test" }
+  -> Foo::Bar {
+      callee: Box::new(X::Y { name: n }),
+  }
+"#;
+
+        match parse_grammar(input) {
+            Ok(grammar) => {
+                println!("OK: {} rules", grammar.rules.len());
+                let rule = grammar.rules.get("test_rule").unwrap();
+                println!("Rule action: {:?}", rule.action);
+            }
+            Err(e) => {
+                panic!("Failed to parse: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_array_in_struct() {
+        // Simplified test case - struct in array in struct
+        let input = r#"
+@language { name: "Test", version: "1.0" }
+
+test = { "test" }
+  -> A::B {
+      outer: C::D {
+          inner: [E::F { x: v }],
+      },
+  }
+"#;
+
+        match parse_grammar(input) {
+            Ok(grammar) => {
+                println!("OK: {} rules", grammar.rules.len());
+                let rule = grammar.rules.get("test").unwrap();
+                println!("Rule action: {:?}", rule.action);
+            }
+            Err(e) => {
+                panic!("Failed to parse: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_array_with_function_call() {
+        // Test array containing struct with function call (no trailing comma)
+        let input = r#"
+@language { name: "Test", version: "1.0" }
+
+test = { "test" }
+  -> A::B {
+      args: [
+          C::D { x: intern(v) }
+      ],
+  }
+"#;
+
+        match parse_grammar(input) {
+            Ok(grammar) => {
+                println!("OK: {} rules", grammar.rules.len());
+                let rule = grammar.rules.get("test").unwrap();
+                println!("Rule action: {:?}", rule.action);
+            }
+            Err(e) => {
+                panic!("Failed to parse: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_array_with_trailing_comma() {
+        // Test array with trailing comma
+        let input = r#"
+@language { name: "Test", version: "1.0" }
+
+test = { "test" }
+  -> A::B {
+      args: [a, b,],
+  }
+"#;
+
+        match parse_grammar(input) {
+            Ok(grammar) => {
+                println!("OK: {} rules", grammar.rules.len());
+                let rule = grammar.rules.get("test").unwrap();
+                println!("Rule action: {:?}", rule.action);
+            }
+            Err(e) => {
+                panic!("Failed to parse trailing comma: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
     fn test_parse_imagepipe_grammar() {
         let input = include_str!("../../../../examples/imagepipe/imagepipe.zyn");
 
@@ -1471,7 +1601,7 @@ mod tests {
 
                 // Verify key metadata
                 assert_eq!(grammar.metadata.name, "ImagePipe");
-                assert_eq!(grammar.metadata.version, "1.0");
+                assert_eq!(grammar.metadata.version, "2.0");
 
                 // Verify key rules exist
                 assert!(grammar.rules.contains_key("program"));
