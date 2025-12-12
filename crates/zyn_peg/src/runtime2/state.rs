@@ -135,6 +135,11 @@ pub enum ParsedValue {
     Program(Box<zyntax_typed_ast::TypedProgram>),
     /// A TypedBlock AST node
     Block(zyntax_typed_ast::TypedBlock),
+    /// A field initialization (name -> value)
+    FieldInit {
+        name: InternedString,
+        value: Box<ParsedValue>,
+    },
 }
 
 /// Handle to an AST node (opaque, managed by builder)

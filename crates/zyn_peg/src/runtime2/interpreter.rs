@@ -15,6 +15,9 @@ use std::collections::HashMap;
 use zyntax_typed_ast::{
     TypedNode, TypedStatement, TypedExpression, TypedLiteral, TypedBlock,
     TypedDeclaration, TypedFunction, TypedLet, TypedCall, TypedProgram,
+    TypedIf, TypedWhile, TypedFor, TypedUnary, TypedFieldAccess, TypedIndex,
+    TypedRange, TypedStructLiteral, TypedFieldInit, TypedPattern,
+    UnaryOp,
     typed_node, Span,
     type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention},
 };
@@ -296,6 +299,53 @@ impl<'g> GrammarInterpreter<'g> {
                 let value = self.get_field_optional_expr("value", fields, state)?;
                 TypedStatement::Return(value.map(Box::new))
             }
+            "If" => {
+                let condition = self.get_field_as_expr("condition", fields, state)?;
+                let then_block = self.get_field_as_block("then_branch", fields, state)?;
+                let else_block = self.get_field_optional_block("else_branch", fields, state)?;
+
+                TypedStatement::If(TypedIf {
+                    condition: Box::new(condition),
+                    then_block,
+                    else_block,
+                    span,
+                })
+            }
+            "While" => {
+                let condition = self.get_field_as_expr("condition", fields, state)?;
+                let body = self.get_field_as_block("body", fields, state)?;
+
+                TypedStatement::While(TypedWhile {
+                    condition: Box::new(condition),
+                    body,
+                    span,
+                })
+            }
+            "For" => {
+                let variable = self.get_field_as_interned("variable", fields, state)?;
+                let iterable = self.get_field_as_expr("iterable", fields, state)?;
+                let body = self.get_field_as_block("body", fields, state)?;
+
+                // Create a binding pattern for the variable
+                let pattern = typed_node(
+                    TypedPattern::Identifier { name: variable, mutability: Mutability::Immutable },
+                    Type::Any,
+                    span,
+                );
+
+                TypedStatement::For(TypedFor {
+                    pattern: Box::new(pattern),
+                    iterator: Box::new(iterable),
+                    body,
+                })
+            }
+            "Break" => {
+                let value = self.get_field_optional_expr("value", fields, state)?;
+                TypedStatement::Break(value.map(Box::new))
+            }
+            "Continue" => {
+                TypedStatement::Continue
+            }
             _ => return Err(format!("unknown TypedStatement variant: {}", variant)),
         };
 
@@ -355,6 +405,74 @@ impl<'g> GrammarInterpreter<'g> {
                     op: binary_op,
                     left: Box::new(left),
                     right: Box::new(right),
+                })
+            }
+            "Unary" => {
+                let operand = self.get_field_as_expr("operand", fields, state)?;
+                let op = self.get_field_as_string("op", fields, state)?;
+
+                let unary_op = self.string_to_unary_op(&op)?;
+                TypedExpression::Unary(TypedUnary {
+                    op: unary_op,
+                    operand: Box::new(operand),
+                })
+            }
+            "Array" => {
+                let elements = self.get_field_as_expr_list("elements", fields, state)?;
+                TypedExpression::Array(elements)
+            }
+            "Index" => {
+                let object = self.get_field_as_expr("object", fields, state)?;
+                let index = self.get_field_as_expr("index", fields, state)?;
+
+                TypedExpression::Index(TypedIndex {
+                    object: Box::new(object),
+                    index: Box::new(index),
+                })
+            }
+            "Field" | "FieldAccess" => {
+                let object = self.get_field_as_expr("object", fields, state)?;
+                let field = self.get_field_as_interned("field", fields, state)?;
+
+                TypedExpression::Field(TypedFieldAccess {
+                    object: Box::new(object),
+                    field,
+                })
+            }
+            "Range" => {
+                let start = self.get_field_optional_expr("start", fields, state)?;
+                let end = self.get_field_optional_expr("end", fields, state)?;
+                let inclusive = self.get_field_as_bool("inclusive", fields, state).unwrap_or(false);
+
+                TypedExpression::Range(TypedRange {
+                    start: start.map(Box::new),
+                    end: end.map(Box::new),
+                    inclusive,
+                })
+            }
+            "Struct" | "StructLiteral" => {
+                let type_name = self.get_field_as_interned("type_name", fields, state)?;
+                let field_inits = self.get_field_as_field_init_list("fields", fields, state)?;
+
+                TypedExpression::Struct(TypedStructLiteral {
+                    name: type_name,
+                    fields: field_inits,
+                })
+            }
+            "BoolLiteral" => {
+                let value = self.get_field_as_bool("value", fields, state)?;
+                TypedExpression::Literal(TypedLiteral::Bool(value))
+            }
+            "Ternary" | "If" => {
+                // Ternary expression: condition ? then_expr : else_expr
+                let condition = self.get_field_as_expr("condition", fields, state)?;
+                let then_expr = self.get_field_as_expr("then_expr", fields, state)?;
+                let else_expr = self.get_field_as_expr("else_expr", fields, state)?;
+
+                TypedExpression::If(zyntax_typed_ast::TypedIfExpr {
+                    condition: Box::new(condition),
+                    then_branch: Box::new(then_expr),
+                    else_branch: Box::new(else_expr),
                 })
             }
             _ => return Err(format!("unknown TypedExpression variant: {}", variant)),
@@ -900,6 +1018,65 @@ impl<'g> GrammarInterpreter<'g> {
         }
     }
 
+    fn get_field_as_block<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedBlock, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+        self.parsed_value_to_block(val, state)
+    }
+
+    fn get_field_as_field_init_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedFieldInit>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            let field_init = self.parsed_value_to_field_init(item, state)?;
+                            result.push(field_init);
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    other => {
+                        // Single item - try to convert
+                        let field_init = self.parsed_value_to_field_init(other, state)?;
+                        Ok(vec![field_init])
+                    }
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    fn parsed_value_to_field_init<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedFieldInit, String> {
+        match val {
+            ParsedValue::FieldInit { name, value } => {
+                let expr = self.parsed_value_to_expr(*value, state)?;
+                Ok(TypedFieldInit {
+                    name,
+                    value: Box::new(expr),
+                })
+            }
+            _ => Err("cannot convert value to field init".to_string()),
+        }
+    }
+
     fn get_field_as_decl_list<'a>(
         &self,
         name: &str,
@@ -1033,6 +1210,17 @@ impl<'g> GrammarInterpreter<'g> {
             "||" | "Or" => Ok(zyntax_typed_ast::BinaryOp::Or),
             "=" | "Assign" => Ok(zyntax_typed_ast::BinaryOp::Assign),
             _ => Err(format!("unknown binary operator: {}", op)),
+        }
+    }
+
+    /// Convert string to UnaryOp
+    fn string_to_unary_op(&self, op: &str) -> Result<UnaryOp, String> {
+        match op {
+            "-" | "Minus" | "Neg" => Ok(UnaryOp::Minus),
+            "!" | "Not" => Ok(UnaryOp::Not),
+            "+" | "Plus" => Ok(UnaryOp::Plus),
+            "~" | "BitNot" => Ok(UnaryOp::BitNot),
+            _ => Err(format!("unknown unary operator: {}", op)),
         }
     }
 
