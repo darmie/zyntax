@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 # Zyntax embedding SDK
 zyntax_embed = { path = "../../crates/zyntax_embed" }
+zyntax_typed_ast = { path = "../../crates/typed_ast" }
 
 # CLI argument parsing
 clap = { version = "4.4", features = ["derive"] }

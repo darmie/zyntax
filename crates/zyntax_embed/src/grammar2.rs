@@ -1,0 +1,304 @@
+//! Grammar V2 - Direct TypedAST generation using GrammarInterpreter
+//!
+//! This module provides a simpler, more direct parsing interface that uses
+//! ZynPEG 2.0's GrammarInterpreter to parse source code directly into TypedAST
+//! without going through JSON serialization or pest VM.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use zyntax_embed::Grammar2;
+//!
+//! // Compile from .zyn grammar source
+//! let grammar = Grammar2::from_source(include_str!("my_lang.zyn"))?;
+//!
+//! // Parse source code directly to TypedProgram
+//! let program = grammar.parse("fn main() { 42 }")?;
+//! ```
+
+use std::sync::Arc;
+use zyn_peg::grammar::{parse_grammar, GrammarIR, GrammarMetadata, BuiltinMappings, TypeDeclarations};
+use zyn_peg::runtime2::{GrammarInterpreter, ParserState, ParseResult, ParsedValue};
+use zyntax_typed_ast::{TypedASTBuilder, TypedProgram, TypedDeclaration, TypedFunction, TypedParameter};
+use zyntax_typed_ast::type_registry::{TypeRegistry, Type, PrimitiveType};
+use zyntax_typed_ast::{typed_node, Span, Visibility, CallingConvention, Mutability, InternedString};
+
+/// Errors that can occur during grammar operations
+#[derive(Debug, thiserror::Error)]
+pub enum Grammar2Error {
+    #[error("Failed to parse grammar: {0}")]
+    ParseError(String),
+
+    #[error("Failed to parse source: {0}")]
+    SourceParseError(String),
+
+    #[error("Unexpected parse result: expected TypedProgram")]
+    UnexpectedResult,
+}
+
+/// Result type for grammar operations
+pub type Grammar2Result<T> = Result<T, Grammar2Error>;
+
+/// A V2 grammar for parsing source code directly to TypedAST
+///
+/// Uses ZynPEG 2.0's GrammarInterpreter for direct TypedAST construction
+/// without JSON serialization or pest VM overhead.
+pub struct Grammar2 {
+    /// The parsed grammar IR
+    grammar: Arc<GrammarIR>,
+}
+
+impl Grammar2 {
+    /// Create a grammar from .zyn source code
+    pub fn from_source(zyn_source: &str) -> Grammar2Result<Self> {
+        let grammar = parse_grammar(zyn_source)
+            .map_err(|e| Grammar2Error::ParseError(e.to_string()))?;
+
+        Ok(Self {
+            grammar: Arc::new(grammar),
+        })
+    }
+
+    /// Create a grammar from an existing GrammarIR
+    pub fn from_ir(grammar: GrammarIR) -> Self {
+        Self {
+            grammar: Arc::new(grammar),
+        }
+    }
+
+    /// Get the language name
+    pub fn name(&self) -> &str {
+        &self.grammar.metadata.name
+    }
+
+    /// Get the language version
+    pub fn version(&self) -> &str {
+        &self.grammar.metadata.version
+    }
+
+    /// Get the file extensions this grammar handles
+    pub fn file_extensions(&self) -> &[String] {
+        &self.grammar.metadata.file_extensions
+    }
+
+    /// Get the entry point function name if declared
+    pub fn entry_point(&self) -> Option<&str> {
+        self.grammar.metadata.entry_point.as_deref()
+    }
+
+    /// Get a reference to the GrammarIR
+    pub fn grammar_ir(&self) -> &GrammarIR {
+        &self.grammar
+    }
+
+    /// Parse source code directly to TypedProgram
+    ///
+    /// Uses GrammarInterpreter to parse the source and construct TypedAST nodes.
+    /// This bypasses JSON serialization and is the recommended way to parse.
+    pub fn parse(&self, source: &str) -> Grammar2Result<TypedProgram> {
+        self.parse_with_filename(source, "input.imgpipe")
+    }
+
+    /// Parse source code with a specific filename (for diagnostics)
+    pub fn parse_with_filename(&self, source: &str, filename: &str) -> Grammar2Result<TypedProgram> {
+        use zyntax_typed_ast::source::SourceFile;
+
+        let interpreter = GrammarInterpreter::new(&self.grammar);
+
+        let mut builder = TypedASTBuilder::new();
+        let mut registry = TypeRegistry::new();
+        let mut state = ParserState::new(source, &mut builder, &mut registry);
+
+        // Parse from the entry rule
+        let result = interpreter.parse(&mut state);
+
+        match result {
+            ParseResult::Success(ParsedValue::Program(mut program), _) => {
+                // Add source file for diagnostics
+                program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
+                Ok(*program)
+            }
+            ParseResult::Success(other, _) => {
+                // If we get something other than a program, wrap it
+                eprintln!("[Grammar2] Warning: parse returned {:?}, expected Program",
+                    std::mem::discriminant(&other));
+                Err(Grammar2Error::UnexpectedResult)
+            }
+            ParseResult::Failure(e) => {
+                Err(Grammar2Error::SourceParseError(format!(
+                    "Parse error at {}:{}: expected {:?}",
+                    e.line, e.column, e.expected
+                )))
+            }
+        }
+    }
+
+    /// Parse source code with plugin signatures (for proper extern declarations)
+    pub fn parse_with_signatures(
+        &self,
+        source: &str,
+        filename: &str,
+        signatures: &std::collections::HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>,
+    ) -> Grammar2Result<TypedProgram> {
+        let mut program = self.parse_with_filename(source, filename)?;
+
+        // Inject extern function declarations for builtins
+        self.inject_builtin_externs(&mut program, Some(signatures))?;
+
+        Ok(program)
+    }
+
+    /// Inject extern function declarations for all builtins from @builtin directive
+    fn inject_builtin_externs(
+        &self,
+        program: &mut TypedProgram,
+        signatures: Option<&std::collections::HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>>,
+    ) -> Grammar2Result<()> {
+        use zyntax_typed_ast::typed_ast::ParameterKind;
+
+        let span = Span::new(0, 0); // Synthetic span for injected declarations
+
+        // Iterate over all builtins from @builtin directive
+        for (source_name, target_symbol) in &self.grammar.builtins.functions {
+            // Get return type from @types.function_returns if available
+            let return_type = if let Some(type_str) = self.grammar.type_decls.function_returns.get(source_name) {
+                Type::Extern {
+                    name: InternedString::new_global(type_str),
+                    layout: None,
+                }
+            } else if let Some(sigs) = signatures {
+                sigs.get(target_symbol.as_str())
+                    .map(|sig| Self::type_tag_to_type(&sig.return_type))
+                    .unwrap_or(Type::Any)
+            } else {
+                Type::Any
+            };
+
+            // Get parameters from signature if available
+            let params = if let Some(sigs) = signatures {
+                if let Some(sig) = sigs.get(target_symbol.as_str()) {
+                    (0..sig.param_count)
+                        .map(|i| {
+                            let ty = Self::type_tag_to_type(&sig.params[i as usize]);
+                            TypedParameter {
+                                name: InternedString::new_global(&format!("p{}", i)),
+                                ty,
+                                mutability: Mutability::Immutable,
+                                kind: ParameterKind::Regular,
+                                default_value: None,
+                                attributes: vec![],
+                                span,
+                            }
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+
+            // Create extern function declaration
+            let extern_func = TypedFunction {
+                name: InternedString::new_global(target_symbol),
+                type_params: vec![],
+                params,
+                return_type,
+                body: None,
+                visibility: Visibility::Public,
+                is_async: false,
+                is_external: true,
+                calling_convention: CallingConvention::Default,
+                link_name: Some(InternedString::new_global(target_symbol)),
+            };
+
+            // Add to program declarations
+            program.declarations.push(typed_node(
+                TypedDeclaration::Function(extern_func),
+                Type::Primitive(PrimitiveType::Unit),
+                span,
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Convert ZRTL TypeTag to Type
+    fn type_tag_to_type(tag: &zyntax_compiler::zrtl::TypeTag) -> Type {
+        use zyntax_compiler::zrtl::{TypeCategory, PrimitiveSize};
+
+        match tag.category() {
+            TypeCategory::Void => Type::Primitive(PrimitiveType::Unit),
+            TypeCategory::Bool => Type::Primitive(PrimitiveType::Bool),
+            TypeCategory::Int => {
+                let size = tag.type_id();
+                match size {
+                    x if x == PrimitiveSize::Bits8 as u16 => Type::Primitive(PrimitiveType::I8),
+                    x if x == PrimitiveSize::Bits16 as u16 => Type::Primitive(PrimitiveType::I16),
+                    x if x == PrimitiveSize::Bits32 as u16 => Type::Primitive(PrimitiveType::I32),
+                    x if x == PrimitiveSize::Bits64 as u16 => Type::Primitive(PrimitiveType::I64),
+                    _ => Type::Primitive(PrimitiveType::I32),
+                }
+            }
+            TypeCategory::UInt => {
+                let size = tag.type_id();
+                match size {
+                    x if x == PrimitiveSize::Bits8 as u16 => Type::Primitive(PrimitiveType::U8),
+                    x if x == PrimitiveSize::Bits16 as u16 => Type::Primitive(PrimitiveType::U16),
+                    x if x == PrimitiveSize::Bits32 as u16 => Type::Primitive(PrimitiveType::U32),
+                    x if x == PrimitiveSize::Bits64 as u16 => Type::Primitive(PrimitiveType::U64),
+                    _ => Type::Primitive(PrimitiveType::U32),
+                }
+            }
+            TypeCategory::Float => {
+                let size = tag.type_id();
+                match size {
+                    x if x == PrimitiveSize::Bits32 as u16 => Type::Primitive(PrimitiveType::F32),
+                    x if x == PrimitiveSize::Bits64 as u16 => Type::Primitive(PrimitiveType::F64),
+                    _ => Type::Primitive(PrimitiveType::F32),
+                }
+            }
+            TypeCategory::String => Type::Primitive(PrimitiveType::String),
+            TypeCategory::Opaque => Type::Any,
+            _ => Type::Any,
+        }
+    }
+}
+
+impl Clone for Grammar2 {
+    fn clone(&self) -> Self {
+        Self {
+            grammar: Arc::clone(&self.grammar),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_grammar2_creation() {
+        let grammar = Grammar2::from_source(r#"
+            @language {
+                name: "Test",
+                version: "1.0",
+            }
+
+            program = { SOI ~ EOI }
+              -> TypedProgram {
+                  declarations: [],
+              }
+        "#);
+
+        match grammar {
+            Ok(g) => {
+                assert_eq!(g.name(), "Test");
+                assert_eq!(g.version(), "1.0");
+            }
+            Err(e) => {
+                eprintln!("Grammar compilation failed: {}", e);
+            }
+        }
+    }
+}

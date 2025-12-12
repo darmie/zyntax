@@ -60,6 +60,7 @@ mod array;
 mod value;
 mod runtime;
 mod grammar;
+mod grammar2;
 pub mod iterator;
 
 pub use convert::{FromZyntax, IntoZyntax, TryFromZyntax, TryIntoZyntax};
@@ -84,6 +85,7 @@ pub use runtime::{
     PromiseAllSettled, SettledResult,
 };
 pub use grammar::{LanguageGrammar, GrammarError, GrammarResult};
+pub use grammar2::{Grammar2, Grammar2Error, Grammar2Result};
 pub use iterator::{
     ZrtlIterable, ZrtlIterator,
     ZyntaxArrayIterator, ZyntaxStringCharsIterator, ZyntaxStringBytesIterator,

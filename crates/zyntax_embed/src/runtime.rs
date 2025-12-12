@@ -1995,6 +1995,40 @@ impl ZyntaxRuntime {
     pub fn has_function(&self, name: &str) -> bool {
         self.function_ids.contains_key(name)
     }
+
+    /// Get a reference to the plugin signatures
+    ///
+    /// This is useful for Grammar2 parsers that need to inject extern declarations
+    /// for builtin functions with proper type signatures.
+    pub fn plugin_signatures(&self) -> &HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig> {
+        &self.plugin_signatures
+    }
+
+    /// Compile a TypedProgram directly (without parsing)
+    ///
+    /// This is useful when using Grammar2 to parse source code directly to TypedAST,
+    /// bypassing the traditional grammar.parse() path.
+    ///
+    /// # Returns
+    ///
+    /// The names of functions defined in the module.
+    pub fn compile_typed_program(&mut self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<Vec<String>> {
+        // Lower to HIR
+        let hir_module = self.lower_typed_program(program)?;
+
+        // Collect function names before compilation
+        let function_names: Vec<String> = hir_module
+            .functions
+            .values()
+            .filter(|f| !f.is_external)
+            .filter_map(|f| f.name.resolve_global())
+            .collect();
+
+        // Compile the module
+        self.compile_module(&hir_module)?;
+
+        Ok(function_names)
+    }
 }
 
 // ============================================================================

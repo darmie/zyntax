@@ -88,20 +88,21 @@ fn main() -> Result<()> {
     }
 }
 
-/// Run an ImagePipe program
+/// Run an ImagePipe program using the new Grammar2 runtime
 fn run_pipeline(file: &PathBuf, plugins_dir: &PathBuf, verbose: bool) -> Result<()> {
-    use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+    use zyntax_embed::{ZyntaxRuntime, Grammar2};
 
     if verbose {
-        println!("Loading ImagePipe grammar...");
+        println!("Loading ImagePipe grammar (v2.0)...");
     }
 
-    // Load the grammar
+    // Load the grammar using Grammar2 (new GrammarInterpreter-based parser)
     let grammar_source = include_str!("../imagepipe.zyn");
-    let grammar = LanguageGrammar::compile_zyn(grammar_source)
+    let grammar = Grammar2::from_source(grammar_source)
         .context("Failed to compile ImagePipe grammar")?;
 
     if verbose {
+        println!("Language: {} v{}", grammar.name(), grammar.version());
         println!("Creating runtime...");
     }
 
@@ -125,38 +126,51 @@ fn run_pipeline(file: &PathBuf, plugins_dir: &PathBuf, verbose: bool) -> Result<
         }
     }
 
-    // Register grammar (returns (), not Result)
-    runtime.register_grammar("imagepipe", grammar);
-
     // Read source file
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
     if verbose {
+        println!("Parsing pipeline with Grammar2...");
+    }
+
+    // Parse directly to TypedProgram using Grammar2
+    let filename = file.to_string_lossy();
+    let typed_program = grammar.parse_with_signatures(
+        &source,
+        &filename,
+        &runtime.plugin_signatures(),
+    ).context("Failed to parse ImagePipe program")?;
+
+    if verbose {
+        println!("Parsed program with {} declarations", typed_program.declarations.len());
         println!("Compiling pipeline...");
     }
 
-    // Compile the source using the registered grammar
-    let functions = runtime.load_module("imagepipe", &source)
+    // Lower to HIR and compile
+    let function_names = runtime.compile_typed_program(typed_program)
         .context("Failed to compile ImagePipe program")?;
 
     if verbose {
-        println!("Compiled functions: {:?}", functions);
+        println!("Compiled functions: {:?}", function_names);
         println!("Running pipeline...\n");
     }
 
     // Execute the main entry point function if it exists
-    if functions.contains(&"main".to_string()) {
+    // Check for the entry point declared in the grammar first
+    let entry_point = grammar.entry_point().unwrap_or("main");
+
+    if function_names.contains(&entry_point.to_string()) {
+        runtime.call::<()>(entry_point, &[])
+            .context("Pipeline execution failed")?;
+    } else if function_names.contains(&"main".to_string()) {
         runtime.call::<()>("main", &[])
             .context("Pipeline execution failed")?;
-    } else if functions.contains(&"run_pipeline".to_string()) {
-        runtime.call::<()>("run_pipeline", &[])
-            .context("Pipeline execution failed")?;
-    } else if !functions.is_empty() {
+    } else if !function_names.is_empty() {
         // Try to call the first function as the entry point
-        let entry = &functions[0];
+        let entry = &function_names[0];
         if verbose {
-            println!("No 'main' or 'run_pipeline' function, calling '{}'", entry);
+            println!("No 'main' or '{}' function, calling '{}'", entry_point, entry);
         }
         runtime.call::<()>(entry, &[])
             .context("Pipeline execution failed")?;
@@ -173,85 +187,125 @@ fn run_pipeline(file: &PathBuf, plugins_dir: &PathBuf, verbose: bool) -> Result<
 
 /// Parse an ImagePipe program and display the AST
 fn parse_and_display(file: &PathBuf, format: &str) -> Result<()> {
-    use zyntax_embed::LanguageGrammar;
+    use zyntax_embed::Grammar2;
 
-    // Load the grammar
+    // Load the grammar using Grammar2
     let grammar_source = include_str!("../imagepipe.zyn");
-    let grammar = LanguageGrammar::compile_zyn(grammar_source)
+    let grammar = Grammar2::from_source(grammar_source)
         .context("Failed to compile ImagePipe grammar")?;
 
     // Read source file
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
-    // Parse to JSON (TypedAST representation)
-    let json = grammar.parse_to_json(&source)
+    // Parse to TypedProgram
+    let filename = file.to_string_lossy();
+    let program = grammar.parse_with_filename(&source, &filename)
         .context("Failed to parse ImagePipe program")?;
 
     match format {
         "json" => {
+            // Serialize to JSON
+            let json = serde_json::to_string_pretty(&program)
+                .context("Failed to serialize AST to JSON")?;
             println!("{}", json);
         }
         "tree" | _ => {
             // Pretty print a simplified tree view
             println!("Parsed AST for: {}\n", file.display());
-            print_ast_tree(&json)?;
+            print_typed_program_tree(&program);
         }
     }
 
     Ok(())
 }
 
-/// Print a simplified tree view of the AST
-fn print_ast_tree(json: &str) -> Result<()> {
-    // Simple tree visualization from JSON
-    // Parse using serde_json (re-exported through zyntax_embed dependencies)
-    let parsed: serde_json::Value = serde_json::from_str(json)
-        .context("Failed to parse JSON")?;
+/// Print a simplified tree view of the TypedProgram
+fn print_typed_program_tree(program: &zyntax_typed_ast::TypedProgram) {
+    use zyntax_typed_ast::{TypedDeclaration, TypedStatement, TypedExpression};
 
-    fn print_value(value: &serde_json::Value, indent: usize) {
-        let prefix = "  ".repeat(indent);
-        match value {
-            serde_json::Value::Object(map) => {
-                for (key, val) in map {
-                    if key == "kind" || key == "name" || key == "op" {
-                        if let serde_json::Value::String(s) = val {
-                            println!("{}{}: {}", prefix, key, s);
+    println!("TypedProgram:");
+    println!("  declarations: {} total", program.declarations.len());
+
+    for (i, decl) in program.declarations.iter().enumerate() {
+        println!("  [{}]:", i);
+        match &decl.node {
+            TypedDeclaration::Function(func) => {
+                let name = func.name.resolve_global().unwrap_or_else(|| "<unknown>".to_string());
+                println!("    Function: {}", name);
+                println!("      return_type: {:?}", func.return_type);
+
+                if let Some(ref body) = func.body {
+                    println!("      body: {} statements", body.statements.len());
+
+                    for (j, stmt) in body.statements.iter().enumerate() {
+                        print!("        [{j}] ");
+                        match &stmt.node {
+                            TypedStatement::Let(let_stmt) => {
+                                let var_name = let_stmt.name.resolve_global().unwrap_or_else(|| "<unknown>".to_string());
+                                println!("Let {} : {:?}", var_name, let_stmt.ty);
+                            }
+                            TypedStatement::Expression(expr) => {
+                                match &expr.node {
+                                    TypedExpression::Call(call) => {
+                                        let callee_name = match &call.callee.node {
+                                            TypedExpression::Variable(name) => {
+                                                name.resolve_global().unwrap_or_else(|| "<expr>".to_string())
+                                            }
+                                            _ => "<expr>".to_string(),
+                                        };
+                                        println!("Call {}(...) [{} args]",
+                                            callee_name,
+                                            call.positional_args.len()
+                                        );
+                                    }
+                                    TypedExpression::Binary(bin) => {
+                                        println!("Binary {:?}", bin.op);
+                                    }
+                                    TypedExpression::Literal(lit) => {
+                                        println!("Literal {:?}", lit);
+                                    }
+                                    other => {
+                                        println!("{:?}", std::mem::discriminant(other));
+                                    }
+                                }
+                            }
+                            TypedStatement::Return(ret) => {
+                                if let Some(ref expr) = ret {
+                                    println!("Return {:?}", std::mem::discriminant(&expr.node));
+                                } else {
+                                    println!("Return (void)");
+                                }
+                            }
+                            other => {
+                                println!("{:?}", std::mem::discriminant(other));
+                            }
                         }
-                    } else if key == "children" || key == "body" || key == "statements" {
-                        println!("{}{}:", prefix, key);
-                        print_value(val, indent + 1);
-                    } else if matches!(val, serde_json::Value::Object(_) | serde_json::Value::Array(_)) {
-                        println!("{}{}:", prefix, key);
-                        print_value(val, indent + 1);
                     }
                 }
             }
-            serde_json::Value::Array(arr) => {
-                for (i, item) in arr.iter().enumerate() {
-                    println!("{}[{}]:", prefix, i);
-                    print_value(item, indent + 1);
-                }
+            TypedDeclaration::Variable(var_decl) => {
+                let name = var_decl.name.resolve_global().unwrap_or_else(|| "<unknown>".to_string());
+                println!("    Variable: {}", name);
             }
-            _ => {}
+            other => {
+                println!("    {:?}", std::mem::discriminant(other));
+            }
         }
     }
-
-    print_value(&parsed, 0);
-    Ok(())
 }
 
 /// Run an interactive REPL
 fn run_repl(plugins_dir: &PathBuf) -> Result<()> {
     use std::io::{self, BufRead, Write};
-    use zyntax_embed::{ZyntaxRuntime, LanguageGrammar};
+    use zyntax_embed::{ZyntaxRuntime, Grammar2};
 
-    println!("ImagePipe REPL v1.0");
+    println!("ImagePipe REPL v2.0 (Grammar2 backend)");
     println!("Type 'help' for available commands, 'exit' to quit\n");
 
-    // Load grammar
+    // Load grammar using Grammar2
     let grammar_source = include_str!("../imagepipe.zyn");
-    let grammar = LanguageGrammar::compile_zyn(grammar_source)
+    let grammar = Grammar2::from_source(grammar_source)
         .context("Failed to compile ImagePipe grammar")?;
 
     // Create runtime with plugins
@@ -264,9 +318,6 @@ fn run_repl(plugins_dir: &PathBuf) -> Result<()> {
             runtime.load_plugin(&plugin_path).ok();
         }
     }
-
-    // Register grammar (returns (), not Result)
-    runtime.register_grammar("imagepipe", grammar);
 
     // Track loaded images
     let mut current_image: Option<String> = None;
@@ -304,7 +355,7 @@ fn run_repl(plugins_dir: &PathBuf) -> Result<()> {
                 // Parse: load "path" as name
                 let rest = line.strip_prefix("load ").unwrap();
                 let program = format!("{}\n", line);
-                match compile_and_run(&mut runtime, &program) {
+                match compile_and_run_v2(&mut runtime, &grammar, &program) {
                     Ok(()) => {
                         // Extract variable name
                         if let Some(pos) = rest.find(" as ") {
@@ -318,7 +369,7 @@ fn run_repl(plugins_dir: &PathBuf) -> Result<()> {
             }
             _ if line.starts_with("save ") => {
                 let program = format!("{}\n", line);
-                match compile_and_run(&mut runtime, &program) {
+                match compile_and_run_v2(&mut runtime, &grammar, &program) {
                     Ok(()) => println!("Image saved"),
                     Err(e) => eprintln!("Error: {}", e),
                 }
@@ -337,7 +388,7 @@ fn run_repl(plugins_dir: &PathBuf) -> Result<()> {
                         break;
                     }
                 }
-                match compile_and_run(&mut runtime, &program) {
+                match compile_and_run_v2(&mut runtime, &grammar, &program) {
                     Ok(()) => println!("Pipeline applied"),
                     Err(e) => eprintln!("Error: {}", e),
                 }
@@ -349,7 +400,7 @@ fn run_repl(plugins_dir: &PathBuf) -> Result<()> {
                         "pipeline {} {{\n    {}\n}}\n",
                         img_name, line
                     );
-                    match compile_and_run(&mut runtime, &program) {
+                    match compile_and_run_v2(&mut runtime, &grammar, &program) {
                         Ok(()) => println!("Operation applied"),
                         Err(e) => eprintln!("Error: {}", e),
                     }
@@ -363,11 +414,20 @@ fn run_repl(plugins_dir: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn compile_and_run(
+fn compile_and_run_v2(
     runtime: &mut zyntax_embed::ZyntaxRuntime,
+    grammar: &zyntax_embed::Grammar2,
     source: &str,
 ) -> Result<()> {
-    let functions = runtime.load_module("imagepipe", source)
+    // Parse to TypedProgram using Grammar2
+    let typed_program = grammar.parse_with_signatures(
+        source,
+        "repl.imgpipe",
+        &runtime.plugin_signatures(),
+    ).context("Parse failed")?;
+
+    // Compile and run
+    let functions = runtime.compile_typed_program(typed_program)
         .context("Compilation failed")?;
 
     // Try to find an entry point to run
