@@ -366,7 +366,11 @@ impl<'g> GrammarInterpreter<'g> {
             TypedExpression::Literal(TypedLiteral::Float(_)) => Type::Primitive(PrimitiveType::F32),
             TypedExpression::Literal(TypedLiteral::String(_)) => Type::Primitive(PrimitiveType::String),
             TypedExpression::Literal(TypedLiteral::Bool(_)) => Type::Primitive(PrimitiveType::Bool),
-            _ => Type::Primitive(PrimitiveType::Unit), // Default, would need type inference
+            // Call and Variable expressions need type inference from callee/declaration
+            // Use Type::Any to signal that lowering should infer the type
+            TypedExpression::Call(_) => Type::Any,
+            TypedExpression::Variable(_) => Type::Any,
+            _ => Type::Primitive(PrimitiveType::Unit),
         };
 
         Ok(ParsedValue::Expression(Box::new(typed_node(expr, ty, span))))

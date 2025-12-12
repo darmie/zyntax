@@ -693,15 +693,17 @@ zrtl_plugin! {
         // Loading/Saving (with signatures)
         // Functions with opaque params (StringPtr/ArrayPtr) use dynamic boxing
         // image_load(path: StringPtr) -> u64 (handle)
-        ("$Image$load", image_load, dynamic(1) -> void),
+        // StringPtr is an i64 (pointer)
+        ("$Image$load", image_load, (i64) -> u64),
         // image_load_bytes(data: ArrayPtr) -> u64
         ("$Image$load_bytes", image_load_bytes, dynamic(1) -> void),
         // image_load_bytes_format(data: ArrayPtr, format: i32) -> u64
         ("$Image$load_bytes_format", image_load_bytes_format, dynamic(2) -> void),
-        // image_save(handle: u64, path: StringPtr) -> void
-        ("$Image$save", image_save, dynamic(2) -> void),
+        // image_save(handle: u64, path: StringPtr) -> i32 (returns 0 on success, -1 on error)
+        // Use i64 for both since StringPtr is a pointer
+        ("$Image$save", image_save, (u64, i64) -> i32),
         // image_save_format(handle: u64, path: StringPtr, format: i32) -> i32
-        ("$Image$save_format", image_save_format, dynamic(3) -> void),
+        ("$Image$save_format", image_save_format, (u64, i64, i32) -> i32),
         // image_encode(handle: u64, format: i32) -> ArrayPtr
         ("$Image$encode", image_encode, dynamic(2) -> dynamic),
         // image_encode_png(handle: u64) -> ArrayPtr
