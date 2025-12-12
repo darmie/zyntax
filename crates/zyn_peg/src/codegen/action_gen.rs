@@ -88,6 +88,14 @@ impl ActionGenerator {
                 }
                 self.line("}");
             }
+
+            ActionIR::LegacyJson { return_type, json_content } => {
+                // For legacy JSON actions, we generate a comment and placeholder
+                // The actual execution uses the runtime interpreter
+                self.line(&format!("// Legacy JSON action for {}", return_type));
+                self.line(&format!("// JSON: {{{}}}", json_content.trim()));
+                self.line("unimplemented!(\"Legacy JSON actions require runtime interpreter\")");
+            }
         }
     }
 

@@ -539,6 +539,17 @@ impl<'a> GrammarParser<'a> {
         self.expect_char('{')?;
         self.skip_ws_and_comments();
 
+        // Check if this is legacy JSON syntax (starts with quoted string key)
+        if self.peek_char() == Some('"') {
+            // Legacy JSON action - capture everything until matching closing brace
+            let json_content = self.parse_json_block_content()?;
+            self.expect_char('}')?;
+            return Ok((ActionIR::LegacyJson {
+                return_type: return_type.clone(),
+                json_content,
+            }, return_type));
+        }
+
         let mut fields = Vec::new();
 
         while self.peek_char() != Some('}') {
@@ -563,6 +574,60 @@ impl<'a> GrammarParser<'a> {
             type_path: return_type.clone(),
             fields,
         }, return_type))
+    }
+
+    /// Parse the content of a JSON action block (legacy format)
+    /// This captures everything between { and the matching }
+    fn parse_json_block_content(&mut self) -> ParseResult<String> {
+        let start = self.pos;
+        let mut depth = 0;
+
+        loop {
+            match self.peek_char() {
+                Some('{') => {
+                    depth += 1;
+                    self.advance();
+                }
+                Some('}') => {
+                    if depth == 0 {
+                        // Found the closing brace of the outer block
+                        let content = self.input[start..self.pos].to_string();
+                        return Ok(content);
+                    }
+                    depth -= 1;
+                    self.advance();
+                }
+                Some('"') => {
+                    // Skip string literals (they might contain braces)
+                    self.advance();
+                    while let Some(c) = self.peek_char() {
+                        if c == '"' {
+                            self.advance();
+                            break;
+                        }
+                        if c == '\\' {
+                            self.advance();
+                            self.advance(); // Skip escaped char
+                        } else {
+                            self.advance();
+                        }
+                    }
+                }
+                Some('[') => {
+                    // Array - just advance
+                    self.advance();
+                }
+                Some(']') => {
+                    self.advance();
+                }
+                Some(_) => {
+                    self.advance();
+                }
+                None => {
+                    return Err(self.error("Unexpected EOF in JSON block"));
+                }
+            }
+        }
     }
 
     /// Parse a type path like TypedExpression::Binary
@@ -1041,9 +1106,9 @@ impl<'a> GrammarParser<'a> {
 
         // Rest is identifier-like or operator chars
         if name.starts_with('$') {
-            // Operator: can include things like *, +, etc.
+            // Operator: can include things like *, +, @, etc.
             while let Some(c) = self.peek_char() {
-                if c.is_ascii_alphanumeric() || "*+-/<>=!".contains(c) {
+                if c.is_ascii_alphanumeric() || "*+-/<>=!@%^&|".contains(c) {
                     name.push(c);
                     self.advance();
                 } else {
@@ -1388,6 +1453,71 @@ mod tests {
                 assert!(max.is_none());
             }
             _ => panic!("Expected Repeat pattern"),
+        }
+    }
+
+    #[test]
+    fn test_parse_imagepipe_grammar() {
+        let input = include_str!("../../../../examples/imagepipe/imagepipe.zyn");
+
+        match parse_grammar(input) {
+            Ok(grammar) => {
+                println!("Successfully parsed ImagePipe grammar!");
+                println!("Language: {} v{}", grammar.metadata.name, grammar.metadata.version);
+                println!("Rules: {}", grammar.rules.len());
+                for (name, _rule) in &grammar.rules {
+                    println!("  - {}", name);
+                }
+
+                // Verify key metadata
+                assert_eq!(grammar.metadata.name, "ImagePipe");
+                assert_eq!(grammar.metadata.version, "1.0");
+
+                // Verify key rules exist
+                assert!(grammar.rules.contains_key("program"));
+                assert!(grammar.rules.contains_key("statement"));
+                assert!(grammar.rules.contains_key("load_stmt"));
+                assert!(grammar.rules.contains_key("save_stmt"));
+                assert!(grammar.rules.contains_key("identifier"));
+            }
+            Err(e) => {
+                panic!("Failed to parse ImagePipe grammar: {:?}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_zynml_grammar() {
+        let input = include_str!("../../../zynml/ml.zyn");
+
+        match parse_grammar(input) {
+            Ok(grammar) => {
+                println!("Successfully parsed ZynML grammar!");
+                println!("Language: {} v{}", grammar.metadata.name, grammar.metadata.version);
+                println!("Rules: {}", grammar.rules.len());
+
+                // Verify key metadata
+                assert_eq!(grammar.metadata.name, "ZynML");
+                assert_eq!(grammar.metadata.version, "1.0");
+
+                // Verify key rules exist
+                assert!(grammar.rules.contains_key("program"));
+                assert!(grammar.rules.contains_key("fn_def"));
+                assert!(grammar.rules.contains_key("expr"));
+                assert!(grammar.rules.contains_key("statement"));
+                assert!(grammar.rules.contains_key("identifier"));
+
+                // Print a few rule names
+                let mut rule_names: Vec<_> = grammar.rules.keys().collect();
+                rule_names.sort();
+                println!("Sample rules:");
+                for name in rule_names.iter().take(20) {
+                    println!("  - {}", name);
+                }
+            }
+            Err(e) => {
+                panic!("Failed to parse ZynML grammar: {:?}", e);
+            }
         }
     }
 }

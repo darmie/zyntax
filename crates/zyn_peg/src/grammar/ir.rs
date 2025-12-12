@@ -223,6 +223,21 @@ pub enum ActionIR {
         then_action: Box<ActionIR>,
         else_action: Option<Box<ActionIR>>,
     },
+
+    /// Legacy JSON command syntax (for backwards compatibility)
+    /// ```zyn
+    /// -> TypedStatement {
+    ///     "commands": [
+    ///         { "define": "let_stmt", "args": { "name": "$1", ... }}
+    ///     ]
+    /// }
+    /// ```
+    LegacyJson {
+        /// The return type (e.g., "TypedStatement")
+        return_type: String,
+        /// Raw JSON content as string
+        json_content: String,
+    },
 }
 
 /// Expression IR for action code
