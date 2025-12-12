@@ -9,9 +9,15 @@
 //! For production use, the code generator (`codegen::ParserGenerator`) should
 //! be used instead as it produces more efficient compiled code.
 
-use crate::grammar::{GrammarIR, RuleIR, PatternIR, ActionIR, CharClass, RuleModifier};
+use crate::grammar::{GrammarIR, RuleIR, PatternIR, ActionIR, ExprIR, CharClass, RuleModifier};
 use super::state::{ParserState, ParseResult, ParsedValue, ParseFailure};
 use std::collections::HashMap;
+use zyntax_typed_ast::{
+    TypedNode, TypedStatement, TypedExpression, TypedLiteral, TypedBlock,
+    TypedDeclaration, TypedFunction, TypedLet, TypedCall, TypedProgram,
+    typed_node, Span,
+    type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention},
+};
 
 /// Runtime interpreter for GrammarIR
 pub struct GrammarInterpreter<'g> {
@@ -67,18 +73,962 @@ impl<'g> GrammarInterpreter<'g> {
 
         match result {
             ParseResult::Success(value, pos) => {
-                // For atomic rules, capture the text
-                if rule.modifier == Some(RuleModifier::Atomic) {
+                // For atomic rules, capture the text and bind it so text() can access it
+                let parsed_value = if rule.modifier == Some(RuleModifier::Atomic) {
                     let text = state.slice(start_pos, pos).to_string();
-                    ParseResult::Success(ParsedValue::Text(text), pos)
+                    // Bind the captured text to a special name for text() helper
+                    state.set_binding("__text__", ParsedValue::Text(text.clone()));
+                    ParsedValue::Text(text)
                 } else {
-                    ParseResult::Success(value, pos)
+                    value
+                };
+
+                // Execute action if present
+                if let Some(ref action) = rule.action {
+                    let span = Span::new(start_pos, pos);
+                    match self.execute_action(action, state, span) {
+                        Ok(result) => ParseResult::Success(result, pos),
+                        Err(e) => state.fail(&e),
+                    }
+                } else {
+                    ParseResult::Success(parsed_value, pos)
                 }
             }
             ParseResult::Failure(e) => {
                 state.set_pos(start_pos);
                 ParseResult::Failure(e)
             }
+        }
+    }
+
+    /// Execute an action to construct a TypedAST node
+    fn execute_action<'a>(
+        &self,
+        action: &ActionIR,
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        match action {
+            ActionIR::PassThrough { binding } => {
+                // Simply return the bound value
+                state.get_binding(binding)
+                    .cloned()
+                    .ok_or_else(|| format!("binding '{}' not found", binding))
+            }
+
+            ActionIR::Construct { type_path, fields } => {
+                self.execute_construct(type_path, fields, state, span)
+            }
+
+            ActionIR::HelperCall { function, args } => {
+                self.execute_helper_call(function, args, state, span)
+            }
+
+            ActionIR::Match { binding, cases } => {
+                let value = state.get_binding(binding)
+                    .ok_or_else(|| format!("binding '{}' not found", binding))?;
+
+                let text = match value {
+                    ParsedValue::Text(s) => s.clone(),
+                    _ => return Err(format!("match binding '{}' is not text", binding)),
+                };
+
+                for (pattern, action) in cases {
+                    if text == *pattern {
+                        return self.execute_action(action, state, span);
+                    }
+                }
+                Err(format!("no match case for '{}'", text))
+            }
+
+            ActionIR::Conditional { condition, then_action, else_action } => {
+                let cond_val = self.eval_expr(condition, state)?;
+                let is_true = match cond_val {
+                    ParsedValue::Bool(b) => b,
+                    ParsedValue::Optional(opt) => opt.is_some(),
+                    _ => return Err("condition must evaluate to bool".to_string()),
+                };
+
+                if is_true {
+                    self.execute_action(then_action, state, span)
+                } else if let Some(else_act) = else_action {
+                    self.execute_action(else_act, state, span)
+                } else {
+                    Ok(ParsedValue::None)
+                }
+            }
+
+            ActionIR::LegacyJson { return_type, json_content } => {
+                // Legacy JSON actions are not executed - they require codegen
+                Err(format!(
+                    "legacy JSON action for '{}' requires code generation, not runtime interpretation",
+                    return_type
+                ))
+            }
+        }
+    }
+
+    /// Execute a Construct action to build a TypedAST node
+    fn execute_construct<'a>(
+        &self,
+        type_path: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        // Parse the type path (e.g., "TypedStatement::Let", "TypedExpression::Call")
+        let parts: Vec<&str> = type_path.split("::").collect();
+
+        match parts.as_slice() {
+            ["TypedStatement", variant] => {
+                self.construct_statement(variant, fields, state, span)
+            }
+            ["TypedExpression", variant] => {
+                self.construct_expression(variant, fields, state, span)
+            }
+            ["TypedDeclaration", variant] => {
+                self.construct_declaration(variant, fields, state, span)
+            }
+            ["TypedProgram"] => {
+                self.construct_program(fields, state, span)
+            }
+            ["TypedBlock"] => {
+                self.construct_block(fields, state, span)
+            }
+            ["Type", variant] => {
+                self.construct_type(variant, fields, state, span)
+            }
+            ["Box", "new"] | ["Box"] => {
+                // Box::new(expr) - just return the inner expression
+                // Fields should have a single entry for the inner value
+                if let Some((_, expr)) = fields.first() {
+                    self.eval_expr(expr, state)
+                } else {
+                    Ok(ParsedValue::None)
+                }
+            }
+            ["Some"] => {
+                // Some(value) - wrap in Optional
+                if let Some((_, expr)) = fields.first() {
+                    let inner = self.eval_expr(expr, state)?;
+                    Ok(ParsedValue::Optional(Some(Box::new(inner))))
+                } else {
+                    Ok(ParsedValue::Optional(None))
+                }
+            }
+            _ => Err(format!("unknown type path: {}", type_path)),
+        }
+    }
+
+    /// Construct a TypedBlock
+    fn construct_block<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let statements = if let Some(expr) = self.get_field("statements", fields) {
+            let val = self.eval_expr(expr, state)?;
+            match val {
+                ParsedValue::List(items) => {
+                    items.into_iter()
+                        .map(|item| self.parsed_value_to_stmt(item))
+                        .collect::<Result<Vec<_>, _>>()?
+                }
+                ParsedValue::Statement(s) => vec![*s],
+                ParsedValue::None => vec![],
+                _ => vec![],
+            }
+        } else {
+            vec![]
+        };
+
+        Ok(ParsedValue::Block(TypedBlock { statements, span }))
+    }
+
+    /// Construct a TypedStatement variant
+    fn construct_statement<'a>(
+        &self,
+        variant: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let stmt = match variant {
+            "Let" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let type_annotation = self.get_field_optional("type_annotation", fields, state)?;
+                let initializer = self.get_field_optional_expr("initializer", fields, state)?;
+                let is_mutable = self.get_field_as_bool("is_mutable", fields, state).unwrap_or(false);
+
+                let ty = type_annotation.unwrap_or(Type::Primitive(PrimitiveType::I32));
+                let mutability = if is_mutable { Mutability::Mutable } else { Mutability::Immutable };
+
+                TypedStatement::Let(TypedLet {
+                    name,
+                    ty,
+                    mutability,
+                    initializer: initializer.map(Box::new),
+                    span,
+                })
+            }
+            "Expression" => {
+                let expr = self.get_field_as_expr("expr", fields, state)?;
+                TypedStatement::Expression(Box::new(expr))
+            }
+            "Assignment" => {
+                // Assignment is typically represented as an Expression with Binary Assign
+                let target = self.get_field_as_expr("target", fields, state)?;
+                let value = self.get_field_as_expr("value", fields, state)?;
+
+                let assign_expr = typed_node(
+                    TypedExpression::Binary(zyntax_typed_ast::TypedBinary {
+                        op: zyntax_typed_ast::BinaryOp::Assign,
+                        left: Box::new(target),
+                        right: Box::new(value),
+                    }),
+                    Type::Primitive(PrimitiveType::Unit),
+                    span,
+                );
+                TypedStatement::Expression(Box::new(assign_expr))
+            }
+            "Return" => {
+                let value = self.get_field_optional_expr("value", fields, state)?;
+                TypedStatement::Return(value.map(Box::new))
+            }
+            _ => return Err(format!("unknown TypedStatement variant: {}", variant)),
+        };
+
+        Ok(ParsedValue::Statement(Box::new(typed_node(
+            stmt,
+            Type::Primitive(PrimitiveType::Unit),
+            span,
+        ))))
+    }
+
+    /// Construct a TypedExpression variant
+    fn construct_expression<'a>(
+        &self,
+        variant: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let expr = match variant {
+            "IntLiteral" => {
+                let value = self.get_field_as_int("value", fields, state)?;
+                TypedExpression::Literal(TypedLiteral::Integer(value as i128))
+            }
+            "FloatLiteral" => {
+                let value = self.get_field_as_float("value", fields, state)?;
+                TypedExpression::Literal(TypedLiteral::Float(value))
+            }
+            "StringLiteral" => {
+                let value = self.get_field_as_string("value", fields, state)?;
+                // Strip quotes from string literal
+                let unquoted = value.trim_matches('"').to_string();
+                let interned = state.intern(&unquoted);
+                TypedExpression::Literal(TypedLiteral::String(interned))
+            }
+            "Variable" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                TypedExpression::Variable(name)
+            }
+            "Call" => {
+                let callee = self.get_field_as_expr("callee", fields, state)?;
+                let args = self.get_field_as_expr_list("args", fields, state)?;
+
+                TypedExpression::Call(TypedCall {
+                    callee: Box::new(callee),
+                    positional_args: args,
+                    named_args: vec![],
+                    type_args: vec![],
+                })
+            }
+            "Binary" => {
+                let left = self.get_field_as_expr("left", fields, state)?;
+                let right = self.get_field_as_expr("right", fields, state)?;
+                let op = self.get_field_as_string("op", fields, state)?;
+
+                let binary_op = self.string_to_binary_op(&op)?;
+                TypedExpression::Binary(zyntax_typed_ast::TypedBinary {
+                    op: binary_op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                })
+            }
+            _ => return Err(format!("unknown TypedExpression variant: {}", variant)),
+        };
+
+        // Determine the type based on the expression variant
+        let ty = match &expr {
+            TypedExpression::Literal(TypedLiteral::Integer(_)) => Type::Primitive(PrimitiveType::I32),
+            TypedExpression::Literal(TypedLiteral::Float(_)) => Type::Primitive(PrimitiveType::F32),
+            TypedExpression::Literal(TypedLiteral::String(_)) => Type::Primitive(PrimitiveType::String),
+            TypedExpression::Literal(TypedLiteral::Bool(_)) => Type::Primitive(PrimitiveType::Bool),
+            _ => Type::Primitive(PrimitiveType::Unit), // Default, would need type inference
+        };
+
+        Ok(ParsedValue::Expression(Box::new(typed_node(expr, ty, span))))
+    }
+
+    /// Construct a TypedDeclaration variant
+    fn construct_declaration<'a>(
+        &self,
+        variant: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let decl = match variant {
+            "Function" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let params = vec![]; // TODO: parse params from fields
+                let return_type = self.get_field_optional("return_type", fields, state)?
+                    .unwrap_or(Type::Primitive(PrimitiveType::Unit));
+                let body = self.get_field_optional_block("body", fields, state)?;
+
+                TypedDeclaration::Function(TypedFunction {
+                    name,
+                    type_params: vec![],
+                    params,
+                    return_type,
+                    body,
+                    visibility: Visibility::Public,
+                    is_async: false,
+                    is_external: false,
+                    calling_convention: CallingConvention::Default,
+                    link_name: None,
+                })
+            }
+            _ => return Err(format!("unknown TypedDeclaration variant: {}", variant)),
+        };
+
+        Ok(ParsedValue::Declaration(Box::new(typed_node(
+            decl,
+            Type::Never,
+            span,
+        ))))
+    }
+
+    /// Construct a TypedProgram
+    fn construct_program<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let declarations = self.get_field_as_decl_list("declarations", fields, state)?;
+
+        Ok(ParsedValue::Program(Box::new(TypedProgram {
+            declarations,
+            span,
+            source_files: vec![],
+            type_registry: zyntax_typed_ast::type_registry::TypeRegistry::new(),
+        })))
+    }
+
+    /// Construct a Type variant
+    fn construct_type<'a>(
+        &self,
+        variant: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        _span: Span,
+    ) -> Result<ParsedValue, String> {
+        let ty = match variant {
+            "Unit" => Type::Primitive(PrimitiveType::Unit),
+            "Named" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                Type::Unresolved(name)
+            }
+            _ => return Err(format!("unknown Type variant: {}", variant)),
+        };
+
+        Ok(ParsedValue::Type(ty))
+    }
+
+    /// Execute a helper function call
+    fn execute_helper_call<'a>(
+        &self,
+        function: &str,
+        args: &[ExprIR],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        match function {
+            "intern" => {
+                if args.len() != 1 {
+                    return Err("intern() requires exactly 1 argument".to_string());
+                }
+                let text = self.eval_expr_as_string(&args[0], state)?;
+                let interned = state.intern(&text);
+                Ok(ParsedValue::Interned(interned))
+            }
+            "parse_int" => {
+                if args.len() != 1 {
+                    return Err("parse_int() requires exactly 1 argument".to_string());
+                }
+                let text = self.eval_expr_as_string(&args[0], state)?;
+                let value: i64 = text.parse()
+                    .map_err(|_| format!("cannot parse '{}' as integer", text))?;
+                Ok(ParsedValue::Int(value))
+            }
+            "parse_float" => {
+                if args.len() != 1 {
+                    return Err("parse_float() requires exactly 1 argument".to_string());
+                }
+                let text = self.eval_expr_as_string(&args[0], state)?;
+                let value: f64 = text.parse()
+                    .map_err(|_| format!("cannot parse '{}' as float", text))?;
+                Ok(ParsedValue::Float(value))
+            }
+            "text" => {
+                // Get the text of the current match (typically used in atomic rules)
+                // The text is bound to __text__ for atomic rules
+                if args.is_empty() {
+                    // Return the captured text from atomic rule
+                    Ok(state.get_binding("__text__")
+                        .cloned()
+                        .unwrap_or(ParsedValue::Text(String::new())))
+                } else {
+                    self.eval_expr(&args[0], state)
+                }
+            }
+            _ => Err(format!("unknown helper function: {}", function)),
+        }
+    }
+
+    /// Evaluate an expression IR to a ParsedValue
+    fn eval_expr<'a>(
+        &self,
+        expr: &ExprIR,
+        state: &mut ParserState<'a>,
+    ) -> Result<ParsedValue, String> {
+        match expr {
+            ExprIR::Binding(name) => {
+                state.get_binding(name)
+                    .cloned()
+                    .ok_or_else(|| format!("binding '{}' not found", name))
+            }
+            ExprIR::StringLit(s) => Ok(ParsedValue::Text(s.clone())),
+            ExprIR::IntLit(i) => Ok(ParsedValue::Int(*i)),
+            ExprIR::BoolLit(b) => Ok(ParsedValue::Bool(*b)),
+            ExprIR::List(items) => {
+                let values: Result<Vec<_>, _> = items.iter()
+                    .map(|item| self.eval_expr(item, state))
+                    .collect();
+                Ok(ParsedValue::List(values?))
+            }
+            ExprIR::FunctionCall { function, args } => {
+                let span = Span::new(0, 0); // Dummy span for helper calls
+                self.execute_helper_call(function, args, state, span)
+            }
+            ExprIR::MethodCall { receiver, method, args } => {
+                let recv_val = self.eval_expr(receiver, state)?;
+                match method.as_str() {
+                    "unwrap_or_default" | "unwrap_or" => {
+                        match recv_val {
+                            ParsedValue::Optional(Some(inner)) => Ok(*inner),
+                            ParsedValue::Optional(None) => {
+                                if args.is_empty() {
+                                    Ok(ParsedValue::None)
+                                } else {
+                                    self.eval_expr(&args[0], state)
+                                }
+                            }
+                            other => Ok(other),
+                        }
+                    }
+                    "is_some" => {
+                        match recv_val {
+                            ParsedValue::Optional(opt) => Ok(ParsedValue::Bool(opt.is_some())),
+                            _ => Ok(ParsedValue::Bool(true)),
+                        }
+                    }
+                    _ => Err(format!("unknown method: {}", method)),
+                }
+            }
+            ExprIR::FieldAccess { base, field } => {
+                let base_val = self.eval_expr(base, state)?;
+                // For now, just return the field name as we don't have struct fields
+                Err(format!("field access not supported: {}", field))
+            }
+            ExprIR::Intern(inner) => {
+                let text = self.eval_expr_as_string(inner, state)?;
+                let interned = state.intern(&text);
+                Ok(ParsedValue::Interned(interned))
+            }
+            ExprIR::Text(inner) => {
+                // Get text representation of a value
+                let val = self.eval_expr(inner, state)?;
+                match val {
+                    ParsedValue::Text(s) => Ok(ParsedValue::Text(s)),
+                    ParsedValue::Int(i) => Ok(ParsedValue::Text(i.to_string())),
+                    ParsedValue::Float(f) => Ok(ParsedValue::Text(f.to_string())),
+                    ParsedValue::Bool(b) => Ok(ParsedValue::Text(b.to_string())),
+                    _ => Err("cannot convert to text".to_string()),
+                }
+            }
+            ExprIR::IsSome(inner) => {
+                let val = self.eval_expr(inner, state)?;
+                match val {
+                    ParsedValue::Optional(opt) => Ok(ParsedValue::Bool(opt.is_some())),
+                    _ => Ok(ParsedValue::Bool(true)),
+                }
+            }
+            ExprIR::StructLit { type_name, fields } => {
+                // Construct a TypedAST node based on type_name
+                let span = Span::new(0, 0);
+                self.execute_construct(type_name, fields, state, span)
+            }
+            ExprIR::EnumVariant { type_name, variant, value } => {
+                // Handle enum variants like Type::Named, Some(x), None, Box::new(x)
+                let span = Span::new(0, 0);
+
+                if let Some(val_expr) = value {
+                    // Variant with value
+                    match (type_name.as_str(), variant.as_str()) {
+                        ("Option" | "Some", _) | (_, "Some") => {
+                            let inner = self.eval_expr(val_expr, state)?;
+                            Ok(ParsedValue::Optional(Some(Box::new(inner))))
+                        }
+                        ("Box", "new") => {
+                            // Box::new(expr) - just evaluate the inner expression
+                            // The Box is transparent at the value level
+                            self.eval_expr(val_expr, state)
+                        }
+                        _ => {
+                            // For other variants, try constructing them
+                            let full_path = format!("{}::{}", type_name, variant);
+                            self.execute_construct(&full_path, &[], state, span)
+                        }
+                    }
+                } else {
+                    // Variant without value
+                    match variant.as_str() {
+                        "None" => Ok(ParsedValue::Optional(None)),
+                        _ => {
+                            let full_path = format!("{}::{}", type_name, variant);
+                            self.execute_construct(&full_path, &[], state, span)
+                        }
+                    }
+                }
+            }
+            ExprIR::Default(type_name) => {
+                // Return default value for a type
+                match type_name.as_str() {
+                    "Vec" | "[]" => Ok(ParsedValue::List(vec![])),
+                    "String" => Ok(ParsedValue::Text(String::new())),
+                    "i64" | "i32" => Ok(ParsedValue::Int(0)),
+                    "f64" | "f32" => Ok(ParsedValue::Float(0.0)),
+                    "bool" => Ok(ParsedValue::Bool(false)),
+                    _ => Ok(ParsedValue::None),
+                }
+            }
+            ExprIR::UnwrapOr { optional, default } => {
+                let opt_val = self.eval_expr(optional, state)?;
+                match opt_val {
+                    ParsedValue::Optional(Some(inner)) => Ok(*inner),
+                    ParsedValue::Optional(None) => self.eval_expr(default, state),
+                    other => Ok(other),
+                }
+            }
+            ExprIR::MapOption { optional, param, body } => {
+                let opt_val = self.eval_expr(optional, state)?;
+                match opt_val {
+                    ParsedValue::Optional(Some(inner)) => {
+                        // Temporarily bind the parameter
+                        let old_binding = state.get_binding(param).cloned();
+                        state.set_binding(param, *inner);
+                        let result = self.eval_expr(body, state)?;
+                        // Restore old binding
+                        if let Some(old) = old_binding {
+                            state.set_binding(param, old);
+                        }
+                        Ok(ParsedValue::Optional(Some(Box::new(result))))
+                    }
+                    ParsedValue::Optional(None) => Ok(ParsedValue::Optional(None)),
+                    _ => Err("map_option requires Optional value".to_string()),
+                }
+            }
+            ExprIR::Cast { expr, target_type } => {
+                // For now, just evaluate the expression
+                self.eval_expr(expr, state)
+            }
+            ExprIR::GetSpan(_) => {
+                // Return a dummy span for now
+                Ok(ParsedValue::Span(Span::new(0, 0)))
+            }
+            ExprIR::Binary { left, op, right } => {
+                let l = self.eval_expr(left, state)?;
+                let r = self.eval_expr(right, state)?;
+
+                // Handle basic binary operations
+                match (l, op.as_str(), r) {
+                    (ParsedValue::Int(a), "+", ParsedValue::Int(b)) => Ok(ParsedValue::Int(a + b)),
+                    (ParsedValue::Int(a), "-", ParsedValue::Int(b)) => Ok(ParsedValue::Int(a - b)),
+                    (ParsedValue::Int(a), "*", ParsedValue::Int(b)) => Ok(ParsedValue::Int(a * b)),
+                    (ParsedValue::Int(a), "/", ParsedValue::Int(b)) => Ok(ParsedValue::Int(a / b)),
+                    (ParsedValue::Int(a), "==", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a == b)),
+                    (ParsedValue::Int(a), "!=", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a != b)),
+                    (ParsedValue::Int(a), "<", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a < b)),
+                    (ParsedValue::Int(a), ">", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a > b)),
+                    (ParsedValue::Bool(a), "&&", ParsedValue::Bool(b)) => Ok(ParsedValue::Bool(a && b)),
+                    (ParsedValue::Bool(a), "||", ParsedValue::Bool(b)) => Ok(ParsedValue::Bool(a || b)),
+                    _ => Err(format!("unsupported binary operation: {}", op)),
+                }
+            }
+        }
+    }
+
+    /// Evaluate expression as string
+    fn eval_expr_as_string<'a>(
+        &self,
+        expr: &ExprIR,
+        state: &mut ParserState<'a>,
+    ) -> Result<String, String> {
+        let val = self.eval_expr(expr, state)?;
+        match val {
+            ParsedValue::Text(s) => Ok(s),
+            ParsedValue::Int(i) => Ok(i.to_string()),
+            ParsedValue::Float(f) => Ok(f.to_string()),
+            ParsedValue::Bool(b) => Ok(b.to_string()),
+            _ => Err("expected string value".to_string()),
+        }
+    }
+
+    // =========================================================================
+    // Field extraction helpers
+    // =========================================================================
+
+    fn get_field<'b>(&self, name: &str, fields: &'b [(String, ExprIR)]) -> Option<&'b ExprIR> {
+        fields.iter().find(|(n, _)| n == name).map(|(_, e)| e)
+    }
+
+    fn get_field_as_interned<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<zyntax_typed_ast::InternedString, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+        match val {
+            ParsedValue::Interned(s) => Ok(s),
+            ParsedValue::Text(s) => Ok(state.intern(&s)),
+            _ => Err(format!("field '{}' is not a string/interned", name)),
+        }
+    }
+
+    fn get_field_as_string<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<String, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        self.eval_expr_as_string(expr, state)
+    }
+
+    fn get_field_as_int<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<i64, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+        match val {
+            ParsedValue::Int(i) => Ok(i),
+            ParsedValue::Text(s) => s.parse().map_err(|_| format!("cannot parse '{}' as int", s)),
+            _ => Err(format!("field '{}' is not an integer", name)),
+        }
+    }
+
+    fn get_field_as_float<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<f64, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+        match val {
+            ParsedValue::Float(f) => Ok(f),
+            ParsedValue::Int(i) => Ok(i as f64),
+            ParsedValue::Text(s) => s.parse().map_err(|_| format!("cannot parse '{}' as float", s)),
+            _ => Err(format!("field '{}' is not a float", name)),
+        }
+    }
+
+    fn get_field_as_bool<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<bool, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+        match val {
+            ParsedValue::Bool(b) => Ok(b),
+            _ => Err(format!("field '{}' is not a boolean", name)),
+        }
+    }
+
+    fn get_field_optional<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Option<Type>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::Optional(None) => Ok(None),
+                    ParsedValue::Optional(Some(inner)) => {
+                        match *inner {
+                            ParsedValue::Type(t) => Ok(Some(t)),
+                            _ => Ok(None),
+                        }
+                    }
+                    ParsedValue::Type(t) => Ok(Some(t)),
+                    ParsedValue::None => Ok(None),
+                    _ => Ok(None),
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn get_field_as_expr<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedNode<TypedExpression>, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+        self.parsed_value_to_expr(val, state)
+    }
+
+    fn get_field_optional_expr<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Option<TypedNode<TypedExpression>>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::Optional(None) => Ok(None),
+                    ParsedValue::Optional(Some(inner)) => {
+                        let e = self.parsed_value_to_expr(*inner, state)?;
+                        Ok(Some(e))
+                    }
+                    ParsedValue::None => Ok(None),
+                    other => {
+                        let e = self.parsed_value_to_expr(other, state)?;
+                        Ok(Some(e))
+                    }
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn get_field_as_expr_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedNode<TypedExpression>>, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+
+        match val {
+            ParsedValue::List(items) => {
+                items.into_iter()
+                    .map(|item| self.parsed_value_to_expr(item, state))
+                    .collect()
+            }
+            other => {
+                // Single expression becomes a list of one
+                let e = self.parsed_value_to_expr(other, state)?;
+                Ok(vec![e])
+            }
+        }
+    }
+
+    fn get_field_optional_block<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Option<TypedBlock>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::Optional(None) => Ok(None),
+                    ParsedValue::Optional(Some(inner)) => {
+                        let block = self.parsed_value_to_block(*inner, state)?;
+                        Ok(Some(block))
+                    }
+                    ParsedValue::None => Ok(None),
+                    ParsedValue::Block(b) => Ok(Some(b)),
+                    other => {
+                        let block = self.parsed_value_to_block(other, state)?;
+                        Ok(Some(block))
+                    }
+                }
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn get_field_as_decl_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedNode<TypedDeclaration>>, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+
+        match val {
+            ParsedValue::List(items) => {
+                items.into_iter()
+                    .map(|item| self.parsed_value_to_decl(item))
+                    .collect()
+            }
+            ParsedValue::Declaration(decl) => Ok(vec![*decl]),
+            _ => Err(format!("field '{}' is not a declaration list", name)),
+        }
+    }
+
+    /// Convert ParsedValue to TypedExpression
+    fn parsed_value_to_expr<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedNode<TypedExpression>, String> {
+        let span = Span::new(0, 0);
+        match val {
+            ParsedValue::Expression(e) => Ok(*e),
+            ParsedValue::Int(i) => Ok(typed_node(
+                TypedExpression::Literal(TypedLiteral::Integer(i as i128)),
+                Type::Primitive(PrimitiveType::I32),
+                span,
+            )),
+            ParsedValue::Float(f) => Ok(typed_node(
+                TypedExpression::Literal(TypedLiteral::Float(f)),
+                Type::Primitive(PrimitiveType::F32),
+                span,
+            )),
+            ParsedValue::Text(s) => {
+                // Check if it looks like a string literal (quoted)
+                if s.starts_with('"') && s.ends_with('"') {
+                    let unquoted = s.trim_matches('"').to_string();
+                    let interned = state.intern(&unquoted);
+                    Ok(typed_node(
+                        TypedExpression::Literal(TypedLiteral::String(interned)),
+                        Type::Primitive(PrimitiveType::String),
+                        span,
+                    ))
+                } else {
+                    // Treat as variable reference
+                    let interned = state.intern(&s);
+                    Ok(typed_node(
+                        TypedExpression::Variable(interned),
+                        Type::Primitive(PrimitiveType::Unit), // Unknown type
+                        span,
+                    ))
+                }
+            }
+            ParsedValue::Bool(b) => Ok(typed_node(
+                TypedExpression::Literal(TypedLiteral::Bool(b)),
+                Type::Primitive(PrimitiveType::Bool),
+                span,
+            )),
+            ParsedValue::Interned(s) => Ok(typed_node(
+                TypedExpression::Variable(s),
+                Type::Primitive(PrimitiveType::Unit),
+                span,
+            )),
+            _ => Err("cannot convert value to expression".to_string()),
+        }
+    }
+
+    /// Convert ParsedValue to TypedBlock
+    fn parsed_value_to_block<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedBlock, String> {
+        match val {
+            ParsedValue::Block(b) => Ok(b),
+            ParsedValue::List(items) => {
+                let stmts: Result<Vec<_>, _> = items.into_iter()
+                    .map(|item| self.parsed_value_to_stmt(item))
+                    .collect();
+                Ok(TypedBlock {
+                    statements: stmts?,
+                    span: Span::new(0, 0),
+                })
+            }
+            ParsedValue::Statement(s) => Ok(TypedBlock {
+                statements: vec![*s],
+                span: Span::new(0, 0),
+            }),
+            _ => Err("cannot convert value to block".to_string()),
+        }
+    }
+
+    /// Convert ParsedValue to TypedStatement
+    fn parsed_value_to_stmt(&self, val: ParsedValue) -> Result<TypedNode<TypedStatement>, String> {
+        match val {
+            ParsedValue::Statement(s) => Ok(*s),
+            _ => Err("cannot convert value to statement".to_string()),
+        }
+    }
+
+    /// Convert ParsedValue to TypedDeclaration
+    fn parsed_value_to_decl(&self, val: ParsedValue) -> Result<TypedNode<TypedDeclaration>, String> {
+        match val {
+            ParsedValue::Declaration(d) => Ok(*d),
+            _ => Err("cannot convert value to declaration".to_string()),
+        }
+    }
+
+    /// Convert string to BinaryOp
+    fn string_to_binary_op(&self, op: &str) -> Result<zyntax_typed_ast::BinaryOp, String> {
+        match op {
+            "+" | "Add" => Ok(zyntax_typed_ast::BinaryOp::Add),
+            "-" | "Sub" => Ok(zyntax_typed_ast::BinaryOp::Sub),
+            "*" | "Mul" => Ok(zyntax_typed_ast::BinaryOp::Mul),
+            "/" | "Div" => Ok(zyntax_typed_ast::BinaryOp::Div),
+            "%" | "Rem" => Ok(zyntax_typed_ast::BinaryOp::Rem),
+            "==" | "Eq" => Ok(zyntax_typed_ast::BinaryOp::Eq),
+            "!=" | "Ne" => Ok(zyntax_typed_ast::BinaryOp::Ne),
+            "<" | "Lt" => Ok(zyntax_typed_ast::BinaryOp::Lt),
+            "<=" | "Le" => Ok(zyntax_typed_ast::BinaryOp::Le),
+            ">" | "Gt" => Ok(zyntax_typed_ast::BinaryOp::Gt),
+            ">=" | "Ge" => Ok(zyntax_typed_ast::BinaryOp::Ge),
+            "&&" | "And" => Ok(zyntax_typed_ast::BinaryOp::And),
+            "||" | "Or" => Ok(zyntax_typed_ast::BinaryOp::Or),
+            "=" | "Assign" => Ok(zyntax_typed_ast::BinaryOp::Assign),
+            _ => Err(format!("unknown binary operator: {}", op)),
         }
     }
 
@@ -234,6 +1184,15 @@ impl<'g> GrammarInterpreter<'g> {
             PatternIR::Repeat { pattern, min, max, separator } => {
                 let mut items = Vec::new();
 
+                // Extract binding name from inner pattern if it's a bound RuleRef
+                let inner_binding = match pattern.as_ref() {
+                    PatternIR::RuleRef { binding: Some(name), .. } => Some(name.clone()),
+                    _ => None,
+                };
+
+                // Track accumulated values for the inner binding
+                let mut accumulated_bindings: HashMap<String, Vec<ParsedValue>> = HashMap::new();
+
                 loop {
                     // Skip whitespace before each item (including the first)
                     if !atomic {
@@ -264,7 +1223,15 @@ impl<'g> GrammarInterpreter<'g> {
                     // Try to match item
                     match self.execute_pattern(pattern, state, atomic) {
                         ParseResult::Success(v, _) => {
-                            items.push(v);
+                            items.push(v.clone());
+
+                            // If there's an inner binding, accumulate its value
+                            if let Some(ref bind_name) = inner_binding {
+                                accumulated_bindings
+                                    .entry(bind_name.clone())
+                                    .or_default()
+                                    .push(v);
+                            }
                         }
                         ParseResult::Failure(_) => {
                             state.set_pos(item_start);
@@ -284,6 +1251,11 @@ impl<'g> GrammarInterpreter<'g> {
                 // Check min
                 if items.len() < *min {
                     return state.fail(&format!("expected at least {} items, got {}", min, items.len()));
+                }
+
+                // Set accumulated bindings as lists
+                for (name, values) in accumulated_bindings {
+                    state.set_binding(&name, ParsedValue::List(values));
                 }
 
                 ParseResult::Success(ParsedValue::List(items), state.pos())

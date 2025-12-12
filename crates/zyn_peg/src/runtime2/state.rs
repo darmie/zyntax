@@ -109,6 +109,8 @@ pub enum ParsedValue {
     Text(String),
     /// Integer value
     Int(i64),
+    /// Float value
+    Float(f64),
     /// Boolean value
     Bool(bool),
     /// A span in the source
@@ -123,6 +125,16 @@ pub enum ParsedValue {
     Optional(Option<Box<ParsedValue>>),
     /// A generic node handle (for complex AST nodes)
     Node(NodeHandle),
+    /// A TypedStatement AST node
+    Statement(Box<zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedStatement>>),
+    /// A TypedExpression AST node
+    Expression(Box<zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>>),
+    /// A TypedDeclaration AST node
+    Declaration(Box<zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedDeclaration>>),
+    /// A TypedProgram AST node
+    Program(Box<zyntax_typed_ast::TypedProgram>),
+    /// A TypedBlock AST node
+    Block(zyntax_typed_ast::TypedBlock),
 }
 
 /// Handle to an AST node (opaque, managed by builder)

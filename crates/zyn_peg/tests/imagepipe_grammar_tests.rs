@@ -16,7 +16,7 @@ use zyn_peg::grammar::{
     parse_grammar, PatternIR, ActionIR, RuleModifier, CharClass,
 };
 use zyn_peg::runtime2::{ParserState, ParseResult, ParsedValue, GrammarInterpreter};
-use zyntax_typed_ast::TypedASTBuilder;
+use zyntax_typed_ast::{TypedASTBuilder, TypedDeclaration};
 use zyntax_typed_ast::type_registry::TypeRegistry;
 
 const IMAGEPIPE_GRAMMAR: &str = include_str!("../../../examples/imagepipe/imagepipe.zyn");
@@ -647,21 +647,40 @@ fn test_interpreter_parse_vintage_imgpipe_statements() {
     let mut state = ParserState::new(VINTAGE_IMGPIPE, &mut builder, &mut registry);
 
     // Parse using the 'statements' rule
+    // Note: The statements rule now constructs a TypedProgram with a run_pipeline function
     let result = interp.parse_rule("statements", &mut state);
 
     match result {
-        ParseResult::Success(ParsedValue::List(statements), _) => {
-            // vintage.imgpipe has 7 statements:
-            // load, resize, contrast, brighten, blur, save, print
+        ParseResult::Success(ParsedValue::Program(program), _) => {
+            // The statements are wrapped in a run_pipeline function
+            // vintage.imgpipe has 7 statements: load, resize, contrast, brighten, blur, save, print
             assert_eq!(
-                statements.len(),
-                7,
-                "vintage.imgpipe should have 7 statements, got {}",
-                statements.len()
+                program.declarations.len(),
+                1,
+                "Should have 1 declaration (run_pipeline function)"
             );
+            if let TypedDeclaration::Function(func) = &program.declarations[0].node {
+                if let Some(ref body) = func.body {
+                    // Print each statement for debugging
+                    println!("Found {} statements:", body.statements.len());
+                    for (i, stmt) in body.statements.iter().enumerate() {
+                        println!("  [{i}] {:?}", stmt.node);
+                    }
+                    assert_eq!(
+                        body.statements.len(),
+                        7,
+                        "vintage.imgpipe should have 7 statements, got {}",
+                        body.statements.len()
+                    );
+                } else {
+                    panic!("Expected function body");
+                }
+            } else {
+                panic!("Expected function declaration");
+            }
         }
         ParseResult::Success(other, _) => {
-            panic!("Expected list of statements, got {:?}", other);
+            panic!("Expected Program, got {:?}", other);
         }
         ParseResult::Failure(e) => {
             panic!("Failed to parse vintage.imgpipe: line {} col {}: {:?}", e.line, e.column, e.expected);
@@ -861,4 +880,162 @@ fn test_action_types_are_typed_ast() {
     }
 
     println!("\nAll action types verified as TypedAST constructs!");
+}
+
+// =============================================================================
+// TypedAST Construction Tests - Full Pipeline Demonstration
+// =============================================================================
+
+/// This test demonstrates the complete TypedAST construction by the interpreter.
+/// It parses vintage.imgpipe and prints the resulting TypedProgram structure.
+#[test]
+fn test_print_constructed_typed_ast() {
+    use zyntax_typed_ast::{TypedStatement, TypedExpression};
+
+    let grammar = parse_grammar(IMAGEPIPE_GRAMMAR).unwrap();
+    let interp = GrammarInterpreter::new(&grammar);
+
+    let mut builder = TypedASTBuilder::new();
+    let mut registry = TypeRegistry::new();
+    let mut state = ParserState::new(VINTAGE_IMGPIPE, &mut builder, &mut registry);
+
+    println!("\n=== Constructed TypedAST from vintage.imgpipe ===\n");
+
+    let result = interp.parse_rule("program", &mut state);
+
+    match result {
+        ParseResult::Success(ParsedValue::Program(program), _) => {
+            println!("TypedProgram created with {} declaration(s)\n", program.declarations.len());
+
+            for (i, decl) in program.declarations.iter().enumerate() {
+                println!("Declaration [{}]:", i);
+                if let TypedDeclaration::Function(func) = &decl.node {
+                    let func_name = builder.arena().resolve_string(func.name);
+                    println!("  Function: {}", func_name.unwrap_or("<unknown>"));
+                    println!("  Return type: {:?}", func.return_type);
+
+                    if let Some(ref body) = func.body {
+                        println!("  Body ({} statements):", body.statements.len());
+
+                        for (j, stmt_node) in body.statements.iter().enumerate() {
+                            print!("    [{j}] ");
+                            match &stmt_node.node {
+                                TypedStatement::Let(let_stmt) => {
+                                    let var_name = builder.arena().resolve_string(let_stmt.name);
+                                    println!("Let {} : {:?}", var_name.unwrap_or("<unknown>"), let_stmt.ty);
+                                }
+                                TypedStatement::Expression(expr) => {
+                                    match &expr.node {
+                                        TypedExpression::Call(call) => {
+                                            if let TypedExpression::Variable(callee_name) = &call.callee.node {
+                                                let name = builder.arena().resolve_string(*callee_name);
+                                                println!("Call {}(...) [{} args]",
+                                                    name.unwrap_or("<unknown>"),
+                                                    call.positional_args.len()
+                                                );
+                                            } else {
+                                                println!("Call <expr>(...) [{} args]", call.positional_args.len());
+                                            }
+                                        }
+                                        TypedExpression::Binary(bin) => {
+                                            println!("Binary {:?} = ...", bin.op);
+                                        }
+                                        TypedExpression::Literal(lit) => {
+                                            println!("Literal {:?}", lit);
+                                        }
+                                        other => {
+                                            println!("{:?}", other);
+                                        }
+                                    }
+                                }
+                                other => {
+                                    println!("{:?}", other);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ParseResult::Success(other, _) => {
+            panic!("Expected Program, got {:?}", other);
+        }
+        ParseResult::Failure(e) => {
+            panic!("Failed to parse: {:?}", e);
+        }
+    }
+
+    println!("\n=== TypedAST construction complete ===");
+}
+
+/// Test that individual statements produce the correct TypedStatement variant.
+#[test]
+fn test_statement_produces_typed_ast_nodes() {
+    use zyntax_typed_ast::{TypedStatement, TypedExpression};
+
+    let grammar = parse_grammar(IMAGEPIPE_GRAMMAR).unwrap();
+    let interp = GrammarInterpreter::new(&grammar);
+
+    // Test load statement produces Let
+    {
+        let mut builder = TypedASTBuilder::new();
+        let mut registry = TypeRegistry::new();
+        let mut state = ParserState::new(
+            r#"load "test.jpg" as img"#,
+            &mut builder,
+            &mut registry
+        );
+
+        let result = interp.parse_rule("load_stmt", &mut state);
+        match result {
+            ParseResult::Success(ParsedValue::Statement(stmt), _) => {
+                match &stmt.node {
+                    TypedStatement::Let(let_stmt) => {
+                        let name = builder.arena().resolve_string(let_stmt.name);
+                        assert_eq!(name, Some("img"));
+                        assert!(let_stmt.initializer.is_some());
+                    }
+                    _ => panic!("Expected Let statement"),
+                }
+            }
+            _ => panic!("Expected Statement"),
+        }
+    }
+
+    // Test print statement produces Expression(Call)
+    {
+        let mut builder = TypedASTBuilder::new();
+        let mut registry = TypeRegistry::new();
+        let mut state = ParserState::new(
+            r#"print "hello""#,
+            &mut builder,
+            &mut registry
+        );
+
+        let result = interp.parse_rule("print_stmt", &mut state);
+        match result {
+            ParseResult::Success(ParsedValue::Statement(stmt), _) => {
+                match &stmt.node {
+                    TypedStatement::Expression(expr) => {
+                        match &expr.node {
+                            TypedExpression::Call(call) => {
+                                // The callee should be a Variable referencing "println"
+                                if let TypedExpression::Variable(callee_name) = &call.callee.node {
+                                    let name = builder.arena().resolve_string(*callee_name);
+                                    assert_eq!(name, Some("println"));
+                                }
+                                // Should have 1 argument (the string literal)
+                                assert_eq!(call.positional_args.len(), 1);
+                            }
+                            _ => panic!("Expected Call expression"),
+                        }
+                    }
+                    _ => panic!("Expected Expression statement"),
+                }
+            }
+            _ => panic!("Expected Statement"),
+        }
+    }
+
+    println!("Statement TypedAST node tests passed!");
 }
