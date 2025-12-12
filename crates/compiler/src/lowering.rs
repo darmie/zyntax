@@ -883,6 +883,14 @@ impl LoweringContext {
             // Set calling convention
             hir_func.calling_convention = self.convert_calling_convention(func.calling_convention);
 
+            // Set link_name if specified (maps alias to actual symbol)
+            // e.g., "image_load" -> "$Image$load"
+            if let Some(ref link_name) = func.link_name {
+                let link_name_str = link_name.resolve_global()
+                    .unwrap_or_else(|| link_name.to_string());
+                hir_func.link_name = Some(link_name_str);
+            }
+
             // Extern functions have no body - clear the default entry block
             hir_func.blocks.clear();
 

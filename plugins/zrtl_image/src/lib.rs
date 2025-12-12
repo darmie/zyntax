@@ -690,44 +690,74 @@ pub extern "C" fn image_invert(handle: u64) -> u64 {
 zrtl_plugin! {
     name: "zrtl_image",
     symbols: [
-        // Loading/Saving
-        ("$Image$load", image_load),
-        ("$Image$load_bytes", image_load_bytes),
-        ("$Image$load_bytes_format", image_load_bytes_format),
-        ("$Image$save", image_save),
-        ("$Image$save_format", image_save_format),
-        ("$Image$encode", image_encode),
-        ("$Image$encode_png", image_encode_png),
-        ("$Image$encode_jpeg", image_encode_jpeg),
+        // Loading/Saving (with signatures)
+        // Functions with opaque params (StringPtr/ArrayPtr) use dynamic boxing
+        // image_load(path: StringPtr) -> u64 (handle)
+        ("$Image$load", image_load, dynamic(1) -> void),
+        // image_load_bytes(data: ArrayPtr) -> u64
+        ("$Image$load_bytes", image_load_bytes, dynamic(1) -> void),
+        // image_load_bytes_format(data: ArrayPtr, format: i32) -> u64
+        ("$Image$load_bytes_format", image_load_bytes_format, dynamic(2) -> void),
+        // image_save(handle: u64, path: StringPtr) -> void
+        ("$Image$save", image_save, dynamic(2) -> void),
+        // image_save_format(handle: u64, path: StringPtr, format: i32) -> i32
+        ("$Image$save_format", image_save_format, dynamic(3) -> void),
+        // image_encode(handle: u64, format: i32) -> ArrayPtr
+        ("$Image$encode", image_encode, dynamic(2) -> dynamic),
+        // image_encode_png(handle: u64) -> ArrayPtr
+        ("$Image$encode_png", image_encode_png, dynamic(1) -> dynamic),
+        // image_encode_jpeg(handle: u64, quality: u8) -> ArrayPtr
+        ("$Image$encode_jpeg", image_encode_jpeg, dynamic(2) -> dynamic),
 
-        // Creation/Info
-        ("$Image$create", image_create),
+        // Creation/Info (with signatures)
+        // image_create(width: u32, height: u32) -> u64
+        ("$Image$create", image_create, (u32, u32) -> u64),
+        // image_create_filled(width: u32, height: u32, color: Color) -> u64
+        // Note: Color is a struct, no signature for now
         ("$Image$create_filled", image_create_filled),
-        ("$Image$free", image_free),
-        ("$Image$clone", image_clone),
-        ("$Image$width", image_width),
-        ("$Image$height", image_height),
+        // image_free(handle: u64) -> void
+        ("$Image$free", image_free, (u64) -> void),
+        // image_clone(handle: u64) -> u64
+        ("$Image$clone", image_clone, (u64) -> u64),
+        // image_width(handle: u64) -> u32
+        ("$Image$width", image_width, (u64) -> u32),
+        // image_height(handle: u64) -> u32
+        ("$Image$height", image_height, (u64) -> u32),
 
-        // Pixel operations
+        // Pixel operations (some without signatures due to struct params)
         ("$Image$get_pixel", image_get_pixel),
         ("$Image$set_pixel", image_set_pixel),
-        ("$Image$get_pixels", image_get_pixels),
+        // image_get_pixels(handle: u64) -> ArrayPtr
+        ("$Image$get_pixels", image_get_pixels, dynamic(1) -> dynamic),
         ("$Image$set_pixels", image_set_pixels),
 
-        // Manipulation
-        ("$Image$resize", image_resize),
-        ("$Image$resize_fit", image_resize_fit),
-        ("$Image$crop", image_crop),
-        ("$Image$rotate90", image_rotate90),
-        ("$Image$rotate180", image_rotate180),
-        ("$Image$rotate270", image_rotate270),
-        ("$Image$flip_horizontal", image_flip_horizontal),
-        ("$Image$flip_vertical", image_flip_vertical),
-        ("$Image$grayscale", image_grayscale),
-        ("$Image$blur", image_blur),
-        ("$Image$brighten", image_brighten),
-        ("$Image$contrast", image_contrast),
-        ("$Image$invert", image_invert),
+        // Manipulation (with signatures)
+        // image_resize(handle: u64, width: u32, height: u32) -> u64
+        ("$Image$resize", image_resize, (u64, u32, u32) -> u64),
+        // image_resize_fit(handle: u64, max_width: u32, max_height: u32) -> u64
+        ("$Image$resize_fit", image_resize_fit, (u64, u32, u32) -> u64),
+        // image_crop(handle: u64, x: u32, y: u32, width: u32, height: u32) -> u64
+        ("$Image$crop", image_crop, (u64, u32, u32, u32, u32) -> u64),
+        // image_rotate90(handle: u64) -> u64
+        ("$Image$rotate90", image_rotate90, (u64) -> u64),
+        // image_rotate180(handle: u64) -> u64
+        ("$Image$rotate180", image_rotate180, (u64) -> u64),
+        // image_rotate270(handle: u64) -> u64
+        ("$Image$rotate270", image_rotate270, (u64) -> u64),
+        // image_flip_horizontal(handle: u64) -> u64
+        ("$Image$flip_horizontal", image_flip_horizontal, (u64) -> u64),
+        // image_flip_vertical(handle: u64) -> u64
+        ("$Image$flip_vertical", image_flip_vertical, (u64) -> u64),
+        // image_grayscale(handle: u64) -> u64
+        ("$Image$grayscale", image_grayscale, (u64) -> u64),
+        // image_blur(handle: u64, sigma: f32) -> u64
+        ("$Image$blur", image_blur, (u64, f32) -> u64),
+        // image_brighten(handle: u64, value: i32) -> u64
+        ("$Image$brighten", image_brighten, (u64, i32) -> u64),
+        // image_contrast(handle: u64, value: f32) -> u64
+        ("$Image$contrast", image_contrast, (u64, f32) -> u64),
+        // image_invert(handle: u64) -> u64
+        ("$Image$invert", image_invert, (u64) -> u64),
     ]
 }
 

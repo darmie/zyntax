@@ -143,12 +143,17 @@ impl Grammar2 {
         let mut program = self.parse_with_filename(source, filename)?;
 
         // Inject extern function declarations for builtins
+        // This adds both alias names (e.g., image_load) and symbol names (e.g., $Image$load)
         self.inject_builtin_externs(&mut program, Some(signatures))?;
 
         Ok(program)
     }
 
     /// Inject extern function declarations for all builtins from @builtin directive
+    ///
+    /// Creates TWO extern declarations for each builtin:
+    /// 1. The alias name (e.g., `image_load`) with link_name pointing to symbol
+    /// 2. The symbol name (e.g., `$Image$load`) for direct calls
     fn inject_builtin_externs(
         &self,
         program: &mut TypedProgram,
@@ -160,22 +165,32 @@ impl Grammar2 {
 
         // Iterate over all builtins from @builtin directive
         for (source_name, target_symbol) in &self.grammar.builtins.functions {
+            log::debug!("[Grammar2] Processing builtin: {} -> {}", source_name, target_symbol);
+
             // Get return type from @types.function_returns if available
             let return_type = if let Some(type_str) = self.grammar.type_decls.function_returns.get(source_name) {
+                log::debug!("[Grammar2] Found @types.function_returns for {}: {}", source_name, type_str);
                 Type::Extern {
                     name: InternedString::new_global(type_str),
                     layout: None,
                 }
             } else if let Some(sigs) = signatures {
-                sigs.get(target_symbol.as_str())
-                    .map(|sig| Self::type_tag_to_type(&sig.return_type))
-                    .unwrap_or(Type::Any)
+                if let Some(sig) = sigs.get(target_symbol.as_str()) {
+                    log::debug!("[Grammar2] Found ZRTL signature for {}: params={}, return={:?}",
+                        target_symbol, sig.param_count, sig.return_type);
+                    Self::type_tag_to_type(&sig.return_type)
+                } else {
+                    log::warn!("[Grammar2] No ZRTL signature found for {}, using Type::Any. Available keys: {:?}",
+                        target_symbol, sigs.keys().collect::<Vec<_>>());
+                    Type::Any
+                }
             } else {
+                log::debug!("[Grammar2] No signatures provided, using Type::Any");
                 Type::Any
             };
 
             // Get parameters from signature if available
-            let params = if let Some(sigs) = signatures {
+            let params: Vec<TypedParameter> = if let Some(sigs) = signatures {
                 if let Some(sig) = sigs.get(target_symbol.as_str()) {
                     (0..sig.param_count)
                         .map(|i| {
@@ -198,12 +213,13 @@ impl Grammar2 {
                 vec![]
             };
 
-            // Create extern function declaration
-            let extern_func = TypedFunction {
-                name: InternedString::new_global(target_symbol),
+            // 1. Create alias extern (e.g., image_load -> links to $Image$load)
+            // This is what the grammar's generated AST calls
+            let alias_func = TypedFunction {
+                name: InternedString::new_global(source_name),
                 type_params: vec![],
-                params,
-                return_type,
+                params: params.clone(),
+                return_type: return_type.clone(),
                 body: None,
                 visibility: Visibility::Public,
                 is_async: false,
@@ -211,13 +227,33 @@ impl Grammar2 {
                 calling_convention: CallingConvention::Default,
                 link_name: Some(InternedString::new_global(target_symbol)),
             };
-
-            // Add to program declarations
             program.declarations.push(typed_node(
-                TypedDeclaration::Function(extern_func),
+                TypedDeclaration::Function(alias_func),
                 Type::Primitive(PrimitiveType::Unit),
                 span,
             ));
+
+            // 2. Create symbol extern (e.g., $Image$load) for direct calls
+            // Skip if source_name == target_symbol (avoid duplicates)
+            if source_name != target_symbol {
+                let symbol_func = TypedFunction {
+                    name: InternedString::new_global(target_symbol),
+                    type_params: vec![],
+                    params,
+                    return_type,
+                    body: None,
+                    visibility: Visibility::Public,
+                    is_async: false,
+                    is_external: true,
+                    calling_convention: CallingConvention::Default,
+                    link_name: Some(InternedString::new_global(target_symbol)),
+                };
+                program.declarations.push(typed_node(
+                    TypedDeclaration::Function(symbol_func),
+                    Type::Primitive(PrimitiveType::Unit),
+                    span,
+                ));
+            }
         }
 
         Ok(())

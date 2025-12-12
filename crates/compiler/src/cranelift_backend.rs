@@ -351,8 +351,14 @@ impl CraneliftBackend {
 
         if function.is_external {
             // External functions use Import linkage
-            let link_name = function.name.resolve_global()
-                .unwrap_or_else(|| format!("{:?}", function.name));
+            // Use link_name if specified (maps alias to actual symbol, e.g., "image_load" -> "$Image$load")
+            // Otherwise fall back to function name
+            let link_name = function.link_name.as_ref()
+                .map(|s| s.clone())
+                .unwrap_or_else(|| {
+                    function.name.resolve_global()
+                        .unwrap_or_else(|| format!("{:?}", function.name))
+                });
             let func_id = self.module.declare_function(
                 &link_name,
                 Linkage::Import,

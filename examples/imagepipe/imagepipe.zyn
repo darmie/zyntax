@@ -35,6 +35,7 @@
     image_invert: "$Image$invert",
 
     // Console output (zrtl_io)
+    // Use println which takes StringConstPtr for string literals
     println: "$IO$println",
 }
 

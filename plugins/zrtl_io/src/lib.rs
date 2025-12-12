@@ -839,11 +839,11 @@ pub unsafe extern "C" fn io_string_concat(a: StringConstPtr, b: StringConstPtr) 
 zrtl_plugin! {
     name: "zrtl_io",
     symbols: [
-        // String output (ZRTL string format)
-        ("$IO$print", io_print),
-        ("$IO$println", io_println),
-        ("$IO$eprint", io_eprint),
-        ("$IO$eprintln", io_eprintln),
+        // String output (ZRTL string format) - takes StringConstPtr (i64 pointer)
+        ("$IO$print", io_print, (i64) -> void),
+        ("$IO$println", io_println, (i64) -> void),
+        ("$IO$eprint", io_eprint, (i64) -> void),
+        ("$IO$eprintln", io_eprintln, (i64) -> void),
 
         // Primitive output
         ("$IO$print_i64", io_print_i64),
