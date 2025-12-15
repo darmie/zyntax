@@ -141,7 +141,7 @@ pub use typed_ast::{
     // Defer type
     TypedDefer,
     // Class/Struct/Enum types
-    TypedClass, TypedEnum, TypedField, TypedVariant, TypedTypeParam,
+    TypedClass, TypedEnum, TypedField, TypedVariant, TypedVariantFields, TypedTypeParam, TypedTypeAlias,
     // Import types
     TypedImport, TypedImportItem, TypedModule,
     // Extern types for external declarations

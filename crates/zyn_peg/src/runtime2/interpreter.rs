@@ -17,6 +17,7 @@ use zyntax_typed_ast::{
     TypedDeclaration, TypedFunction, TypedLet, TypedCall, TypedProgram,
     TypedIf, TypedWhile, TypedFor, TypedUnary, TypedFieldAccess, TypedIndex,
     TypedRange, TypedStructLiteral, TypedFieldInit, TypedPattern,
+    TypedParameter, TypedVariant, TypedVariantFields, TypedTypeAlias, ParameterKind,
     UnaryOp,
     typed_node, Span,
     type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention},
@@ -505,7 +506,7 @@ impl<'g> GrammarInterpreter<'g> {
         let decl = match variant {
             "Function" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
-                let params = vec![]; // TODO: parse params from fields
+                let params = self.get_field_as_param_list("params", fields, state)?;
                 let return_type = self.get_field_optional("return_type", fields, state)?
                     .unwrap_or(Type::Primitive(PrimitiveType::Unit));
                 let body = self.get_field_optional_block("body", fields, state)?;
@@ -521,6 +522,55 @@ impl<'g> GrammarInterpreter<'g> {
                     is_external: false,
                     calling_convention: CallingConvention::Default,
                     link_name: None,
+                })
+            }
+            "Variable" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let ty = self.get_field_optional("type_annotation", fields, state)?
+                    .unwrap_or(Type::Any);
+                let initializer = self.get_field_optional_expr("initializer", fields, state)?;
+                let is_mutable = self.get_field_as_bool("is_mutable", fields, state).unwrap_or(false);
+
+                TypedDeclaration::Variable(zyntax_typed_ast::TypedVariable {
+                    name,
+                    ty,
+                    mutability: if is_mutable { Mutability::Mutable } else { Mutability::Immutable },
+                    initializer: initializer.map(Box::new),
+                    visibility: Visibility::Public,
+                })
+            }
+            "TypeAlias" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let target = self.get_field_optional("target", fields, state)?
+                    .unwrap_or(Type::Any);
+
+                TypedDeclaration::TypeAlias(TypedTypeAlias {
+                    name,
+                    type_params: vec![],
+                    target,
+                    visibility: Visibility::Public,
+                    span,
+                })
+            }
+            "Import" => {
+                let module_path = self.get_field_as_interned_list("path", fields, state)?;
+
+                TypedDeclaration::Import(zyntax_typed_ast::TypedImport {
+                    module_path,
+                    items: vec![zyntax_typed_ast::TypedImportItem::Glob],
+                    span,
+                })
+            }
+            "Enum" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let variants = self.get_field_as_variant_list("variants", fields, state)?;
+
+                TypedDeclaration::Enum(zyntax_typed_ast::TypedEnum {
+                    name,
+                    type_params: vec![],
+                    variants,
+                    visibility: Visibility::Public,
+                    span,
                 })
             }
             _ => return Err(format!("unknown TypedDeclaration variant: {}", variant)),
@@ -1095,6 +1145,232 @@ impl<'g> GrammarInterpreter<'g> {
             }
             ParsedValue::Declaration(decl) => Ok(vec![*decl]),
             _ => Err(format!("field '{}' is not a declaration list", name)),
+        }
+    }
+
+    /// Get a field as a list of function parameters
+    fn get_field_as_param_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedParameter>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            let param = self.parsed_value_to_param(item, state)?;
+                            result.push(param);
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    ParsedValue::Optional(None) => Ok(vec![]),
+                    ParsedValue::Optional(Some(inner)) => {
+                        match *inner {
+                            ParsedValue::List(items) => {
+                                let mut result = Vec::new();
+                                for item in items {
+                                    let param = self.parsed_value_to_param(item, state)?;
+                                    result.push(param);
+                                }
+                                Ok(result)
+                            }
+                            other => {
+                                let param = self.parsed_value_to_param(other, state)?;
+                                Ok(vec![param])
+                            }
+                        }
+                    }
+                    ParsedValue::Parameter(p) => Ok(vec![p]),
+                    other => {
+                        // Single item - try to convert
+                        let param = self.parsed_value_to_param(other, state)?;
+                        Ok(vec![param])
+                    }
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Convert ParsedValue to TypedParameter
+    fn parsed_value_to_param<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedParameter, String> {
+        match val {
+            ParsedValue::Parameter(p) => Ok(p),
+            ParsedValue::FieldInit { name, value } => {
+                // Convert FieldInit to a parameter (name: Type format)
+                let ty = match *value {
+                    ParsedValue::Type(t) => t,
+                    _ => Type::Any,
+                };
+                Ok(TypedParameter {
+                    name,
+                    ty,
+                    mutability: Mutability::Immutable,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: vec![],
+                    span: Span::new(0, 0),
+                })
+            }
+            ParsedValue::Interned(name) => {
+                // Just a name, no type annotation
+                Ok(TypedParameter {
+                    name,
+                    ty: Type::Any,
+                    mutability: Mutability::Immutable,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: vec![],
+                    span: Span::new(0, 0),
+                })
+            }
+            ParsedValue::Text(name) => {
+                let interned = state.intern(&name);
+                Ok(TypedParameter {
+                    name: interned,
+                    ty: Type::Any,
+                    mutability: Mutability::Immutable,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: vec![],
+                    span: Span::new(0, 0),
+                })
+            }
+            _ => Err("cannot convert value to parameter".to_string()),
+        }
+    }
+
+    /// Get a field as a list of interned strings
+    fn get_field_as_interned_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<zyntax_typed_ast::InternedString>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            let interned = self.parsed_value_to_interned(item, state)?;
+                            result.push(interned);
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    ParsedValue::Optional(None) => Ok(vec![]),
+                    ParsedValue::Optional(Some(inner)) => {
+                        let interned = self.parsed_value_to_interned(*inner, state)?;
+                        Ok(vec![interned])
+                    }
+                    ParsedValue::Interned(i) => Ok(vec![i]),
+                    ParsedValue::Text(s) => Ok(vec![state.intern(&s)]),
+                    _ => Err(format!("field '{}' is not an interned string list", name)),
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Convert ParsedValue to InternedString
+    fn parsed_value_to_interned<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<zyntax_typed_ast::InternedString, String> {
+        match val {
+            ParsedValue::Interned(i) => Ok(i),
+            ParsedValue::Text(s) => Ok(state.intern(&s)),
+            _ => Err("cannot convert value to interned string".to_string()),
+        }
+    }
+
+    /// Get a field as a list of enum variants
+    fn get_field_as_variant_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedVariant>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            let variant = self.parsed_value_to_variant(item, state)?;
+                            result.push(variant);
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    ParsedValue::Optional(None) => Ok(vec![]),
+                    ParsedValue::Optional(Some(inner)) => {
+                        match *inner {
+                            ParsedValue::List(items) => {
+                                let mut result = Vec::new();
+                                for item in items {
+                                    let variant = self.parsed_value_to_variant(item, state)?;
+                                    result.push(variant);
+                                }
+                                Ok(result)
+                            }
+                            other => {
+                                let variant = self.parsed_value_to_variant(other, state)?;
+                                Ok(vec![variant])
+                            }
+                        }
+                    }
+                    ParsedValue::Variant(v) => Ok(vec![v]),
+                    other => {
+                        let variant = self.parsed_value_to_variant(other, state)?;
+                        Ok(vec![variant])
+                    }
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Convert ParsedValue to TypedVariant
+    fn parsed_value_to_variant<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedVariant, String> {
+        match val {
+            ParsedValue::Variant(v) => Ok(v),
+            ParsedValue::Interned(name) => {
+                // Simple unit variant (just a name)
+                Ok(TypedVariant {
+                    name,
+                    fields: TypedVariantFields::Unit,
+                    discriminant: None,
+                    span: Span::new(0, 0),
+                })
+            }
+            ParsedValue::Text(name) => {
+                let interned = state.intern(&name);
+                Ok(TypedVariant {
+                    name: interned,
+                    fields: TypedVariantFields::Unit,
+                    discriminant: None,
+                    span: Span::new(0, 0),
+                })
+            }
+            _ => Err("cannot convert value to variant".to_string()),
         }
     }
 

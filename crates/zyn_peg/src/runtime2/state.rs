@@ -140,6 +140,10 @@ pub enum ParsedValue {
         name: InternedString,
         value: Box<ParsedValue>,
     },
+    /// A function/method parameter
+    Parameter(zyntax_typed_ast::TypedParameter),
+    /// An enum variant
+    Variant(zyntax_typed_ast::TypedVariant),
 }
 
 /// Handle to an AST node (opaque, managed by builder)
