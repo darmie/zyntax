@@ -48,6 +48,7 @@ fn main() {
                     args.import_map,
                     args.cache_dir,
                     args.no_cache,
+                    args.grammar1,
                     args.packs,
                     args.static_libs,
                     cli.verbose,

@@ -108,6 +108,7 @@ pub fn compile(
     import_map: Option<PathBuf>,
     cache_dir: Option<PathBuf>,
     no_cache: bool,
+    grammar1: bool,
     packs: Vec<PathBuf>,
     static_libs: Vec<PathBuf>,
     verbose: bool,
@@ -167,7 +168,19 @@ pub fn compile(
         InputFormat::ZynGrammar => {
             let grammar_path = grammar.ok_or("--grammar is required for zyn format")?;
             let source_path = source.ok_or("--source is required for zyn format")?;
-            formats::zyn_grammar::load(&grammar_path, &source_path, verbose)?
+            if grammar1 {
+                // Use legacy Grammar1 runtime (ZpegCompiler + pest_vm)
+                if verbose {
+                    println!("{} Using legacy Grammar1 runtime", "info:".blue());
+                }
+                formats::zyn_grammar::load(&grammar_path, &source_path, verbose)?
+            } else {
+                // Use Grammar2 runtime (GrammarInterpreter with named bindings)
+                if verbose {
+                    println!("{} Using Grammar2 runtime (default)", "info:".blue());
+                }
+                formats::zyn_grammar::load_grammar2(&grammar_path, &source_path, verbose)?
+            }
         }
     };
 

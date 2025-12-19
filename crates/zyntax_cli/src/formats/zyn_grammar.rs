@@ -1,15 +1,26 @@
 //! ZynPEG grammar-based compilation format
 //!
-//! Workflow (No Rust compilation required!):
+//! Two runtimes are supported:
+//!
+//! ## Grammar1 (Legacy)
 //! 1. Parse .zyn grammar with ZynPEG
 //! 2. Compile grammar to zpeg module (pest grammar + JSON commands)
 //! 3. Parse source code with pest_vm (dynamic grammar)
 //! 4. Execute JSON commands via host functions to build TypedAST
 //! 5. Lower TypedAST to HIR and compile
 //!
+//! ## Grammar2 (Default)
+//! 1. Parse .zyn grammar with ZynPEG to GrammarIR
+//! 2. Use GrammarInterpreter to parse source directly to TypedProgram
+//! 3. Lower TypedProgram to HIR and compile
+//!
 //! Usage:
 //! ```bash
-//! zyntax compile --source my_code.lang --grammar my_lang.zyn --format zyn -o output --run
+//! # Default (Grammar2)
+//! zyntax compile --source my_code.lang --grammar my_lang.zyn --format zyn -o output --jit
+//!
+//! # Legacy (Grammar1)
+//! zyntax compile --source my_code.lang --grammar my_lang.zyn --format zyn --grammar1 -o output --jit
 //! ```
 
 use colored::Colorize;
@@ -19,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use zyntax_compiler::hir::HirModule;
 use zyntax_compiler::lowering::{AstLowering, LoweringConfig, LoweringContext};
 use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry, TypedProgram};
+use zyntax_embed::Grammar2;
 
 /// Load and compile source using a ZynPEG grammar
 pub fn load(
@@ -88,6 +100,84 @@ pub fn load(
     }
 
     // Step 4: Lower TypedProgram to HIR
+    let hir_module = lower_to_hir(typed_program, verbose)?;
+
+    if verbose {
+        println!(
+            "{} Lowered to HIR with {} functions",
+            "info:".blue(),
+            hir_module.functions.len()
+        );
+    }
+
+    Ok(hir_module)
+}
+
+/// Load and compile source using Grammar2 runtime (GrammarInterpreter)
+///
+/// This is the new default runtime that uses named bindings and direct TypedAST construction.
+pub fn load_grammar2(
+    grammar_path: &PathBuf,
+    source_path: &PathBuf,
+    verbose: bool,
+) -> Result<HirModule, Box<dyn std::error::Error>> {
+    if verbose {
+        println!("{} Grammar file: {:?}", "info:".blue(), grammar_path);
+        println!("{} Source file: {:?}", "info:".blue(), source_path);
+    }
+
+    // Verify files exist
+    if !grammar_path.exists() {
+        return Err(format!("Grammar file not found: {:?}", grammar_path).into());
+    }
+    if !source_path.exists() {
+        return Err(format!("Source file not found: {:?}", source_path).into());
+    }
+
+    // Read grammar
+    let grammar_code = std::fs::read_to_string(grammar_path)?;
+    if verbose {
+        println!("{} Read {} bytes of grammar", "info:".blue(), grammar_code.len());
+    }
+
+    // Read source code
+    let source_code = std::fs::read_to_string(source_path)?;
+    if verbose {
+        println!("{} Read {} bytes of source code", "info:".blue(), source_code.len());
+    }
+
+    // Step 1: Compile grammar with Grammar2
+    if verbose {
+        println!("{} Compiling grammar with Grammar2...", "info:".blue());
+    }
+    let grammar = Grammar2::from_source(&grammar_code)
+        .map_err(|e| format!("Failed to compile grammar: {}", e))?;
+
+    if verbose {
+        println!("{} Language: {} v{}", "info:".blue(), grammar.name(), grammar.version());
+    }
+
+    // Step 2: Parse source to TypedProgram
+    if verbose {
+        println!("{} Parsing source with Grammar2...", "info:".blue());
+    }
+    let source_file_name = source_path.to_string_lossy().to_string();
+    let mut typed_program = grammar.parse_with_filename(&source_code, &source_file_name)
+        .map_err(|e| format!("Failed to parse source: {}", e))?;
+
+    // Add the source file to the program for proper diagnostics
+    use zyntax_typed_ast::source::SourceFile;
+    typed_program.source_files = vec![SourceFile::new(source_file_name.clone(), source_code.clone())];
+
+    if verbose {
+        println!(
+            "{} Parsed to TypedProgram with {} declarations",
+            "info:".blue(),
+            typed_program.declarations.len()
+        );
+    }
+
+    // Step 3: Lower TypedProgram to HIR
     let hir_module = lower_to_hir(typed_program, verbose)?;
 
     if verbose {

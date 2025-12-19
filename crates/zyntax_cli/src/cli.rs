@@ -108,6 +108,11 @@ pub enum Commands {
         #[arg(long)]
         no_cache: bool,
 
+        /// Use legacy Grammar1 runtime (ZpegCompiler + pest_vm)
+        /// Default is Grammar2 (GrammarInterpreter with named bindings)
+        #[arg(long)]
+        grammar1: bool,
+
         // === Runtime Library Options ===
 
         /// ZPack archive(s) to load runtime symbols from (.zpack files)
@@ -277,6 +282,7 @@ impl Commands {
                 import_map,
                 cache_dir,
                 no_cache,
+                grammar1,
                 packs,
                 static_libs,
             } => Some(CompileArgs {
@@ -295,6 +301,7 @@ impl Commands {
                 import_map: import_map.clone(),
                 cache_dir: cache_dir.clone(),
                 no_cache: *no_cache,
+                grammar1: *grammar1,
                 packs: packs.clone(),
                 static_libs: static_libs.clone(),
             }),
@@ -355,6 +362,7 @@ pub struct CompileArgs {
     pub import_map: Option<PathBuf>,
     pub cache_dir: Option<PathBuf>,
     pub no_cache: bool,
+    pub grammar1: bool,
     pub packs: Vec<PathBuf>,
     pub static_libs: Vec<PathBuf>,
 }
