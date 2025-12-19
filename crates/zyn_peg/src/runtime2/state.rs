@@ -142,8 +142,12 @@ pub enum ParsedValue {
     },
     /// A function/method parameter
     Parameter(zyntax_typed_ast::TypedParameter),
+    /// A TypedLiteral value
+    Literal(zyntax_typed_ast::TypedLiteral),
     /// An enum variant
     Variant(zyntax_typed_ast::TypedVariant),
+    /// A struct/class field
+    Field(zyntax_typed_ast::TypedField),
 }
 
 /// Handle to an AST node (opaque, managed by builder)

@@ -12,6 +12,7 @@
 use crate::grammar::{GrammarIR, RuleIR, PatternIR, ActionIR, ExprIR, CharClass, RuleModifier};
 use super::state::{ParserState, ParseResult, ParsedValue, ParseFailure};
 use std::collections::HashMap;
+use log::{debug, trace};
 use zyntax_typed_ast::{
     TypedNode, TypedStatement, TypedExpression, TypedLiteral, TypedBlock,
     TypedDeclaration, TypedFunction, TypedLet, TypedCall, TypedProgram,
@@ -20,7 +21,7 @@ use zyntax_typed_ast::{
     TypedParameter, TypedVariant, TypedVariantFields, TypedTypeAlias, ParameterKind,
     UnaryOp,
     typed_node, Span,
-    type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention},
+    type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention, NullabilityKind, ConstValue},
 };
 
 /// Runtime interpreter for GrammarIR
@@ -67,15 +68,23 @@ impl<'g> GrammarInterpreter<'g> {
         state: &mut ParserState<'a>,
     ) -> ParseResult<ParsedValue> {
         let start_pos = state.pos();
+        trace!("execute_rule: {} at pos {}", rule.name, start_pos);
 
         // Note: We don't skip whitespace here at the start of a rule.
         // Whitespace skipping happens between sequence elements (see execute_pattern).
         // This preserves the position for SOI matching.
 
+        // Save parent bindings to prevent inner rules from overwriting them
+        // Each rule has its own binding scope
+        let saved_bindings = state.save_bindings();
+        state.clear_bindings();
+
         // Execute pattern
         let result = self.execute_pattern(&rule.pattern, state, rule.modifier == Some(RuleModifier::Atomic));
+        trace!("execute_rule: {} at pos {} -> {:?}", rule.name, start_pos,
+               match &result { ParseResult::Success(_, p) => format!("ok@{}", p), ParseResult::Failure(f) => format!("fail: {:?}", f) });
 
-        match result {
+        let final_result = match result {
             ParseResult::Success(value, pos) => {
                 // For atomic rules, capture the text and bind it so text() can access it
                 let parsed_value = if rule.modifier == Some(RuleModifier::Atomic) {
@@ -102,7 +111,12 @@ impl<'g> GrammarInterpreter<'g> {
                 state.set_pos(start_pos);
                 ParseResult::Failure(e)
             }
-        }
+        };
+
+        // Restore parent bindings after rule completes
+        state.restore_bindings(saved_bindings);
+
+        final_result
     }
 
     /// Execute an action to construct a TypedAST node
@@ -219,6 +233,21 @@ impl<'g> GrammarInterpreter<'g> {
                 } else {
                     Ok(ParsedValue::Optional(None))
                 }
+            }
+            ["TypedLiteral", variant] => {
+                self.construct_literal(variant, fields, state)
+            }
+            ["TypedField"] => {
+                self.construct_field(fields, state, span)
+            }
+            ["TypedVariant"] => {
+                self.construct_variant(fields, state, span)
+            }
+            ["TypedParameter"] => {
+                self.construct_parameter(fields, state, span)
+            }
+            ["TypedFieldInit"] => {
+                self.construct_field_init(fields, state, span)
             }
             _ => Err(format!("unknown type path: {}", type_path)),
         }
@@ -464,6 +493,25 @@ impl<'g> GrammarInterpreter<'g> {
                 let value = self.get_field_as_bool("value", fields, state)?;
                 TypedExpression::Literal(TypedLiteral::Bool(value))
             }
+            "Literal" => {
+                // Generic literal: { value: TypedLiteral::Variant { ... } }
+                let value = if let Some(expr) = self.get_field("value", fields) {
+                    self.eval_expr(expr, state)?
+                } else {
+                    return Err("Literal requires a 'value' field".to_string());
+                };
+                match value {
+                    ParsedValue::Literal(lit) => TypedExpression::Literal(lit),
+                    ParsedValue::Int(i) => TypedExpression::Literal(TypedLiteral::Integer(i as i128)),
+                    ParsedValue::Float(f) => TypedExpression::Literal(TypedLiteral::Float(f)),
+                    ParsedValue::Bool(b) => TypedExpression::Literal(TypedLiteral::Bool(b)),
+                    ParsedValue::Text(s) => {
+                        let interned = state.intern(&s);
+                        TypedExpression::Literal(TypedLiteral::String(interned))
+                    }
+                    _ => return Err(format!("Literal value must be a literal type, got: {:?}", value)),
+                }
+            }
             "Ternary" | "If" => {
                 // Ternary expression: condition ? then_expr : else_expr
                 let condition = self.get_field_as_expr("condition", fields, state)?;
@@ -573,6 +621,24 @@ impl<'g> GrammarInterpreter<'g> {
                     span,
                 })
             }
+            "Class" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let fields_list = self.get_field_as_field_list("fields", fields, state)?;
+
+                TypedDeclaration::Class(zyntax_typed_ast::TypedClass {
+                    name,
+                    type_params: vec![],
+                    extends: None,
+                    implements: vec![],
+                    fields: fields_list,
+                    methods: vec![],
+                    constructors: vec![],
+                    visibility: Visibility::Public,
+                    is_abstract: false,
+                    is_final: false,
+                    span,
+                })
+            }
             _ => return Err(format!("unknown TypedDeclaration variant: {}", variant)),
         };
 
@@ -614,10 +680,246 @@ impl<'g> GrammarInterpreter<'g> {
                 let name = self.get_field_as_interned("name", fields, state)?;
                 Type::Unresolved(name)
             }
+            "Primitive" => {
+                // Parse primitive type from name
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let name_str = name.resolve_global()
+                    .ok_or_else(|| "cannot resolve interned string".to_string())?;
+                // Handle special "type" keyword differently (it's a meta-type)
+                if name_str == "type" {
+                    return Ok(ParsedValue::Type(Type::Any));
+                }
+                let prim = match name_str.as_str() {
+                    "i8" => PrimitiveType::I8,
+                    "i16" => PrimitiveType::I16,
+                    "i32" => PrimitiveType::I32,
+                    "i64" => PrimitiveType::I64,
+                    "u8" => PrimitiveType::U8,
+                    "u16" => PrimitiveType::U16,
+                    "u32" => PrimitiveType::U32,
+                    "u64" => PrimitiveType::U64,
+                    "f32" => PrimitiveType::F32,
+                    "f64" => PrimitiveType::F64,
+                    "bool" => PrimitiveType::Bool,
+                    "void" => PrimitiveType::Unit,
+                    _ => return Err(format!("unknown primitive type: {}", name_str)),
+                };
+                Type::Primitive(prim)
+            }
+            "Pointer" => {
+                let pointee = self.get_field_as_type("pointee", fields, state)?;
+                Type::Reference {
+                    ty: Box::new(pointee),
+                    mutability: Mutability::Immutable,
+                    lifetime: None,
+                    nullability: NullabilityKind::NonNull,
+                }
+            }
+            "Optional" => {
+                let inner = self.get_field_as_type("inner", fields, state)?;
+                Type::Optional(Box::new(inner))
+            }
+            "Array" => {
+                let element = self.get_field_as_type("element", fields, state)?;
+                let size = if let Some(expr) = self.get_field("size", fields) {
+                    match self.eval_expr(expr, state)? {
+                        ParsedValue::Int(n) => Some(ConstValue::Int(n)),
+                        ParsedValue::None => None,
+                        ParsedValue::Optional(None) => None,
+                        ParsedValue::Optional(Some(v)) => {
+                            if let ParsedValue::Int(n) = *v {
+                                Some(ConstValue::Int(n))
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                Type::Array {
+                    element_type: Box::new(element),
+                    size,
+                    nullability: NullabilityKind::NonNull,
+                }
+            }
+            "ErrorUnion" => {
+                let payload = self.get_field_as_type("payload", fields, state)?;
+                // Error union with inferred error set
+                Type::Result {
+                    ok_type: Box::new(payload),
+                    err_type: Box::new(Type::Any), // Error type is inferred
+                }
+            }
             _ => return Err(format!("unknown Type variant: {}", variant)),
         };
 
         Ok(ParsedValue::Type(ty))
+    }
+
+    /// Construct a TypedLiteral variant
+    fn construct_literal<'a>(
+        &self,
+        variant: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<ParsedValue, String> {
+        let lit = match variant {
+            "Int" | "Integer" => {
+                let value = self.get_field_as_int("value", fields, state)?;
+                TypedLiteral::Integer(value as i128)
+            }
+            "Float" => {
+                let value = self.get_field_as_float("value", fields, state)?;
+                TypedLiteral::Float(value)
+            }
+            "Bool" => {
+                // Can be a bool value or a string "true"/"false"
+                let value = if let Some(expr) = self.get_field("value", fields) {
+                    match self.eval_expr(expr, state)? {
+                        ParsedValue::Bool(b) => b,
+                        ParsedValue::Text(s) => s == "true",
+                        other => return Err(format!("Bool value must be bool or text, got: {:?}", other)),
+                    }
+                } else {
+                    false
+                };
+                TypedLiteral::Bool(value)
+            }
+            "String" => {
+                let value = self.get_field_as_string("value", fields, state)?;
+                // Strip quotes from string literal if present
+                let unquoted = value.trim_matches('"').to_string();
+                let interned = state.intern(&unquoted);
+                TypedLiteral::String(interned)
+            }
+            "Char" => {
+                let value = self.get_field_as_string("value", fields, state)?;
+                let c = value.chars().next().unwrap_or('\0');
+                TypedLiteral::Char(c)
+            }
+            _ => return Err(format!("unknown TypedLiteral variant: {}", variant)),
+        };
+
+        Ok(ParsedValue::Literal(lit))
+    }
+
+    /// Construct a TypedField (struct/class field)
+    fn construct_field<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let name = self.get_field_as_interned("name", fields, state)?;
+        let ty = self.get_field_optional("ty", fields, state)?
+            .unwrap_or(Type::Any);
+
+        Ok(ParsedValue::Field(zyntax_typed_ast::TypedField {
+            name,
+            ty,
+            initializer: None,
+            visibility: Visibility::Public,
+            mutability: Mutability::Immutable,
+            is_static: false,
+            span,
+        }))
+    }
+
+    /// Construct a TypedVariant (enum variant)
+    fn construct_variant<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let name = self.get_field_as_interned("name", fields, state)?;
+
+        // Handle fields - could be Unit (no fields), Named, or Tuple
+        let variant_fields = if let Some(expr) = self.get_field("fields", fields) {
+            let val = self.eval_expr(expr, state)?;
+            match val {
+                ParsedValue::Text(s) if s == "Unit" || s == "TypedVariantFields::Unit" => TypedVariantFields::Unit,
+                ParsedValue::None => TypedVariantFields::Unit,
+                _ => TypedVariantFields::Unit, // TODO: handle named and tuple fields
+            }
+        } else {
+            TypedVariantFields::Unit
+        };
+
+        Ok(ParsedValue::Variant(TypedVariant {
+            name,
+            fields: variant_fields,
+            discriminant: None,
+            span,
+        }))
+    }
+
+    /// Construct a TypedFieldInit (field initialization in struct literal)
+    fn construct_field_init<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        _span: Span,
+    ) -> Result<ParsedValue, String> {
+        let name = self.get_field_as_interned("name", fields, state)?;
+        let value = self.get_field_as_expr("value", fields, state)?;
+
+        Ok(ParsedValue::FieldInit {
+            name,
+            value: Box::new(ParsedValue::Expression(Box::new(value))),
+        })
+    }
+
+    /// Construct a TypedParameter (function parameter)
+    fn construct_parameter<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let name = self.get_field_as_interned("name", fields, state)?;
+        let ty = self.get_field_optional("ty", fields, state)?
+            .unwrap_or(Type::Any);
+
+        // Check for kind
+        let kind = if let Some(expr) = self.get_field("kind", fields) {
+            match self.eval_expr(expr, state)? {
+                ParsedValue::Text(s) if s.contains("KeywordOnly") => ParameterKind::KeywordOnly,
+                ParsedValue::Text(s) if s.contains("Rest") => ParameterKind::Rest,
+                _ => ParameterKind::Regular,
+            }
+        } else {
+            ParameterKind::Regular
+        };
+
+        Ok(ParsedValue::Parameter(TypedParameter {
+            name,
+            ty,
+            mutability: Mutability::Immutable,
+            kind,
+            default_value: None,
+            attributes: vec![],
+            span,
+        }))
+    }
+
+    /// Get a field value as a Type
+    fn get_field_as_type<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Type, String> {
+        if let Some(expr) = self.get_field(name, fields) {
+            match self.eval_expr(expr, state)? {
+                ParsedValue::Type(ty) => Ok(ty),
+                other => Err(format!("field '{}' is not a type: {:?}", name, other)),
+            }
+        } else {
+            Err(format!("missing required type field: {}", name))
+        }
     }
 
     /// Execute a helper function call
@@ -679,6 +981,13 @@ impl<'g> GrammarInterpreter<'g> {
     ) -> Result<ParsedValue, String> {
         match expr {
             ExprIR::Binding(name) => {
+                // Handle special binding names
+                if name == "text" {
+                    // 'text' refers to the captured text from an atomic rule (bound to __text__)
+                    return state.get_binding("__text__")
+                        .cloned()
+                        .ok_or_else(|| "binding 'text' not found (not in atomic rule?)".to_string());
+                }
                 state.get_binding(name)
                     .cloned()
                     .ok_or_else(|| format!("binding '{}' not found", name))
@@ -778,8 +1087,27 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                 } else {
                     // Variant without value
-                    match variant.as_str() {
-                        "None" => Ok(ParsedValue::Optional(None)),
+                    match (type_name.as_str(), variant.as_str()) {
+                        (_, "None") => Ok(ParsedValue::Optional(None)),
+                        ("TypedVariantFields", "Unit") | (_, "Unit") if type_name == "TypedVariantFields" => {
+                            // Return a marker text that construct_variant can recognize
+                            Ok(ParsedValue::Text("TypedVariantFields::Unit".to_string()))
+                        }
+                        ("ParameterKind", "Regular") => {
+                            Ok(ParsedValue::Text("ParameterKind::Regular".to_string()))
+                        }
+                        ("ParameterKind", "KeywordOnly") => {
+                            Ok(ParsedValue::Text("ParameterKind::KeywordOnly".to_string()))
+                        }
+                        ("ParameterKind", "Rest") => {
+                            Ok(ParsedValue::Text("ParameterKind::Rest".to_string()))
+                        }
+                        ("Mutability", "Mutable") => {
+                            Ok(ParsedValue::Text("Mutability::Mutable".to_string()))
+                        }
+                        ("Mutability", "Immutable") => {
+                            Ok(ParsedValue::Text("Mutability::Immutable".to_string()))
+                        }
                         _ => {
                             let full_path = format!("{}::{}", type_name, variant);
                             self.execute_construct(&full_path, &[], state, span)
@@ -1374,6 +1702,66 @@ impl<'g> GrammarInterpreter<'g> {
         }
     }
 
+    /// Get a field as a list of struct fields
+    fn get_field_as_field_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<zyntax_typed_ast::TypedField>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            let field = self.parsed_value_to_field(item, state)?;
+                            result.push(field);
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    ParsedValue::Optional(None) => Ok(vec![]),
+                    ParsedValue::Optional(Some(inner)) => {
+                        match *inner {
+                            ParsedValue::List(items) => {
+                                let mut result = Vec::new();
+                                for item in items {
+                                    let field = self.parsed_value_to_field(item, state)?;
+                                    result.push(field);
+                                }
+                                Ok(result)
+                            }
+                            other => {
+                                let field = self.parsed_value_to_field(other, state)?;
+                                Ok(vec![field])
+                            }
+                        }
+                    }
+                    ParsedValue::Field(f) => Ok(vec![f]),
+                    other => {
+                        let field = self.parsed_value_to_field(other, state)?;
+                        Ok(vec![field])
+                    }
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Convert ParsedValue to TypedField
+    fn parsed_value_to_field<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<zyntax_typed_ast::TypedField, String> {
+        match val {
+            ParsedValue::Field(f) => Ok(f),
+            _ => Err(format!("cannot convert value to field: {:?}", val)),
+        }
+    }
+
     /// Convert ParsedValue to TypedExpression
     fn parsed_value_to_expr<'a>(
         &self,
@@ -1722,6 +2110,14 @@ impl<'g> GrammarInterpreter<'g> {
                 }
 
                 // Set accumulated bindings as lists
+                // Even if empty, we need to set the binding so actions can reference it
+                if let Some(ref bind_name) = inner_binding {
+                    let values = accumulated_bindings
+                        .remove(bind_name)
+                        .unwrap_or_default();
+                    state.set_binding(bind_name, ParsedValue::List(values));
+                }
+                // Set any remaining bindings (shouldn't normally happen, but for safety)
                 for (name, values) in accumulated_bindings {
                     state.set_binding(&name, ParsedValue::List(values));
                 }

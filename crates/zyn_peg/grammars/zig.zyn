@@ -1,12 +1,12 @@
 // ===================================================================
-// Zig Grammar with JSON Commands for Zyn Runtime
+// Zig Grammar with Grammar2 Named Bindings
 // ===================================================================
 //
-// This grammar uses JSON command blocks that work with the Zyn runtime
-// interpreter to build TypedAST nodes at parse time.
+// This grammar uses ZynPEG 2.0 named bindings for direct TypedAST construction.
+// Compatible with Grammar2 runtime (GrammarInterpreter).
 //
 // Usage:
-//   zyntax compile --source file.zig --grammar zig.zyn --format zyn --run
+//   zyntax compile --source file.zig --grammar zig.zyn --format zyn --jit
 //
 // ===================================================================
 
@@ -19,828 +19,427 @@
 
 // ===== Program Structure =====
 
-program = { SOI ~ declarations ~ EOI }
-  -> TypedProgram {
-      "get_child": { "index": 0 }
-  }
+program = { SOI ~ decls:declarations ~ EOI }
+  -> decls
 
-declarations = { declaration* }
+declarations = { decl:declaration* }
   -> TypedProgram {
-      "get_all_children": true,
-      "define": "program",
-      "args": { "declarations": "$result" }
+      declarations: decl,
   }
 
 declaration = { struct_decl | enum_decl | extern_fn_decl | fn_decl | const_decl | var_decl }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
 
 // ===== Struct Declaration =====
 
-struct_decl = { "const" ~ identifier ~ "=" ~ "struct" ~ "{" ~ struct_fields? ~ "}" ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "struct", "args": {
-              "name": "$1",
-              "fields": "$2"
-          }}
-      ]
+struct_decl = { "const" ~ name:identifier ~ "=" ~ "struct" ~ "{" ~ fields:struct_field_list? ~ "}" ~ ";" }
+  -> TypedDeclaration::Class {
+      name: intern(name),
+      fields: fields,
+      type_params: [],
   }
 
-struct_fields = { struct_field ~ ("," ~ struct_field)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
+struct_field_list = { f:struct_field* }
+  -> f
 
-struct_field = { identifier ~ ":" ~ type_expr }
+struct_field = { name:identifier ~ ":" ~ ty:type_expr ~ ","? }
   -> TypedField {
-      "commands": [
-          { "define": "field", "args": { "name": "$1", "type": "$2" } }
-      ]
+      name: intern(name),
+      ty: ty,
   }
 
 // ===== Enum Declaration =====
 
-enum_decl = { "const" ~ identifier ~ "=" ~ "enum" ~ "{" ~ enum_variants? ~ "}" ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "enum", "args": {
-              "name": "$1",
-              "variants": "$2"
-          }}
-      ]
+enum_decl = { "const" ~ name:identifier ~ "=" ~ "enum" ~ "{" ~ variants:enum_variant_list? ~ "}" ~ ";" }
+  -> TypedDeclaration::Enum {
+      name: intern(name),
+      variants: variants,
+      type_params: [],
   }
 
-enum_variants = { enum_variant ~ ("," ~ enum_variant)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
+enum_variant_list = { v:enum_variant* }
+  -> v
 
-enum_variant = { identifier }
+enum_variant = { name:identifier ~ ","? }
   -> TypedVariant {
-      "get_text": true,
-      "define": "variant",
-      "args": { "name": "$result" }
+      name: intern(name),
+      fields: TypedVariantFields::Unit,
   }
 
 // ===== Function Declaration =====
 
-// Split into two rules to handle the optional params correctly
-// pest doesn't produce placeholder children for missing optionals
-
-// Extern function declaration (no body)
 extern_fn_decl = { extern_fn_decl_with_params | extern_fn_decl_no_params }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
+
+extern_fn_decl_with_params = { "extern" ~ "fn" ~ name:identifier ~ "(" ~ params:fn_param_list ~ ")" ~ ret:type_expr ~ ";" }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: None,
+      is_extern: true,
   }
 
-extern_fn_decl_with_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "extern_function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3"
-          }}
-      ]
-  }
-
-extern_fn_decl_no_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "extern_function", "args": {
-              "name": "$1",
-              "params": [],
-              "return_type": "$2"
-          }}
-      ]
+extern_fn_decl_no_params = { "extern" ~ "fn" ~ name:identifier ~ "(" ~ ")" ~ ret:type_expr ~ ";" }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: ret,
+      body: None,
+      is_extern: true,
   }
 
 fn_decl = { async_fn_decl | sync_fn_decl }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
 
-// Synchronous function declarations
 sync_fn_decl = { fn_decl_with_params | fn_decl_no_params }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
 
-// Async function declarations
 async_fn_decl = { async_fn_decl_with_params | async_fn_decl_no_params }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
+
+async_fn_decl_with_params = { "async" ~ "fn" ~ name:identifier ~ "(" ~ params:fn_param_list ~ ")" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+      is_async: true,
   }
 
-// Async with params: async fn identifier(params) return_type { body }
-async_fn_decl_with_params = { "async" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "async_function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+async_fn_decl_no_params = { "async" ~ "fn" ~ name:identifier ~ "(" ~ ")" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: ret,
+      body: Some(body),
+      is_async: true,
   }
 
-// Async no params: async fn identifier() return_type { body }
-async_fn_decl_no_params = { "async" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "async_function", "args": {
-              "name": "$1",
-              "params": [],
-              "return_type": "$2",
-              "body": "$3"
-          }}
-      ]
+fn_decl_with_params = { "fn" ~ name:identifier ~ "(" ~ params:fn_param_list ~ ")" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
-// With params: identifier, fn_params, type_expr, block
-fn_decl_with_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+fn_decl_no_params = { "fn" ~ name:identifier ~ "(" ~ ")" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: ret,
+      body: Some(body),
   }
 
-// No params: identifier, type_expr, block (no fn_params child)
-fn_decl_no_params = { "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": [],
-              "return_type": "$2",
-              "body": "$3"
-          }}
-      ]
-  }
+fn_param_list = { p:fn_param_item* }
+  -> p
 
-fn_params = { fn_param_any ~ ("," ~ fn_param_any)* }
-  -> List {
-      "get_all_children": true
-  }
+fn_param_item = { fn_param_any ~ ","? }
+  -> fn_param_any
 
-// Match either comptime param or regular param
 fn_param_any = { comptime_param | fn_param }
+
+comptime_param = { "comptime" ~ name:identifier ~ ":" ~ ty:type_expr }
   -> TypedParameter {
-      "get_child": { "index": 0 }
+      name: intern(name),
+      ty: ty,
+      kind: ParameterKind::Comptime,
   }
 
-// Comptime parameter: comptime T: type
-comptime_param = { "comptime" ~ identifier ~ ":" ~ type_expr }
+fn_param = { name:identifier ~ ":" ~ ty:type_expr }
   -> TypedParameter {
-      "commands": [
-          { "define": "type_param", "args": { "name": "$1", "type": "$2" } }
-      ]
-  }
-
-// Children (non-silent): identifier, type_expr
-fn_param = { identifier ~ ":" ~ type_expr }
-  -> TypedParameter {
-      "commands": [
-          { "define": "param", "args": { "name": "$1", "type": "$2" } }
-      ]
+      name: intern(name),
+      ty: ty,
   }
 
 // ===== Variable Declarations =====
-// Split into typed/untyped variants since pest doesn't produce placeholder children for missing optionals
 
 const_decl = { const_decl_typed | const_decl_untyped }
-  -> TypedDeclaration { "get_child": { "index": 0 } }
 
-const_decl_typed = { "const" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "type": "$2",
-              "init": "$3",
-              "is_const": true
-          }}
-      ]
+const_decl_typed = { "const" ~ name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ init:expr ~ ";" }
+  -> TypedDeclaration::Variable {
+      name: intern(name),
+      ty: ty,
+      initializer: Some(init),
+      mutability: Mutability::Immutable,
   }
 
-const_decl_untyped = { "const" ~ identifier ~ "=" ~ expr ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "init": "$2",
-              "is_const": true
-          }}
-      ]
+const_decl_untyped = { "const" ~ name:identifier ~ "=" ~ init:expr ~ ";" }
+  -> TypedDeclaration::Variable {
+      name: intern(name),
+      initializer: Some(init),
+      mutability: Mutability::Immutable,
   }
 
 var_decl = { var_decl_typed | var_decl_untyped }
-  -> TypedDeclaration { "get_child": { "index": 0 } }
 
-var_decl_typed = { "var" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "type": "$2",
-              "init": "$3",
-              "is_const": false
-          }}
-      ]
+var_decl_typed = { "var" ~ name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ init:expr ~ ";" }
+  -> TypedDeclaration::Variable {
+      name: intern(name),
+      ty: ty,
+      initializer: Some(init),
+      mutability: Mutability::Mutable,
   }
 
-var_decl_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "init": "$2",
-              "is_const": false
-          }}
-      ]
+var_decl_untyped = { "var" ~ name:identifier ~ "=" ~ init:expr ~ ";" }
+  -> TypedDeclaration::Variable {
+      name: intern(name),
+      initializer: Some(init),
+      mutability: Mutability::Mutable,
   }
 
 // ===== Type Expressions =====
 
-type_expr = { pointer_type | optional_type | error_union_type | array_type | primitive_type | identifier }
-  -> Type {
-      "get_child": { "index": 0 }
+type_expr = { pointer_type | optional_type | error_union_type | array_type | primitive_type | named_type }
+
+pointer_type = { "*" ~ "const"? ~ inner:type_expr }
+  -> Type::Pointer {
+      pointee: inner,
   }
 
-// Pointer type: *T or *const T
-pointer_type = { "*" ~ "const"? ~ type_expr }
-  -> Type {
-      "commands": [
-          { "define": "pointer_type", "args": { "pointee": "$1" } }
-      ]
+optional_type = { "?" ~ inner:type_expr }
+  -> Type::Optional {
+      inner: inner,
   }
 
-// Optional type: ?T
-optional_type = { "?" ~ type_expr }
-  -> Type {
-      "commands": [
-          { "define": "optional_type", "args": { "inner": "$1" } }
-      ]
+error_union_type = { "!" ~ inner:type_expr }
+  -> Type::ErrorUnion {
+      payload: inner,
   }
 
-// Error union type: !T or E!T
-error_union_type = { "!" ~ type_expr }
-  -> Type {
-      "commands": [
-          { "define": "error_union_type", "args": { "payload": "$1" } }
-      ]
+array_type = { "[" ~ size:integer_literal? ~ "]" ~ element:type_expr }
+  -> Type::Array {
+      element: element,
+      size: size,
   }
 
-// Array type: [N]T or []T (slice)
-array_type = { "[" ~ integer_literal? ~ "]" ~ type_expr }
-  -> Type {
-      "commands": [
-          { "define": "array_type", "args": { "size": "$1", "element": "$2" } }
-      ]
+primitive_type = @{ "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" | "type" }
+  -> Type::Primitive {
+      name: intern(text),
   }
 
-primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" | "type" }
-  -> Type {
-      "get_text": true,
-      "define": "primitive_type",
-      "args": { "name": "$result" }
+named_type = { name:identifier }
+  -> Type::Named {
+      name: intern(name),
   }
 
 // ===== Statements =====
 
 statement = { if_stmt | while_stmt | for_stmt | return_stmt | break_stmt | continue_stmt | local_const | local_var | assign_stmt | expr_stmt }
-  -> TypedStatement {
-      "get_child": { "index": 0 }
-  }
 
-// Break statement
 break_stmt = { "break" ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "break" }
-      ]
+  -> TypedStatement::Break {
+      value: None,
   }
 
-// Continue statement
 continue_stmt = { "continue" ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "continue" }
-      ]
-  }
+  -> TypedStatement::Continue {}
 
-// If statement variants
 if_stmt = { if_else | if_only }
-  -> TypedStatement { "get_child": { "index": 0 } }
 
-if_only = { "if" ~ "(" ~ expr ~ ")" ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "if", "args": {
-              "condition": "$1",
-              "then_branch": "$2"
-          }}
-      ]
+if_only = { "if" ~ "(" ~ cond:expr ~ ")" ~ then_block:block }
+  -> TypedStatement::If {
+      condition: cond,
+      then_block: then_block,
+      else_block: None,
   }
 
-if_else = { "if" ~ "(" ~ expr ~ ")" ~ block ~ "else" ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "if", "args": {
-              "condition": "$1",
-              "then_branch": "$2",
-              "else_branch": "$3"
-          }}
-      ]
+if_else = { "if" ~ "(" ~ cond:expr ~ ")" ~ then_block:block ~ "else" ~ else_block:block }
+  -> TypedStatement::If {
+      condition: cond,
+      then_block: then_block,
+      else_block: Some(else_block),
   }
 
-// While loop
-while_stmt = { "while" ~ "(" ~ expr ~ ")" ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "while", "args": {
-              "condition": "$1",
-              "body": "$2"
-          }}
-      ]
+while_stmt = { "while" ~ "(" ~ cond:expr ~ ")" ~ body:block }
+  -> TypedStatement::While {
+      condition: cond,
+      body: body,
   }
 
-// For loop: for (slice) |item| { ... }
-for_stmt = { "for" ~ "(" ~ expr ~ ")" ~ "|" ~ identifier ~ "|" ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "for", "args": {
-              "iterable": "$1",
-              "binding": "$2",
-              "body": "$3"
-          }}
-      ]
+for_stmt = { "for" ~ "(" ~ iter:expr ~ ")" ~ "|" ~ binding:identifier ~ "|" ~ body:block }
+  -> TypedStatement::For {
+      variable: intern(binding),
+      iterable: iter,
+      body: body,
   }
 
-// Assignment statement: identifier = expr;
-assign_stmt = { identifier ~ "=" ~ expr ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "assignment", "args": {
-              "target": "$1",
-              "value": "$2"
-          }}
-      ]
+assign_stmt = { target:identifier ~ "=" ~ value:expr ~ ";" }
+  -> TypedStatement::Assignment {
+      target: intern(target),
+      value: value,
   }
 
-// Children (non-silent): expr?
-return_stmt = { "return" ~ expr? ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "return_stmt", "args": { "value": "$1" } }
-      ]
+return_stmt = { "return" ~ value:expr? ~ ";" }
+  -> TypedStatement::Return {
+      value: value,
   }
 
-// Split into typed/untyped variants
 local_const = { local_const_typed | local_const_untyped }
-  -> TypedStatement { "get_child": { "index": 0 } }
 
-local_const_typed = { "const" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "type": "$2",
-              "init": "$3",
-              "is_const": true
-          }}
-      ]
+local_const_typed = { "const" ~ name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ init:expr ~ ";" }
+  -> TypedStatement::Let {
+      name: intern(name),
+      type_annotation: Some(ty),
+      initializer: Some(init),
+      is_mutable: false,
   }
 
-local_const_untyped = { "const" ~ identifier ~ "=" ~ expr ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "init": "$2",
-              "is_const": true
-          }}
-      ]
+local_const_untyped = { "const" ~ name:identifier ~ "=" ~ init:expr ~ ";" }
+  -> TypedStatement::Let {
+      name: intern(name),
+      initializer: Some(init),
+      is_mutable: false,
   }
 
 local_var = { local_var_typed | local_var_untyped }
-  -> TypedStatement { "get_child": { "index": 0 } }
 
-local_var_typed = { "var" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "type": "$2",
-              "init": "$3",
-              "is_const": false
-          }}
-      ]
+local_var_typed = { "var" ~ name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ init:expr ~ ";" }
+  -> TypedStatement::Let {
+      name: intern(name),
+      type_annotation: Some(ty),
+      initializer: Some(init),
+      is_mutable: true,
   }
 
-local_var_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "init": "$2",
-              "is_const": false
-          }}
-      ]
+local_var_untyped = { "var" ~ name:identifier ~ "=" ~ init:expr ~ ";" }
+  -> TypedStatement::Let {
+      name: intern(name),
+      initializer: Some(init),
+      is_mutable: true,
   }
 
-expr_stmt = { expr ~ ";" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "expression_stmt", "args": { "expr": "$1" } }
-      ]
+expr_stmt = { e:expr ~ ";" }
+  -> TypedStatement::Expression {
+      expr: e,
   }
 
-// Collect all statements using get_all_children
-block = { "{" ~ statement* ~ "}" }
+block = { "{" ~ stmts:statement* ~ "}" }
   -> TypedBlock {
-      "get_all_children": true,
-      "define": "block",
-      "args": { "statements": "$result" }
+      statements: stmts,
   }
 
 // ===== Expressions =====
+// For now, simplified to avoid complex binary folding
 
-expr = { logical_or }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
+expr = { e:comparison_expr }
+  -> e
+
+comparison_expr = { left:add_expr ~ (op:comparison_op ~ right:add_expr)? }
+  -> left
+
+comparison_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
+
+add_expr = { left:mul_expr ~ (op:add_op ~ right:mul_expr)? }
+  -> left
+
+add_op = @{ "+" | "-" }
+
+mul_expr = { left:unary_expr ~ (op:mul_op ~ right:unary_expr)? }
+  -> left
+
+mul_op = @{ "*" | "/" }
+
+unary_expr = { unary_with_op | primary }
+
+unary_with_op = { op:unary_op ~ operand:primary }
+  -> TypedExpression::Unary {
+      op: op,
+      operand: operand,
   }
 
-// Logical OR (lowest precedence)
-logical_or = { logical_and ~ (or_op ~ logical_and)* }
-  -> TypedExpression {
-      "fold_binary": { "operand": "logical_and", "operator": "or_op" }
-  }
-
-// Logical AND
-logical_and = { comparison ~ (and_op ~ comparison)* }
-  -> TypedExpression {
-      "fold_binary": { "operand": "comparison", "operator": "and_op" }
-  }
-
-// Comparison operators
-comparison = { addition ~ ((eq_op | neq_op | lte_op | gte_op | lt_op | gt_op) ~ addition)* }
-  -> TypedExpression {
-      "fold_binary": { "operand": "addition", "operator": "eq_op|neq_op|lte_op|gte_op|lt_op|gt_op" }
-  }
-
-addition = { multiplication ~ ((add_op | sub_op) ~ multiplication)* }
-  -> TypedExpression {
-      "fold_binary": { "operand": "multiplication", "operator": "add_op|sub_op" }
-  }
-
-multiplication = { unary ~ ((mul_op | div_op) ~ unary)* }
-  -> TypedExpression {
-      "fold_binary": { "operand": "unary", "operator": "mul_op|div_op" }
-  }
-
-unary = { unary_with_op | primary }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
-
-unary_with_op = { unary_op ~ primary }
-  -> TypedExpression {
-      "commands": [
-          { "define": "unary", "args": { "op": "$1", "operand": "$2" } }
-      ]
-  }
+unary_op = { "-" | "!" }
 
 primary = { postfix_expr }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
 
-// Postfix expressions: base followed by call/field/index
-// For now, just handle simple cases - no chaining
+// Postfix expressions
 postfix_expr = { call_expr | field_expr | index_expr | atom }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
+
+call_expr = { callee:atom ~ "(" ~ args:call_arg_list? ~ ")" }
+  -> TypedExpression::Call {
+      callee: callee,
+      args: args,
   }
 
-// Function call: atom(args...)
-call_expr = { atom ~ "(" ~ call_args? ~ ")" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "call", "args": { "callee": "$1", "args": "$2" } }
-      ]
+call_arg_list = { a:call_arg* }
+  -> a
+
+call_arg = { e:expr ~ ","? }
+  -> e
+
+field_expr = { object:atom ~ "." ~ field:identifier }
+  -> TypedExpression::FieldAccess {
+      object: object,
+      field: intern(field),
   }
 
-// Field access: atom.field
-field_expr = { atom ~ "." ~ identifier }
-  -> TypedExpression {
-      "commands": [
-          { "define": "field_access", "args": { "object": "$1", "field": "$2" } }
-      ]
+index_expr = { object:atom ~ "[" ~ index:expr ~ "]" }
+  -> TypedExpression::Index {
+      object: object,
+      index: index,
   }
 
-// Index: atom[index]
-index_expr = { atom ~ "[" ~ expr ~ "]" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "index", "args": { "object": "$1", "index": "$2" } }
-      ]
+// Atom: base expressions
+atom = { try_expr | await_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr }
+
+// Try expression
+try_expr = { "try" ~ e:primary }
+  -> TypedExpression::Try {
+      expr: e,
   }
 
-call_args = { expr ~ ("," ~ expr)* }
-  -> List {
-      "get_all_children": true
+// Await expression
+await_expr = { "await" ~ e:primary }
+  -> TypedExpression::Await {
+      expr: e,
   }
 
-// Atom: the base of postfix expressions
-atom = { switch_expr | try_expr | await_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | type_value | identifier_expr | paren_expr }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
+// Struct initialization
+struct_init = { type_name:identifier ~ "{" ~ fields:struct_init_field_list? ~ "}" }
+  -> TypedExpression::StructLiteral {
+      type_name: intern(type_name),
+      fields: fields,
   }
 
-// ===== Switch Expression =====
+struct_init_field_list = { f:struct_init_field* }
+  -> f
 
-// switch (expr) { cases... }
-switch_expr = { "switch" ~ "(" ~ expr ~ ")" ~ "{" ~ switch_cases? ~ "}" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "switch_expr", "args": {
-              "scrutinee": "$1",
-              "cases": "$2"
-          }}
-      ]
+struct_init_field = { "." ~ name:identifier ~ "=" ~ value:expr ~ ","? }
+  -> TypedFieldInit {
+      name: intern(name),
+      value: value,
   }
 
-switch_cases = { switch_case ~ ("," ~ switch_case)* ~ ","? }
-  -> List {
-      "get_all_children": true
+// Array literal
+array_literal = { "[" ~ elements:array_element_list? ~ "]" }
+  -> TypedExpression::Array {
+      elements: elements,
   }
 
-// Handle both value => expr and else => expr
-switch_case = { switch_case_value | switch_case_else }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
+array_element_list = { e:array_element* }
+  -> e
 
-// Value case: pattern => expr
-switch_case_value = { switch_pattern ~ "=>" ~ expr }
-  -> TypedExpression {
-      "commands": [
-          { "define": "switch_case", "args": {
-              "pattern": { "get_child": { "index": 0 } },
-              "body": { "get_child": { "index": 1 } }
-          }}
-      ]
-  }
-
-// Else case: else => expr
-switch_case_else = { "else" ~ "=>" ~ expr }
-  -> TypedExpression {
-      "commands": [
-          { "define": "switch_case", "args": {
-              "pattern": { "define": "wildcard_pattern" },
-              "body": "$1"
-          }}
-      ]
-  }
-
-// Pattern for switch case - supports various pattern types
-switch_pattern = { switch_or_pattern }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
-
-// Or pattern: 1 | 2 | 3
-// For now, simplified to just pass through the first pattern
-// TODO: Implement proper or_pattern support when multiple alternatives
-switch_or_pattern = { switch_primary_pattern ~ ("|" ~ switch_primary_pattern)* }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
-
-// Primary patterns (non-or)
-switch_primary_pattern = { switch_struct_pattern | switch_tagged_union_pattern | switch_error_pattern | switch_pointer_pattern | switch_range_pattern | switch_array_pattern | switch_literal_pattern | switch_wildcard_pattern | switch_identifier_pattern }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
-
-// Range pattern: 1..10 or 'a'..'z'
-switch_range_pattern = { switch_simple_literal ~ ".." ~ switch_simple_literal }
-  -> TypedExpression {
-      "commands": [
-          { "define": "range_pattern", "args": {
-              "start": { "define": "literal_pattern", "args": { "value": "$1" } },
-              "end": { "define": "literal_pattern", "args": { "value": "$2" } },
-              "inclusive": false
-          }}
-      ]
-  }
-
-// Array pattern: [a, b, c] or .{a, b}
-switch_array_pattern = { ".{" ~ switch_array_elements? ~ "}" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "array_pattern", "args": { "elements": "$1" } }
-      ]
-  }
-
-switch_array_elements = { switch_pattern ~ ("," ~ switch_pattern)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
-
-// Literal patterns (integers, strings, chars, bools)
-switch_literal_pattern = { switch_simple_literal }
-  -> TypedExpression {
-      "commands": [
-          { "define": "literal_pattern", "args": { "value": "$1" } }
-      ]
-  }
-
-switch_simple_literal = { integer_literal | string_literal }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
-
-// Wildcard pattern: _
-switch_wildcard_pattern = { "_" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "wildcard_pattern" }
-      ]
-  }
-
-// Identifier pattern (variable binding): x, value
-switch_identifier_pattern = { identifier }
-  -> TypedExpression {
-      "commands": [
-          { "define": "identifier_pattern", "args": { "name": { "text": "$1" } } }
-      ]
-  }
-
-// Struct pattern: Point{ .x, .y } or Point{ .x = px, .y = py }
-switch_struct_pattern = { identifier ~ "{" ~ switch_struct_field_patterns? ~ "}" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "struct_pattern", "args": {
-              "name": { "text": "$1" },
-              "fields": "$2"
-          }}
-      ]
-  }
-
-switch_struct_field_patterns = { switch_struct_field_pattern ~ ("," ~ switch_struct_field_pattern)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
-
-// Struct field pattern: .x or .x = pattern
-switch_struct_field_pattern = { "." ~ identifier ~ ("=" ~ switch_pattern)? }
-  -> TypedExpression {
-      "commands": [
-          { "define": "field_pattern", "args": {
-              "name": { "text": "$1" },
-              "pattern": "$2"
-          }}
-      ]
-  }
-
-// Tagged union pattern: .some, .none, .value
-// In Zig, tagged unions are matched with .variant or .variant => |capture|
-switch_tagged_union_pattern = { "." ~ identifier }
-  -> TypedExpression {
-      "commands": [
-          { "define": "enum_pattern", "args": {
-              "name": "",
-              "variant": { "text": "$1" },
-              "fields": []
-          }}
-      ]
-  }
-
-// Error pattern: error.OutOfMemory
-switch_error_pattern = { "error" ~ "." ~ identifier }
-  -> TypedExpression {
-      "commands": [
-          { "define": "error_pattern", "args": {
-              "name": { "text": "$1" }
-          }}
-      ]
-  }
-
-// Pointer pattern: *x (dereference pattern)
-switch_pointer_pattern = { "*" ~ switch_primary_pattern }
-  -> TypedExpression {
-      "commands": [
-          { "define": "pointer_pattern", "args": {
-              "inner": "$1",
-              "mutable": false
-          }}
-      ]
-  }
-
-// Type as a value (for comptime type parameters)
-type_value = { type_expr_as_value }
-  -> TypedExpression {
-      "commands": [
-          { "define": "type_value", "args": { "type": "$1" } }
-      ]
-  }
-
-// Types that can be used as values in expressions (for comptime)
-type_expr_as_value = { primitive_type }
-  -> Type {
-      "get_child": { "index": 0 }
-  }
-
-// Struct instantiation: Point{ .x = 10, .y = 20 }
-struct_init = { identifier ~ "{" ~ struct_init_fields? ~ "}" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "struct_init", "args": { "type_name": "$1", "fields": "$2" } }
-      ]
-  }
-
-struct_init_fields = { struct_init_field ~ ("," ~ struct_init_field)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
-
-struct_init_field = { "." ~ identifier ~ "=" ~ expr }
-  -> TypedExpression {
-      "commands": [
-          { "define": "struct_field_init", "args": { "name": "$1", "value": "$2" } }
-      ]
-  }
-
-// Try expression: try expr
-try_expr = { "try" ~ primary }
-  -> TypedExpression {
-      "commands": [
-          { "define": "try", "args": { "expr": "$1" } }
-      ]
-  }
-
-// Await expression: await expr
-await_expr = { "await" ~ primary }
-  -> TypedExpression {
-      "commands": [
-          { "define": "await", "args": { "expr": "$1" } }
-      ]
-  }
+array_element = { v:expr ~ ","? }
+  -> v
 
 paren_expr = _{ "(" ~ expr ~ ")" }
 
-// Array literal: [a, b, c]
-array_literal = { "[" ~ array_elements? ~ "]" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "array_literal", "args": { "elements": "$1" } }
-      ]
-  }
-
-array_elements = { expr ~ ("," ~ expr)* }
-  -> List {
-      "get_all_children": true
-  }
-
-identifier_expr = { identifier }
-  -> TypedExpression {
-      "get_text": true,
-      "define": "variable",
-      "args": { "name": "$result" }
+identifier_expr = { name:identifier }
+  -> TypedExpression::Variable {
+      name: intern(name),
   }
 
 // ===== Literals =====
 
 bool_literal = { "true" | "false" }
-  -> TypedExpression {
-      "get_text": true,
-      "define": "bool_literal",
-      "args": { "value": "$result" }
+  -> TypedExpression::Literal {
+      value: TypedLiteral::Bool { value: text },
   }
 
 integer_literal = @{ "-"? ~ ASCII_DIGIT+ }
-  -> TypedExpression {
-      "get_text": true,
-      "parse_int": true,
-      "define": "int_literal",
-      "args": { "value": "$result" }
+  -> TypedExpression::Literal {
+      value: TypedLiteral::Int { value: parse_int(text) },
   }
 
 string_literal = @{ "\"" ~ string_inner* ~ "\"" }
-  -> TypedExpression {
-      "get_text": true,
-      "define": "string_literal",
-      "args": { "value": "$result" }
+  -> TypedExpression::Literal {
+      value: TypedLiteral::String { value: intern(text) },
   }
 
 string_inner = { (!("\"" | "\\") ~ ANY) | escape_seq }
@@ -852,59 +451,12 @@ escape_seq = { "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "0") }
 keyword = @{
     ("struct" | "enum" | "fn" | "const" | "var" | "if" | "else" | "while" | "for" |
      "return" | "break" | "continue" | "try" | "await" | "async" | "and" | "or" | "true" | "false" |
-     "comptime" | "type" | "switch" |
+     "comptime" | "type" | "switch" | "extern" | "error" |
      "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void")
     ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 identifier = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
-  -> String {
-      "get_text": true
-  }
-
-// ===== Operators =====
-
-// Logical operators
-and_op = { "and" }
-  -> String { "get_text": true }
-
-or_op = { "or" }
-  -> String { "get_text": true }
-
-// Comparison operators (must check longer operators first)
-eq_op = { "==" }
-  -> String { "get_text": true }
-
-neq_op = { "!=" }
-  -> String { "get_text": true }
-
-lte_op = { "<=" }
-  -> String { "get_text": true }
-
-gte_op = { ">=" }
-  -> String { "get_text": true }
-
-lt_op = { "<" }
-  -> String { "get_text": true }
-
-gt_op = { ">" }
-  -> String { "get_text": true }
-
-// Arithmetic operators
-add_op = { "+" }
-  -> String { "get_text": true }
-
-sub_op = { "-" }
-  -> String { "get_text": true }
-
-mul_op = { "*" }
-  -> String { "get_text": true }
-
-div_op = { "/" }
-  -> String { "get_text": true }
-
-unary_op = { "-" | "!" }
-  -> String { "get_text": true }
 
 // ===== Whitespace and Comments =====
 
