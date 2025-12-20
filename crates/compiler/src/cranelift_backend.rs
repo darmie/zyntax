@@ -594,6 +594,24 @@ impl CraneliftBackend {
                 }
             }
 
+            // Pre-compute sizes for aggregate undef values (to avoid borrow checker issues later)
+            let mut undef_aggregate_sizes: HashMap<HirId, u32> = HashMap::new();
+            for value in function.values.values() {
+                if let HirValueKind::Undef = value.kind {
+                    match &value.ty {
+                        HirType::Struct(_) | HirType::Array(_, _) | HirType::Union(_) => {
+                            let alloc_size = self.type_size(&value.ty).unwrap_or(8) as u32;
+                            let alloc_size = std::cmp::max(alloc_size, 8); // At least 8 bytes
+                            undef_aggregate_sizes.insert(value.id, alloc_size);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // Pre-compute pointer type for use inside builder scope
+            let pointer_type = self.module.target_config().pointer_type();
+
             // Phase 2: Create builder and all Cranelift blocks
             let mut builder = FunctionBuilder::new(
                 &mut self.codegen_context.func,
@@ -702,31 +720,18 @@ impl CraneliftBackend {
             }
 
             // Map undef values to zero constants (for IDF-based SSA)
-            // For struct types, allocate stack space instead of using a zero constant
+            // For aggregate types (structs, arrays), allocate stack space instead of using a zero constant
             for value in function.values.values() {
                 if let HirValueKind::Undef = value.kind {
-                    // Check if this is a struct type that needs stack allocation
-                    if let HirType::Struct(struct_ty) = &value.ty {
-                        // Allocate stack space for the struct
-                        let struct_size = struct_ty.fields.iter()
-                            .map(|f| match f {
-                                HirType::I8 | HirType::U8 | HirType::Bool => 1,
-                                HirType::I16 | HirType::U16 => 2,
-                                HirType::I32 | HirType::U32 | HirType::F32 => 4,
-                                HirType::I64 | HirType::U64 | HirType::F64 | HirType::Ptr(_) => 8,
-                                HirType::I128 | HirType::U128 => 16,
-                                _ => 8, // Default
-                            })
-                            .sum::<usize>();
-                        let struct_size = std::cmp::max(struct_size, 8) as u32; // At least 8 bytes
-
+                    // Check if this is an aggregate type with pre-computed size
+                    if let Some(&alloc_size) = undef_aggregate_sizes.get(&value.id) {
                         let slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                             cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
-                            struct_size,
+                            alloc_size,
                         ));
-                        let ptr = builder.ins().stack_addr(self.module.target_config().pointer_type(), slot, 0);
+                        let ptr = builder.ins().stack_addr(pointer_type, slot, 0);
                         self.value_map.insert(value.id, ptr);
-                        eprintln!("[CRANELIFT UNDEF] Allocated {} bytes stack for struct undef {:?}", struct_size, value.id);
+                        eprintln!("[CRANELIFT UNDEF] Allocated {} bytes stack for aggregate undef {:?}", alloc_size, value.id);
                     } else {
                         // For scalar types, use zero constant
                         let ty = type_cache.get(&value.ty).copied().unwrap_or(types::I64);
