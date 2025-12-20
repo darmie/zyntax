@@ -277,6 +277,13 @@ fn typed_ast_to_hir(
     let mut augmented_program = program.clone();
     add_runtime_function_declarations(&mut augmented_program, &mut arena);
 
+    // Run linear type checking (ownership/borrowing validation)
+    // Skip if SKIP_LINEAR_CHECK is set (for debugging or legacy code)
+    if std::env::var("SKIP_LINEAR_CHECK").is_err() {
+        zyntax_compiler::run_linear_type_check(&augmented_program)
+            .map_err(|e| format!("Linear type check failed: {:?}", e))?;
+    }
+
     let module_name = arena.intern_string("main");
     let type_registry = Arc::new(TypeRegistry::new());
     let arena_arc = Arc::new(Mutex::new(arena));

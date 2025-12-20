@@ -451,6 +451,13 @@ fn lower_to_hir(
         }
     }
 
+    // Run linear type checking (ownership/borrowing validation)
+    // Skip if SKIP_LINEAR_CHECK is set (for debugging or legacy code)
+    if std::env::var("SKIP_LINEAR_CHECK").is_err() {
+        zyntax_compiler::run_linear_type_check(&program)
+            .map_err(|e| format!("Linear type check failed: {:?}", e))?;
+    }
+
     let arena = AstArena::new();
     let module_name = InternedString::new_global("main");
     // Use the program's type registry which now has registered types

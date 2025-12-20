@@ -615,6 +615,110 @@ impl HirInstruction {
             HirInstruction::LifetimeConstraint { .. } => {}
         }
     }
+
+    /// Get all operand HirIds used by this instruction
+    pub fn operands(&self) -> Vec<HirId> {
+        let mut ops = Vec::new();
+        match self {
+            HirInstruction::Binary { left, right, .. } => {
+                ops.push(*left);
+                ops.push(*right);
+            }
+            HirInstruction::Unary { operand, .. } => {
+                ops.push(*operand);
+            }
+            HirInstruction::Alloca { count, .. } => {
+                if let Some(c) = count {
+                    ops.push(*c);
+                }
+            }
+            HirInstruction::Load { ptr, .. } => {
+                ops.push(*ptr);
+            }
+            HirInstruction::Store { value, ptr, .. } => {
+                ops.push(*value);
+                ops.push(*ptr);
+            }
+            HirInstruction::GetElementPtr { ptr, indices, .. } => {
+                ops.push(*ptr);
+                ops.extend(indices.iter().copied());
+            }
+            HirInstruction::Call { args, .. } => {
+                ops.extend(args.iter().copied());
+            }
+            HirInstruction::IndirectCall { func_ptr, args, .. } => {
+                ops.push(*func_ptr);
+                ops.extend(args.iter().copied());
+            }
+            HirInstruction::Cast { operand, .. } => {
+                ops.push(*operand);
+            }
+            HirInstruction::Select { condition, true_val, false_val, .. } => {
+                ops.push(*condition);
+                ops.push(*true_val);
+                ops.push(*false_val);
+            }
+            HirInstruction::ExtractValue { aggregate, .. } => {
+                ops.push(*aggregate);
+            }
+            HirInstruction::InsertValue { aggregate, value, .. } => {
+                ops.push(*aggregate);
+                ops.push(*value);
+            }
+            HirInstruction::Atomic { ptr, value, .. } => {
+                ops.push(*ptr);
+                if let Some(v) = value {
+                    ops.push(*v);
+                }
+            }
+            HirInstruction::Fence { .. } => {}
+            HirInstruction::CreateUnion { value, .. } => {
+                ops.push(*value);
+            }
+            HirInstruction::GetUnionDiscriminant { union_val, .. } => {
+                ops.push(*union_val);
+            }
+            HirInstruction::ExtractUnionValue { union_val, .. } => {
+                ops.push(*union_val);
+            }
+            HirInstruction::CreateTraitObject { data_ptr, vtable_id, .. } => {
+                ops.push(*data_ptr);
+                ops.push(*vtable_id);
+            }
+            HirInstruction::UpcastTraitObject { sub_trait_object, super_vtable_id, .. } => {
+                ops.push(*sub_trait_object);
+                ops.push(*super_vtable_id);
+            }
+            HirInstruction::TraitMethodCall { trait_object, args, .. } => {
+                ops.push(*trait_object);
+                ops.extend(args.iter().copied());
+            }
+            HirInstruction::CreateClosure { function, captures, .. } => {
+                ops.push(*function);
+                ops.extend(captures.iter().copied());
+            }
+            HirInstruction::CallClosure { closure, args, .. } => {
+                ops.push(*closure);
+                ops.extend(args.iter().copied());
+            }
+            HirInstruction::CreateRef { value, .. } => {
+                ops.push(*value);
+            }
+            HirInstruction::Deref { reference, .. } => {
+                ops.push(*reference);
+            }
+            HirInstruction::Move { source, .. } => {
+                ops.push(*source);
+            }
+            HirInstruction::Copy { source, .. } => {
+                ops.push(*source);
+            }
+            HirInstruction::BeginLifetime { .. } |
+            HirInstruction::EndLifetime { .. } |
+            HirInstruction::LifetimeConstraint { .. } => {}
+        }
+        ops
+    }
 }
 
 impl HirTerminator {

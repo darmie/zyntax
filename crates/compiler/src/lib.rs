@@ -29,6 +29,7 @@ pub mod trait_lowering;  // Trait/interface lowering to HIR
 pub mod vtable_registry;  // Vtable management and caching
 pub mod associated_type_resolver;  // Associated type resolution for trait dispatch
 pub mod analysis;
+pub mod borrow_check;  // HIR-level borrow checking pass
 pub mod optimization;
 pub mod memory_optimization;  // Memory-aware optimizations
 pub mod const_eval;
@@ -75,6 +76,10 @@ pub use memory_management::{
 };
 pub use memory_pass::MemoryManagementPass;
 pub use memory_optimization::MemoryOptimizationPass;
+pub use borrow_check::{
+    HirBorrowChecker, BorrowCheckResult, BorrowError, BorrowWarning,
+    run_borrow_check, validate_borrow_check,
+};
 pub use async_support::{
     AsyncCompiler, AsyncStateMachine, AsyncState, AsyncRuntime, AsyncRuntimeType,
     AsyncCapture, AsyncCaptureMode, AsyncTerminator
@@ -132,6 +137,8 @@ pub struct CompilationConfig {
     pub async_runtime: Option<async_support::AsyncRuntimeType>,
     /// Import resolver for resolving import statements during compilation
     pub import_resolver: Option<Arc<dyn ImportResolver>>,
+    /// Enable HIR-level borrow checking (validates ownership/borrowing at HIR level)
+    pub enable_borrow_check: bool,
 }
 
 impl std::fmt::Debug for CompilationConfig {
@@ -145,6 +152,7 @@ impl std::fmt::Debug for CompilationConfig {
             .field("memory_strategy", &self.memory_strategy)
             .field("async_runtime", &self.async_runtime)
             .field("import_resolver", &self.import_resolver.as_ref().map(|r| r.resolver_name()))
+            .field("enable_borrow_check", &self.enable_borrow_check)
             .finish()
     }
 }
@@ -160,6 +168,7 @@ impl Default for CompilationConfig {
             memory_strategy: Some(memory_management::MemoryStrategy::ARC),
             async_runtime: Some(async_support::AsyncRuntimeType::Tokio),
             import_resolver: None,
+            enable_borrow_check: false, // Disabled by default for now
         }
     }
 }
@@ -363,6 +372,35 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
 
     eprintln!("[REGISTER_IMPL] Registration complete - registered {} impl blocks", impl_count);
     Ok(())
+}
+
+/// Run linear type checking on a TypedProgram
+///
+/// This function validates ownership, borrowing, and lifetime constraints
+/// before lowering to HIR. It ensures:
+/// - Linear types are used exactly once
+/// - Affine types are used at most once
+/// - Borrow rules are respected (no mutable aliases)
+/// - Resources are properly cleaned up
+///
+/// Returns errors if linear type constraints are violated.
+pub fn run_linear_type_check(program: &zyntax_typed_ast::TypedProgram) -> Result<(), CompilerError> {
+    use zyntax_typed_ast::LinearTypeChecker;
+
+    eprintln!("[LINEAR_CHECK] Running linear type checking...");
+
+    let mut checker = LinearTypeChecker::new();
+
+    match checker.check_program(program) {
+        Ok(()) => {
+            eprintln!("[LINEAR_CHECK] Linear type checking passed");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[LINEAR_CHECK] Linear type error: {:?}", e);
+            Err(CompilerError::Analysis(format!("Linear type error: {:?}", e)))
+        }
+    }
 }
 
 /// Generate automatic trait implementations for abstract types
@@ -1272,6 +1310,12 @@ pub fn compile_to_hir(
     // Step 3: Analysis passes
     let mut analysis_runner = analysis::AnalysisRunner::new(hir_module.clone());
     let analysis = analysis_runner.run_all()?;
+
+    // Step 3b: HIR borrow checking (if enabled)
+    if config.enable_borrow_check {
+        let borrow_result = borrow_check::run_borrow_check(&hir_module, Some(&analysis))?;
+        borrow_check::validate_borrow_check(&borrow_result)?;
+    }
 
     // Step 4: Memory management pass (if strategy is configured)
     if let Some(strategy) = config.memory_strategy {

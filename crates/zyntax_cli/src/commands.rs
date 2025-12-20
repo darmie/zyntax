@@ -931,6 +931,13 @@ fn eval_input(
     zyntax_compiler::register_impl_blocks(&mut typed_program)
         .map_err(|e| format!("Failed to register generated impl blocks: {:?}", e))?;
 
+    // Run linear type checking (ownership/borrowing validation)
+    // Skip if SKIP_LINEAR_CHECK is set (for debugging or legacy code)
+    if std::env::var("SKIP_LINEAR_CHECK").is_err() {
+        zyntax_compiler::run_linear_type_check(&typed_program)
+            .map_err(|e| format!("Linear type check failed: {:?}", e))?;
+    }
+
     // Lower to HIR
     let arena = AstArena::new();
     let module_name = InternedString::new_global("repl");
