@@ -504,6 +504,506 @@ impl MemoryContext {
             false
         }
     }
+
+    /// Get all non-escaping allocations that can be promoted to stack
+    pub fn get_stack_promotable_allocations(&self) -> Vec<HirId> {
+        self.allocations
+            .iter()
+            .filter(|(id, info)| {
+                // Can promote if:
+                // 1. Not already on stack
+                // 2. Doesn't escape
+                // 3. Has known size
+                !info.is_stack &&
+                self.can_stack_allocate(**id) &&
+                info.size.is_some()
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+}
+
+/// Stack promotion pass - converts heap allocations to stack where safe
+pub struct StackPromotionPass {
+    /// Allocations that were promoted
+    pub promoted: Vec<HirId>,
+    /// Allocations that couldn't be promoted (with reasons)
+    pub not_promoted: Vec<(HirId, String)>,
+}
+
+impl StackPromotionPass {
+    pub fn new() -> Self {
+        Self {
+            promoted: Vec::new(),
+            not_promoted: Vec::new(),
+        }
+    }
+
+    /// Run stack promotion on a function
+    pub fn promote_function(
+        &mut self,
+        func: &mut HirFunction,
+        escape_info: &HashMap<HirId, EscapeInfo>,
+    ) -> CompilerResult<()> {
+        eprintln!("[STACK_PROMOTION] Analyzing function '{}'", func.name.resolve_global().unwrap_or_else(|| "?".to_string()));
+
+        // Find all heap allocations (malloc calls)
+        let mut allocations_to_promote = Vec::new();
+
+        for block in func.blocks.values() {
+            for inst in &block.instructions {
+                if let HirInstruction::Call {
+                    result: Some(result),
+                    callee: HirCallable::Intrinsic(Intrinsic::Malloc),
+                    args,
+                    ..
+                } = inst {
+                    // Check if this allocation escapes
+                    if let Some(info) = escape_info.get(result) {
+                        if info.escapes {
+                            self.not_promoted.push((*result, format!(
+                                "escapes: returned={}, stored_in_heap={}",
+                                info.is_returned, info.stored_in_heap
+                            )));
+                        } else {
+                            // Safe to promote to stack
+                            allocations_to_promote.push((*result, args.clone()));
+                        }
+                    } else {
+                        // No escape info - be conservative
+                        self.not_promoted.push((*result, "no escape info".to_string()));
+                    }
+                }
+            }
+        }
+
+        eprintln!("[STACK_PROMOTION] Found {} promotable allocations, {} not promotable",
+            allocations_to_promote.len(), self.not_promoted.len());
+
+        // Actually promote the allocations
+        for (result_id, args) in allocations_to_promote {
+            self.promote_allocation(func, result_id, args)?;
+            self.promoted.push(result_id);
+        }
+
+        Ok(())
+    }
+
+    /// Convert a malloc call to a stack allocation
+    fn promote_allocation(
+        &mut self,
+        func: &mut HirFunction,
+        result_id: HirId,
+        malloc_args: Vec<HirId>,
+    ) -> CompilerResult<()> {
+        // Find and replace the malloc instruction
+        for block in func.blocks.values_mut() {
+            let mut new_instructions = Vec::new();
+
+            for inst in &block.instructions {
+                if let HirInstruction::Call {
+                    result: Some(result),
+                    callee: HirCallable::Intrinsic(Intrinsic::Malloc),
+                    ..
+                } = inst {
+                    if *result == result_id {
+                        // Replace with alloca
+                        eprintln!("[STACK_PROMOTION] Promoting allocation {:?} to stack", result_id);
+                        new_instructions.push(HirInstruction::Alloca {
+                            result: result_id,
+                            ty: HirType::I8, // Byte array, will be cast
+                            count: malloc_args.get(0).cloned(),
+                            align: 8,
+                        });
+                        continue;
+                    }
+                }
+                new_instructions.push(inst.clone());
+            }
+
+            block.instructions = new_instructions;
+        }
+
+        // Also need to remove the corresponding free if there is one
+        for block in func.blocks.values_mut() {
+            block.instructions.retain(|inst| {
+                if let HirInstruction::Call {
+                    callee: HirCallable::Intrinsic(Intrinsic::Free),
+                    args,
+                    ..
+                } = inst {
+                    // Remove free of the promoted allocation
+                    !args.contains(&result_id)
+                } else {
+                    true
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Get summary of promotion results
+    pub fn get_summary(&self) -> String {
+        format!(
+            "Stack promotion: {} promoted, {} not promoted",
+            self.promoted.len(),
+            self.not_promoted.len()
+        )
+    }
+}
+
+/// Unified cleanup behavior that bridges LinearTypeChecker's cleanup rules with DropManager
+/// This allows consistent resource management across the TypedAST and HIR levels.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnifiedCleanupBehavior {
+    /// Automatic cleanup (RAII/drop) - matches LinearTypeChecker's CleanupBehavior::Automatic
+    Automatic {
+        destructor: Option<HirId>,
+        is_fallible: bool,
+    },
+    /// Manual cleanup required - user must call cleanup explicitly
+    Manual {
+        cleanup_intrinsic: Intrinsic,
+    },
+    /// No cleanup needed (e.g., Copy types, primitives)
+    None,
+    /// Reference counted cleanup (decrement refcount, free if zero)
+    RefCounted,
+    /// Deferred cleanup (cleanup at end of scope or transaction)
+    Deferred {
+        scope_id: HirId,
+    },
+}
+
+/// Linearity kind for HIR-level tracking
+/// Mirrors LinearityKind from TypedAST level for consistency
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HirLinearityKind {
+    /// Must be used exactly once (linear) - e.g., file handles
+    Linear,
+    /// Must be used at most once (affine) - e.g., unique pointers
+    Affine,
+    /// Can be used multiple times (relevant)
+    Relevant,
+    /// Can be used zero or more times (unrestricted) - e.g., Copy types
+    Unrestricted,
+    /// Cannot be copied but can be borrowed (unique)
+    Unique,
+    /// Read-only, can be shared but not mutated
+    Shared,
+}
+
+/// Information about a type's cleanup requirements
+#[derive(Debug, Clone)]
+pub struct CleanupInfo {
+    /// The type being cleaned up
+    pub ty: HirType,
+    /// How to clean up values of this type
+    pub cleanup_behavior: UnifiedCleanupBehavior,
+    /// Linearity kind determining usage patterns
+    pub linearity: HirLinearityKind,
+    /// Whether this type needs cleanup at all
+    pub needs_cleanup: bool,
+    /// Priority for cleanup ordering (higher = cleanup first)
+    pub cleanup_priority: i32,
+}
+
+/// Unified Drop/Cleanup Manager that integrates with LinearTypeChecker
+pub struct UnifiedCleanupManager {
+    /// Type cleanup information
+    type_cleanup: HashMap<HirType, CleanupInfo>,
+    /// Values pending cleanup in current scope
+    pending_cleanup: Vec<HirId>,
+    /// Scope stack for deferred cleanup
+    scope_stack: Vec<ScopeCleanupInfo>,
+    /// Custom destructors registered from TypedAST
+    custom_destructors: HashMap<HirType, HirId>,
+    /// Memory strategy being used
+    strategy: MemoryStrategy,
+}
+
+/// Cleanup information for a scope
+#[derive(Debug, Clone)]
+pub struct ScopeCleanupInfo {
+    /// Scope identifier
+    pub scope_id: HirId,
+    /// Values that need cleanup when scope ends
+    pub values_to_cleanup: Vec<HirId>,
+    /// Deferred cleanup actions
+    pub deferred_actions: Vec<CleanupAction>,
+}
+
+/// A cleanup action to perform
+#[derive(Debug, Clone)]
+pub enum CleanupAction {
+    /// Call destructor on a value
+    CallDestructor {
+        value: HirId,
+        destructor: HirId,
+    },
+    /// Call an intrinsic (e.g., Free, DecRef)
+    CallIntrinsic {
+        intrinsic: Intrinsic,
+        args: Vec<HirId>,
+    },
+    /// Drop a value using generic drop
+    Drop {
+        value: HirId,
+    },
+}
+
+impl UnifiedCleanupManager {
+    pub fn new(strategy: MemoryStrategy) -> Self {
+        Self {
+            type_cleanup: HashMap::new(),
+            pending_cleanup: Vec::new(),
+            scope_stack: Vec::new(),
+            custom_destructors: HashMap::new(),
+            strategy,
+        }
+    }
+
+    /// Register cleanup information for a type
+    pub fn register_type_cleanup(&mut self, ty: HirType, info: CleanupInfo) {
+        self.type_cleanup.insert(ty, info);
+    }
+
+    /// Register a custom destructor for a type
+    pub fn register_destructor(&mut self, ty: HirType, destructor: HirId) {
+        self.custom_destructors.insert(ty.clone(), destructor);
+
+        // Also update cleanup info
+        if let Some(info) = self.type_cleanup.get_mut(&ty) {
+            info.cleanup_behavior = UnifiedCleanupBehavior::Automatic {
+                destructor: Some(destructor),
+                is_fallible: false,
+            };
+        } else {
+            self.type_cleanup.insert(ty.clone(), CleanupInfo {
+                ty,
+                cleanup_behavior: UnifiedCleanupBehavior::Automatic {
+                    destructor: Some(destructor),
+                    is_fallible: false,
+                },
+                linearity: HirLinearityKind::Affine,
+                needs_cleanup: true,
+                cleanup_priority: 0,
+            });
+        }
+    }
+
+    /// Enter a new cleanup scope
+    pub fn enter_scope(&mut self) -> HirId {
+        let scope_id = HirId::new();
+        self.scope_stack.push(ScopeCleanupInfo {
+            scope_id,
+            values_to_cleanup: Vec::new(),
+            deferred_actions: Vec::new(),
+        });
+        scope_id
+    }
+
+    /// Exit a scope and get cleanup actions
+    pub fn exit_scope(&mut self) -> Option<Vec<CleanupAction>> {
+        self.scope_stack.pop().map(|scope| {
+            let mut actions = scope.deferred_actions;
+
+            // Add cleanup for values in reverse order (LIFO)
+            for value in scope.values_to_cleanup.into_iter().rev() {
+                if let Some(destructor) = self.get_destructor_for_value(value) {
+                    actions.push(CleanupAction::CallDestructor { value, destructor });
+                } else {
+                    // Use strategy-appropriate cleanup
+                    match self.strategy {
+                        MemoryStrategy::ARC => {
+                            actions.push(CleanupAction::CallIntrinsic {
+                                intrinsic: Intrinsic::DecRef,
+                                args: vec![value],
+                            });
+                        }
+                        MemoryStrategy::Manual => {
+                            actions.push(CleanupAction::CallIntrinsic {
+                                intrinsic: Intrinsic::Free,
+                                args: vec![value],
+                            });
+                        }
+                        _ => {
+                            actions.push(CleanupAction::Drop { value });
+                        }
+                    }
+                }
+            }
+
+            actions
+        })
+    }
+
+    /// Track a value that needs cleanup in the current scope
+    pub fn track_value(&mut self, value: HirId, ty: &HirType) {
+        if self.needs_cleanup(ty) {
+            if let Some(scope) = self.scope_stack.last_mut() {
+                scope.values_to_cleanup.push(value);
+            } else {
+                self.pending_cleanup.push(value);
+            }
+        }
+    }
+
+    /// Check if a type needs cleanup
+    pub fn needs_cleanup(&self, ty: &HirType) -> bool {
+        if let Some(info) = self.type_cleanup.get(ty) {
+            info.needs_cleanup
+        } else {
+            // Default: pointers and closures need cleanup
+            match ty {
+                HirType::Ptr(_) => true,
+                HirType::Closure(_) => true,
+                HirType::Array(elem, _) => self.needs_cleanup(elem),
+                HirType::Struct(s) => s.fields.iter().any(|f| self.needs_cleanup(f)),
+                _ => false,
+            }
+        }
+    }
+
+    /// Get the destructor for a value (if any)
+    fn get_destructor_for_value(&self, _value: HirId) -> Option<HirId> {
+        // Would need to look up value's type and find destructor
+        // For now, returns None (uses generic cleanup)
+        None
+    }
+
+    /// Get linearity for a type
+    pub fn get_linearity(&self, ty: &HirType) -> HirLinearityKind {
+        if let Some(info) = self.type_cleanup.get(ty) {
+            info.linearity
+        } else {
+            // Defaults based on type kind
+            match ty {
+                // Primitives are unrestricted (Copy)
+                HirType::I8 | HirType::I16 | HirType::I32 | HirType::I64 |
+                HirType::U8 | HirType::U16 | HirType::U32 | HirType::U64 |
+                HirType::F32 | HirType::F64 | HirType::Bool => HirLinearityKind::Unrestricted,
+
+                // Pointers are affine by default
+                HirType::Ptr(_) => HirLinearityKind::Affine,
+
+                // References are shared
+                HirType::Ref { .. } => HirLinearityKind::Shared,
+
+                // Closures are affine
+                HirType::Closure(_) => HirLinearityKind::Affine,
+
+                // Other types default to unrestricted
+                _ => HirLinearityKind::Unrestricted,
+            }
+        }
+    }
+
+    /// Convert cleanup actions to HIR instructions
+    pub fn actions_to_instructions(&self, actions: &[CleanupAction]) -> Vec<HirInstruction> {
+        actions.iter().map(|action| {
+            match action {
+                CleanupAction::CallDestructor { value, destructor } => {
+                    HirInstruction::Call {
+                        result: None,
+                        callee: HirCallable::Function(*destructor),
+                        args: vec![*value],
+                        type_args: vec![],
+                        const_args: vec![],
+                        is_tail: false,
+                    }
+                }
+                CleanupAction::CallIntrinsic { intrinsic, args } => {
+                    HirInstruction::Call {
+                        result: None,
+                        callee: HirCallable::Intrinsic(*intrinsic),
+                        args: args.clone(),
+                        type_args: vec![],
+                        const_args: vec![],
+                        is_tail: false,
+                    }
+                }
+                CleanupAction::Drop { value } => {
+                    HirInstruction::Call {
+                        result: None,
+                        callee: HirCallable::Intrinsic(Intrinsic::Drop),
+                        args: vec![*value],
+                        type_args: vec![],
+                        const_args: vec![],
+                        is_tail: false,
+                    }
+                }
+            }
+        }).collect()
+    }
+
+    /// Insert cleanup instructions into a function
+    pub fn insert_cleanup(&mut self, func: &mut HirFunction) -> CompilerResult<()> {
+        eprintln!("[CLEANUP] Inserting cleanup for function '{}'",
+                  func.name.resolve_global().unwrap_or_else(|| "?".to_string()));
+
+        // Track all values that need cleanup
+        for (value_id, value) in &func.values {
+            self.track_value(*value_id, &value.ty);
+        }
+
+        // Create cleanup sequences for return blocks
+        let mut cleanup_sequences = HashMap::new();
+
+        for (block_id, block) in &func.blocks {
+            if matches!(block.terminator, HirTerminator::Return { .. }) {
+                // Get cleanup for pending values
+                let cleanup_actions: Vec<CleanupAction> = self.pending_cleanup
+                    .iter()
+                    .rev()
+                    .filter_map(|&value| {
+                        if let Some(val) = func.values.get(&value) {
+                            if self.needs_cleanup(&val.ty) {
+                                if let Some(destructor) = self.custom_destructors.get(&val.ty) {
+                                    Some(CleanupAction::CallDestructor { value, destructor: *destructor })
+                                } else {
+                                    Some(CleanupAction::Drop { value })
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if !cleanup_actions.is_empty() {
+                    cleanup_sequences.insert(*block_id, self.actions_to_instructions(&cleanup_actions));
+                }
+            }
+        }
+
+        // Insert cleanup sequences
+        for (block_id, instructions) in cleanup_sequences {
+            if let Some(block) = func.blocks.get_mut(&block_id) {
+                // Insert before terminator
+                block.instructions.extend(instructions);
+            }
+        }
+
+        self.pending_cleanup.clear();
+        Ok(())
+    }
+}
+
+/// Bridge between TypedAST LinearTypeChecker and HIR cleanup
+pub fn convert_linearity_kind(typed_ast_linearity: &str) -> HirLinearityKind {
+    match typed_ast_linearity {
+        "Linear" => HirLinearityKind::Linear,
+        "Affine" => HirLinearityKind::Affine,
+        "Relevant" => HirLinearityKind::Relevant,
+        "Unrestricted" => HirLinearityKind::Unrestricted,
+        "Unique" => HirLinearityKind::Unique,
+        "Shared" => HirLinearityKind::Shared,
+        _ => HirLinearityKind::Unrestricted,
+    }
 }
 
 #[cfg(test)]

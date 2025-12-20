@@ -27,6 +27,8 @@ pub struct MemoryManagementPass {
     escape_analysis: EscapeAnalysis,
     /// Memory contexts per function
     contexts: HashMap<HirId, MemoryContext>,
+    /// Stack promotion pass
+    stack_promotion: StackPromotionPass,
 }
 
 impl MemoryManagementPass {
@@ -37,6 +39,7 @@ impl MemoryManagementPass {
             drop_manager: DropManager::new(),
             escape_analysis: EscapeAnalysis::new(),
             contexts: HashMap::new(),
+            stack_promotion: StackPromotionPass::new(),
         }
     }
     
@@ -56,6 +59,11 @@ impl MemoryManagementPass {
         
         // Second pass: Transform functions based on strategy
         for (func_id, func) in &mut module.functions {
+            // Run stack promotion first using escape analysis results
+            if let Some(ctx) = self.contexts.get(func_id) {
+                self.stack_promotion.promote_function(func, &ctx.escape_info)?;
+            }
+
             match self.strategy {
                 MemoryStrategy::ARC => {
                     self.apply_arc(func)?;
@@ -73,9 +81,15 @@ impl MemoryManagementPass {
                     self.apply_hybrid(func)?;
                 }
             }
-            
+
             // Always insert drops for cleanup
             self.drop_manager.insert_drops(func)?;
+        }
+
+        // Log stack promotion summary
+        let summary = self.stack_promotion.get_summary();
+        if !summary.is_empty() {
+            eprintln!("[MEMORY_PASS] {}", summary);
         }
         
         Ok(())

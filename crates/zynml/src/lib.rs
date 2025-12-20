@@ -49,6 +49,8 @@ use thiserror::Error;
 
 // Re-export zyntax_embed types for convenience
 pub use zyntax_embed::{LanguageGrammar, ZyntaxRuntime, FromZyntax};
+// Re-export Grammar2 for direct TypedAST parsing
+pub use zyntax_embed::{Grammar2, Grammar2Error, Grammar2Result};
 
 /// ZynML-specific errors
 #[derive(Error, Debug)]
@@ -128,6 +130,8 @@ pub struct ZynML {
     runtime: ZyntaxRuntime,
     config: ZynMLConfig,
     grammar: LanguageGrammar,
+    /// Grammar2 for direct TypedAST parsing (optional, used for advanced workflows)
+    grammar2: Option<Grammar2>,
 }
 
 impl ZynML {
@@ -192,10 +196,14 @@ impl ZynML {
             }
         }
 
+        // Optionally compile Grammar2 for direct TypedAST parsing
+        let grammar2 = Grammar2::from_source(ZYNML_GRAMMAR).ok();
+
         Ok(Self {
             runtime,
             config,
             grammar,
+            grammar2,
         })
     }
 
@@ -219,6 +227,49 @@ impl ZynML {
         self.grammar
             .parse_to_json(source)
             .context("Failed to parse ZynML program")
+    }
+
+    /// Parse source directly to TypedProgram using Grammar2
+    ///
+    /// This is more efficient than `parse_to_json` as it bypasses JSON serialization.
+    /// Returns an error if Grammar2 is not available.
+    pub fn parse_to_typed_ast(&self, source: &str) -> Result<zyntax_embed::TypedProgram> {
+        match &self.grammar2 {
+            Some(g2) => g2
+                .parse(source)
+                .map_err(|e| ZynMLError::ParseError(e.to_string()).into()),
+            None => Err(ZynMLError::GrammarError(
+                "Grammar2 not available".to_string(),
+            )
+            .into()),
+        }
+    }
+
+    /// Parse source directly to TypedProgram with filename for diagnostics
+    pub fn parse_to_typed_ast_with_filename(
+        &self,
+        source: &str,
+        filename: &str,
+    ) -> Result<zyntax_embed::TypedProgram> {
+        match &self.grammar2 {
+            Some(g2) => g2
+                .parse_with_filename(source, filename)
+                .map_err(|e| ZynMLError::ParseError(e.to_string()).into()),
+            None => Err(ZynMLError::GrammarError(
+                "Grammar2 not available".to_string(),
+            )
+            .into()),
+        }
+    }
+
+    /// Check if Grammar2 direct parsing is available
+    pub fn has_grammar2(&self) -> bool {
+        self.grammar2.is_some()
+    }
+
+    /// Get a reference to the Grammar2 instance (if available)
+    pub fn grammar2(&self) -> Option<&Grammar2> {
+        self.grammar2.as_ref()
     }
 
     /// Call a function by name with no arguments
@@ -330,6 +381,21 @@ mod tests {
     fn test_grammar_compiles() {
         let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR);
         assert!(grammar.is_ok(), "Grammar should compile: {:?}", grammar.err());
+    }
+
+    #[test]
+    fn test_grammar2_compiles() {
+        let grammar = Grammar2::from_source(ZYNML_GRAMMAR);
+        assert!(grammar.is_ok(), "Grammar2 should compile: {:?}", grammar.err());
+    }
+
+    #[test]
+    fn test_grammar2_metadata() {
+        let grammar = Grammar2::from_source(ZYNML_GRAMMAR).unwrap();
+        // Grammar2 provides metadata about the language
+        println!("Language name: {}", grammar.name());
+        println!("Language version: {}", grammar.version());
+        println!("File extensions: {:?}", grammar.file_extensions());
     }
 
     #[test]

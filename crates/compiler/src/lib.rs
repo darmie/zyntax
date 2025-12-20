@@ -72,7 +72,10 @@ pub use monomorphize::{MonomorphizationContext, monomorphize_module};
 pub use pattern_matching::{PatternMatchCompiler, DecisionNode, check_exhaustiveness};
 pub use memory_management::{
     MemoryStrategy, MemoryContext, ARCManager, DropManager, EscapeAnalysis,
-    RefCountInfo, EscapeInfo, AllocationInfo
+    RefCountInfo, EscapeInfo, AllocationInfo, StackPromotionPass,
+    // Unified cleanup types
+    UnifiedCleanupBehavior, HirLinearityKind, CleanupInfo, UnifiedCleanupManager,
+    ScopeCleanupInfo, CleanupAction, convert_linearity_kind,
 };
 pub use memory_pass::MemoryManagementPass;
 pub use memory_optimization::MemoryOptimizationPass;
