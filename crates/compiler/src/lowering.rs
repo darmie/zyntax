@@ -16,10 +16,11 @@ fn hash_string(s: &str) -> u64 {
     s.hash(&mut hasher);
     hasher.finish()
 }
-use crate::hir::{HirModule, HirFunction, HirFunctionSignature, HirParam, HirType, ParamAttributes};
+use crate::hir::{HirModule, HirFunction, HirFunctionSignature, HirParam, HirType, ParamAttributes, OwnershipMode, HirId, HirLifetime};
 use crate::cfg::{ControlFlowGraph, CfgBuilder};
 use crate::ssa::{SsaBuilder, SsaForm};
 use crate::CompilerResult;
+use std::collections::HashMap;
 
 /// Target data layout information for precise size and alignment calculations
 #[derive(Debug, Clone)]
@@ -223,6 +224,10 @@ pub struct LoweringContext {
     /// Cache of already-resolved modules (module_path -> resolved imports)
     /// This avoids re-resolving the same module multiple times
     pub resolved_module_cache: std::collections::HashMap<Vec<String>, Vec<ResolvedImport>>,
+    /// Ownership modes for values (tracks whether values are owned, borrowed, or copied)
+    pub ownership_modes: HashMap<HirId, OwnershipMode>,
+    /// Types that implement Copy trait (for deciding between move and copy semantics)
+    pub copy_types: std::collections::HashSet<zyntax_typed_ast::TypeId>,
 }
 
 /// Symbol table for name resolution
@@ -368,9 +373,87 @@ impl LoweringContext {
             import_metadata: Vec::new(),
             import_context: ImportContext::default(),
             resolved_module_cache: std::collections::HashMap::new(),
+            ownership_modes: HashMap::new(),
+            copy_types: std::collections::HashSet::new(),
         }
     }
-    
+
+    /// Set the ownership mode for a value
+    pub fn set_ownership_mode(&mut self, id: HirId, mode: OwnershipMode) {
+        self.ownership_modes.insert(id, mode);
+    }
+
+    /// Get the ownership mode for a value
+    pub fn get_ownership_mode(&self, id: &HirId) -> Option<&OwnershipMode> {
+        self.ownership_modes.get(id)
+    }
+
+    /// Check if a type implements Copy (can be duplicated without moving)
+    pub fn is_copy_type(&self, ty: &Type) -> bool {
+        // Primitive types are always Copy
+        match ty {
+            Type::Primitive(_) => true,
+            Type::Named { id, .. } => self.copy_types.contains(id),
+            // Tuples are Copy if all elements are Copy
+            Type::Tuple(elements) => elements.iter().all(|e| self.is_copy_type(e)),
+            // References are Copy (regardless of mutability)
+            Type::Reference { .. } => true,
+            // Function types are Copy
+            Type::Function { .. } => true,
+            // Other types are not Copy by default
+            _ => false,
+        }
+    }
+
+    /// Determine the ownership mode for using a value based on its type
+    pub fn determine_ownership_mode(&self, ty: &Type) -> OwnershipMode {
+        if self.is_copy_type(ty) {
+            OwnershipMode::Copied
+        } else {
+            OwnershipMode::Owned
+        }
+    }
+
+    /// Initialize the set of Copy types from the type registry
+    /// This looks for types that implement the Copy trait
+    fn initialize_copy_types(&mut self) {
+        // Look for Copy trait in the registry
+        let copy_trait_name = zyntax_typed_ast::arena::InternedString::new_global("Copy");
+
+        if let Some(copy_trait) = self.type_registry.get_trait_by_name(copy_trait_name) {
+            // Find all implementations of Copy trait
+            for (trait_id, impls) in self.type_registry.iter_implementations() {
+                if *trait_id == copy_trait.id {
+                    for impl_def in impls {
+                        // Extract the type that implements Copy
+                        if let Type::Named { id, .. } = &impl_def.for_type {
+                            self.copy_types.insert(*id);
+                        }
+                    }
+                }
+            }
+        }
+
+        // TODO: Also check for types with Copy annotation/attribute
+        eprintln!("[OWNERSHIP] Initialized {} Copy types", self.copy_types.len());
+    }
+
+    /// Create a borrow of a value, returning the borrow's HirId
+    pub fn create_borrow(&mut self, value_id: HirId, is_mutable: bool) -> HirId {
+        let borrow_id = HirId::new();
+        let lifetime = HirLifetime::anonymous();
+
+        // Track the borrow in ownership_modes
+        let mode = if is_mutable {
+            OwnershipMode::BorrowedMut(lifetime.clone())
+        } else {
+            OwnershipMode::Borrowed(lifetime)
+        };
+        self.ownership_modes.insert(borrow_id, mode);
+
+        borrow_id
+    }
+
     /// Add a diagnostic
     pub fn diagnostic(&mut self, level: DiagnosticLevel, message: String, span: Option<zyntax_typed_ast::Span>) {
         self.diagnostics.push(LoweringDiagnostic {
@@ -383,6 +466,10 @@ impl LoweringContext {
 
 impl AstLowering for LoweringContext {
     fn lower_program(&mut self, program: &mut TypedProgram) -> CompilerResult<HirModule> {
+        // Phase -1: Initialize Copy types from the type registry
+        // Types that implement the Copy trait can be duplicated instead of moved
+        self.initialize_copy_types();
+
         // Phase 0: Run type checking and inference (Issue 0 Phase 1)
         // This validates types and performs type inference, reporting any errors
         // Skip type checking if SKIP_TYPE_CHECK env var is set (for debugging)
