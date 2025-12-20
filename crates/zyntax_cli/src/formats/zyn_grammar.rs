@@ -396,9 +396,65 @@ fn lower_to_hir(
     mut program: TypedProgram,
     verbose: bool,
 ) -> Result<HirModule, Box<dyn std::error::Error>> {
+    use zyntax_typed_ast::{TypedDeclaration, type_registry::*};
+
+    // Register struct/class types in the type registry before lowering
+    // This is needed because the Grammar2 parser creates TypedDeclaration::Class
+    // but doesn't register them in the type registry
+    for decl_node in &program.declarations {
+        if let TypedDeclaration::Class(class) = &decl_node.node {
+            // Check if type is already registered
+            if program.type_registry.get_type_by_name(class.name).is_some() {
+                if verbose {
+                    eprintln!("[DEBUG] Type '{}' already registered, skipping",
+                        class.name.resolve_global().unwrap_or_default());
+                }
+                continue;
+            }
+
+            // Register the struct type
+            let type_id = TypeId::next();
+            let fields: Vec<FieldDef> = class.fields.iter().map(|f| {
+                FieldDef {
+                    name: f.name,
+                    ty: f.ty.clone(),
+                    visibility: f.visibility,
+                    mutability: f.mutability,
+                    is_static: f.is_static,
+                    is_synthetic: false,
+                    span: f.span,
+                    getter: None,
+                    setter: None,
+                }
+            }).collect();
+
+            let type_def = TypeDefinition {
+                id: type_id,
+                name: class.name,
+                kind: TypeKind::Struct {
+                    fields: fields.clone(),
+                    is_tuple: false,
+                },
+                type_params: vec![],
+                constraints: vec![],
+                fields,
+                methods: vec![],
+                constructors: vec![],
+                metadata: Default::default(),
+                span: class.span,
+            };
+            program.type_registry.register_type(type_def);
+            if verbose {
+                eprintln!("[DEBUG] Registered struct type '{}' with TypeId {:?}",
+                    class.name.resolve_global().unwrap_or_default(), type_id);
+            }
+        }
+    }
+
     let arena = AstArena::new();
     let module_name = InternedString::new_global("main");
-    let type_registry = Arc::new(TypeRegistry::new());
+    // Use the program's type registry which now has registered types
+    let type_registry = Arc::new(program.type_registry.clone());
 
     let mut lowering_ctx = LoweringContext::new(
         module_name,

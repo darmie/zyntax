@@ -3286,6 +3286,51 @@ impl SsaBuilder {
                     HirType::I64
                 }
             },
+            Type::Unresolved(name) => {
+                // Look up the type in TypeRegistry by name and convert as Named type
+                if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
+                    use crate::hir::HirStructType;
+                    use zyntax_typed_ast::type_registry::TypeKind;
+
+                    eprintln!("[CONVERT TYPE SSA] Unresolved type '{}' → resolved to {:?}",
+                        name.resolve_global().unwrap_or_default(),
+                        type_def.kind);
+
+                    // Abstract types are zero-cost wrappers with struct layout
+                    if let TypeKind::Abstract { .. } = &type_def.kind {
+                        let hir_fields: Vec<HirType> = type_def.fields.iter()
+                            .map(|field| self.convert_type(&field.ty))
+                            .collect();
+
+                        return HirType::Struct(HirStructType {
+                            name: Some(type_def.name),
+                            fields: hir_fields,
+                            packed: false,
+                        });
+                    }
+
+                    // Regular types (structs, classes, enums) convert to struct types
+                    let hir_fields: Vec<HirType> = type_def.fields.iter()
+                        .map(|field| self.convert_type(&field.ty))
+                        .collect();
+
+                    HirType::Struct(HirStructType {
+                        name: Some(type_def.name),
+                        fields: hir_fields,
+                        packed: false,
+                    })
+                } else {
+                    eprintln!("[WARN] Unresolved type '{}' not found in registry, defaulting to I64",
+                        name.resolve_global().unwrap_or_default());
+                    HirType::I64
+                }
+            },
+            Type::Any => {
+                // Type::Any means "infer from context" - we need to check the initializer's type
+                // For now, default to I64 but this should be improved
+                eprintln!("[WARN] Type::Any encountered in convert_type, defaulting to I64");
+                HirType::I64
+            },
             _ => HirType::I64, // Default for complex types
         }
     }

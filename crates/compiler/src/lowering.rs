@@ -1264,12 +1264,23 @@ impl LoweringContext {
             }
 
             Type::Unresolved(name) => {
-                // Look up the type in TypeRegistry aliases
+                // Look up the type in TypeRegistry - first try aliases, then try named types
                 eprintln!("[DEBUG convert_type] Resolving unresolved type '{}'", name.resolve_global().unwrap_or_default());
                 if let Some(resolved_type) = self.type_registry.resolve_alias(*name) {
                     eprintln!("[DEBUG convert_type] Found alias for '{}': {:?}", name.resolve_global().unwrap_or_default(), resolved_type);
                     // Recursively convert the resolved type
                     self.convert_type(resolved_type)
+                } else if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
+                    // Found a named type (struct, enum, etc.) - convert it as Named type
+                    eprintln!("[DEBUG convert_type] Found named type for '{}': {:?}", name.resolve_global().unwrap_or_default(), type_def.kind);
+                    let named_type = Type::Named {
+                        id: type_def.id,
+                        type_args: vec![],
+                        const_args: vec![],
+                        variance: vec![],
+                        nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                    };
+                    self.convert_type(&named_type)
                 } else {
                     eprintln!("[WARN] Could not resolve type '{}', defaulting to I64", name.resolve_global().unwrap_or_default());
                     HirType::I64 // Fallback

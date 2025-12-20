@@ -294,7 +294,8 @@ impl<'g> GrammarInterpreter<'g> {
                 let initializer = self.get_field_optional_expr("initializer", fields, state)?;
                 let is_mutable = self.get_field_as_bool("is_mutable", fields, state).unwrap_or(false);
 
-                let ty = type_annotation.unwrap_or(Type::Primitive(PrimitiveType::I32));
+                // Use Type::Any when no type annotation is provided - let the compiler infer from initializer
+                let ty = type_annotation.unwrap_or(Type::Any);
                 let mutability = if is_mutable { Mutability::Mutable } else { Mutability::Immutable };
 
                 TypedStatement::Let(TypedLet {
@@ -537,6 +538,8 @@ impl<'g> GrammarInterpreter<'g> {
             // Use Type::Any to signal that lowering should infer the type
             TypedExpression::Call(_) => Type::Any,
             TypedExpression::Variable(_) => Type::Any,
+            // Struct literal gets its type from the struct name - use Unresolved for compiler to resolve
+            TypedExpression::Struct(lit) => Type::Unresolved(lit.name),
             _ => Type::Primitive(PrimitiveType::Unit),
         };
 
