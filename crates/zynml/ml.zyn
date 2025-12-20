@@ -420,17 +420,65 @@ struct_field = { identifier ~ ":" ~ type_expr }
 // Abstract Type Definition (Haxe-style)
 // ============================================================================
 
-// abstract Duration(i64) with Suffix("ms"):
-//     ms: i64
-// abstract Duration(i64) with Suffixes("ms, s, ns, m, h"):
-//     ms: i64
+// abstract Duration(i64) with Suffix("ms") { ms: i64 }
+// abstract Duration(i64) with Suffixes("ms, s, ns, m, h") { ms: i64 }
+// abstract Duration(i64) { value: i64 }
+// abstract Duration(i64) with Suffix("ms"): ms: i64  (colon style also supported)
 // Abstract types are zero-cost wrappers with implicit conversions
 // Can have fields like structs, with underlying type for direct conversions
 // Suffix/Suffixes enables literal syntax like 1000ms, 5s, 3ns
-abstract_def = { abstract_with_suffixes | abstract_with_suffix | abstract_with_fields | abstract_simple }
+abstract_def = {
+    abstract_with_suffix_brace | abstract_with_suffixes_brace |
+    abstract_with_suffixes | abstract_with_suffix |
+    abstract_with_fields_brace | abstract_with_fields |
+    abstract_simple
+}
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
+
+// ========== Brace-style abstract definitions ==========
+
+// abstract Name(Type) with Suffix("x") { fields }
+abstract_with_suffix_brace = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffix" ~ "(" ~ string_literal ~ ")" ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "abstract_with_single_suffix", "args": {
+              "name": "$1",
+              "underlying_type": "$2",
+              "suffix_literal": "$3",
+              "fields": "$4"
+          }}
+      ]
+  }
+
+// abstract Name(Type) with Suffixes("x, y, z") { fields }
+abstract_with_suffixes_brace = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffixes" ~ "(" ~ string_literal ~ ")" ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "abstract_with_multiple_suffixes", "args": {
+              "name": "$1",
+              "underlying_type": "$2",
+              "suffixes_literal": "$3",
+              "fields": "$4"
+          }}
+      ]
+  }
+
+// abstract Name(Type) { fields } (without suffix)
+abstract_with_fields_brace = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "abstract_with_multiple_suffixes", "args": {
+              "name": "$1",
+              "underlying_type": "$2",
+              "suffixes_literal": "",
+              "fields": "$3"
+          }}
+      ]
+  }
+
+// ========== Colon-style abstract definitions (legacy/alternative) ==========
 
 // abstract Name(Type) with Suffix("x"):  or  with Suffixes("x, y, z"):
 abstract_with_suffix = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffix" ~ "(" ~ string_literal ~ ")" ~ ":" ~ struct_def_fields }
@@ -481,19 +529,65 @@ abstract_simple = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" }
       ]
   }
 
+// Field list for brace-style definitions: field: type, field: type
+struct_field_list = { struct_field ~ ("," ~ struct_field)* }
+  -> List {
+      "get_all_children": true
+  }
+
+struct_field = { identifier ~ ":" ~ type_expr }
+  -> TypedParameter {
+      "commands": [
+          { "define": "field", "args": {
+              "name": "$1",
+              "type": "$2"
+          }}
+      ]
+  }
+
 // ============================================================================
-// Struct Definition (Colon Syntax)
+// Struct Definition (Both Brace and Colon Syntax)
 // ============================================================================
 
-// struct Point:
-//     x: float
-//     y: float
-// Note: Whitespace is handled implicitly by WHITESPACE rule
+// Brace style: struct Point { x: float, y: float }
+// Colon style: struct Point:
+//                  x: float
+//                  y: float
 // Split into generic and non-generic variants (optional not supported in grammar)
-struct_def = { struct_def_generic | struct_def_simple }
+struct_def = {
+    struct_def_generic_brace | struct_def_brace |
+    struct_def_generic | struct_def_simple
+}
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
+
+// ========== Brace-style struct definitions ==========
+
+// struct List<T> { items: Vec, count: int }
+struct_def_generic_brace = { "struct" ~ identifier ~ type_params ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "struct_type", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "fields": "$3"
+          }}
+      ]
+  }
+
+// struct Point { x: float, y: float }
+struct_def_brace = { "struct" ~ identifier ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "struct_type", "args": {
+              "name": "$1",
+              "fields": "$2"
+          }}
+      ]
+  }
+
+// ========== Colon-style struct definitions ==========
 
 // struct List<T>:
 //     ...
@@ -770,7 +864,14 @@ impl_items = { impl_item* }
       "get_all_children": true
   }
 
-impl_item = { impl_assoc_type | impl_method_return_expr | impl_method_params_expr | impl_method_return | impl_method_params | impl_method_simple }
+// Impl items: associated types and methods (expression-bodied, indent-bodied, and brace-bodied)
+// NOTE: indent-bodied must come after expression-bodied to prefer single-expression form when applicable
+impl_item = {
+    impl_assoc_type |
+    impl_method_return_expr | impl_method_return_indent | impl_method_return |
+    impl_method_params_expr | impl_method_params_indent | impl_method_params |
+    impl_method_simple_indent | impl_method_simple
+}
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -789,7 +890,8 @@ impl_assoc_type = { "type" ~ identifier ~ "=" ~ type_expr }
 // Impl methods can't have their own type params (they use the impl block's)
 // So we define specific impl method rules without type params
 
-// Expression-bodied methods (with colon instead of braces)
+// ========== Expression-bodied methods (single expression after colon) ==========
+
 // fn add(self, rhs: T) -> ReturnType: expression
 impl_method_return_expr = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ expr_block }
   -> TypedDeclaration {
@@ -816,7 +918,52 @@ impl_method_params_expr = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ ":" ~ ex
       ]
   }
 
-// Block-bodied methods (with braces)
+// ========== Indent-bodied methods (Python-style colon with statement block) ==========
+
+// fn add(self, rhs: T) -> ReturnType:
+//     statements...
+impl_method_return_indent = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ indent_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// fn process(self, other: T):
+//     statements...
+impl_method_params_indent = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ ":" ~ indent_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "void",
+              "body": "$3"
+          }}
+      ]
+  }
+
+// fn simple():
+//     statements...
+impl_method_simple_indent = { "fn" ~ identifier ~ "(" ~ ")" ~ ":" ~ indent_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "void",
+              "body": "$2"
+          }}
+      ]
+  }
+
+// ========== Block-bodied methods (with braces) ==========
+
 // fn add(self, rhs: T) -> ReturnType { ... }
 // NOTE: Impl methods are initially typed as functions but marked with is_self on parameters
 // The compiler will re-type the body expressions with correct self type during lowering
@@ -908,12 +1055,21 @@ type_args = { type_expr ~ ("," ~ type_expr)* }
 // Function Definition
 // ============================================================================
 
-// Function definitions - split by presence of type params, params, and return type
+// Function definitions - split by presence of type params, params, return type, and block style
+// Supports both brace-style { } and Python-style colon : blocks
 // to ensure predictable child indices (PEG doesn't emit placeholders for missing optionals)
-fn_def = { fn_def_generic_return | fn_def_generic | fn_def_return | fn_def_params | fn_def_simple }
+fn_def = {
+    fn_def_generic_return_colon | fn_def_generic_return |
+    fn_def_generic_colon | fn_def_generic |
+    fn_def_return_colon | fn_def_return |
+    fn_def_params_colon | fn_def_params |
+    fn_def_simple_colon | fn_def_simple
+}
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
+
+// ========== Brace-style function definitions ==========
 
 // fn map<T, U>(items) -> ReturnType { ... }
 fn_def_generic_return = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
@@ -971,6 +1127,80 @@ fn_def_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ block }
 
 // fn main() { ... } - no params, no return type
 fn_def_simple = { "fn" ~ identifier ~ "(" ~ ")" ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": [],
+              "return_type": "void",
+              "body": "$2"
+          }}
+      ]
+  }
+
+// ========== Python-style colon function definitions ==========
+
+// fn map<T, U>(items) -> ReturnType:
+//     statements...
+fn_def_generic_return_colon = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ indent_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "params": "$3",
+              "return_type": "$4",
+              "body": "$5"
+          }}
+      ]
+  }
+
+// fn process<T>(x):
+//     statements...
+fn_def_generic_colon = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ ":" ~ indent_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "type_params": "$2",
+              "params": "$3",
+              "return_type": "void",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// fn process(x, y) -> ReturnType:
+//     statements...
+fn_def_return_colon = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ indent_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// fn process(x, y):
+//     statements...
+fn_def_params_colon = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ ":" ~ indent_block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "function", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "void",
+              "body": "$3"
+          }}
+      ]
+  }
+
+// fn main():
+//     statements...
+fn_def_simple_colon = { "fn" ~ identifier ~ "(" ~ ")" ~ ":" ~ indent_block }
   -> TypedDeclaration {
       "commands": [
           { "define": "function", "args": {
@@ -1125,7 +1355,7 @@ expr_stmt = { expr }
       ]
   }
 
-// { statements }
+// { statements } - brace-style block
 block = { "{" ~ statement* ~ "}" }
   -> TypedBlock {
       "get_all_children": true,
@@ -1133,8 +1363,20 @@ block = { "{" ~ statement* ~ "}" }
       "args": { "statements": "$result" }
   }
 
-// Expression block (for colon-based function syntax)
+// Python-style indented block with colon
+// Used ONLY for top-level function definitions where greediness is acceptable
+// Note: PEG grammars don't track indentation, so this consumes all remaining statements
+// This works for `fn main(): ...` but NOT for control flow inside functions
+indent_block = { statement+ }
+  -> TypedBlock {
+      "get_all_children": true,
+      "define": "block",
+      "args": { "statements": "$result" }
+  }
+
+// Expression block (for colon-based method syntax)
 // Wraps a single expression as a block with one expression statement
+// Used in impl methods: fn getter(self) -> T: self.field
 expr_block = { expr }
   -> TypedBlock {
       "commands": [

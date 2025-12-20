@@ -29,10 +29,11 @@ trait IntoIterator {
 // List - Dynamic Array
 // ============================================================================
 
-struct List<T>:
-    data: i64      // Pointer to data
-    len: i64       // Number of elements
-    capacity: i64  // Allocated capacity
+struct List<T> {
+    data: i64,      // Pointer to data
+    len: i64,       // Number of elements
+    capacity: i64   // Allocated capacity
+}
 
 impl<T> List<T> {
     fn new() -> List<T> {
@@ -52,10 +53,11 @@ impl<T> List<T> {
 // ListIterator - Iterator over a List
 // ============================================================================
 
-struct ListIterator<T>:
-    list_data: i64
-    list_len: i64
+struct ListIterator<T> {
+    list_data: i64,
+    list_len: i64,
     index: i64
+}
 
 impl<T> Iterator for ListIterator<T> {
     type Item = T

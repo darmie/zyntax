@@ -203,10 +203,11 @@ enum Result<T, E> {
 
 // List - dynamically sized array backed by ZRTL runtime
 // This is a simple wrapper around raw pointers with length/capacity tracking
-struct List<T>:
-    data: i64      // Pointer to data (will be properly typed when we have generics in runtime)
-    len: i64       // Number of elements
-    capacity: i64  // Allocated capacity
+struct List<T> {
+    data: i64,      // Pointer to data (will be properly typed when we have generics in runtime)
+    len: i64,       // Number of elements
+    capacity: i64   // Allocated capacity
+}
 
 impl<T> List<T> {
     // Create an empty list
@@ -226,10 +227,11 @@ impl<T> List<T> {
 }
 
 // ListIterator - iterator over a list
-struct ListIterator<T>:
-    list_data: i64   // Pointer to list data
-    list_len: i64    // Total length
-    index: i64       // Current index
+struct ListIterator<T> {
+    list_data: i64,   // Pointer to list data
+    list_len: i64,    // Total length
+    index: i64        // Current index
+}
 
 impl<T> Iterator for ListIterator<T> {
     type Item = T

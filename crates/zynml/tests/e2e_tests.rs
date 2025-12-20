@@ -387,6 +387,8 @@ mod function_definitions {
         LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
     }
 
+    // --- Brace-style functions ---
+
     #[test]
     fn test_parse_function_simple() {
         let grammar = get_grammar();
@@ -427,16 +429,136 @@ mod function_definitions {
         assert!(result.is_ok(), "Should parse function without return type: {:?}", result.err());
     }
 
+    // --- Expression-bodied methods (single expr after colon) ---
+
     #[test]
     fn test_parse_function_expression_body() {
         let grammar = get_grammar();
-        // Expression-bodied functions use colon syntax
         let result = grammar.parse_to_json(r#"
             impl Point {
                 fn x_coord(self) -> float: self.x
             }
         "#);
         assert!(result.is_ok(), "Should parse expression-bodied function: {:?}", result.err());
+    }
+}
+
+// ============================================================================
+// Brace and Expression-Bodied Syntax Tests
+// ============================================================================
+
+mod syntax_styles {
+    use super::*;
+
+    fn get_grammar() -> LanguageGrammar {
+        LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
+    }
+
+    // --- Brace-style struct definitions ---
+
+    #[test]
+    fn test_parse_struct_brace_style() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("struct Point { x: float, y: float }");
+        assert!(result.is_ok(), "Should parse brace-style struct: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_struct_brace_generic() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("struct Container<T> { value: T, count: int }");
+        assert!(result.is_ok(), "Should parse brace-style generic struct: {:?}", result.err());
+    }
+
+    // --- Brace-style abstract definitions ---
+
+    #[test]
+    fn test_parse_abstract_brace_style() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("abstract Duration(i64) { value: i64 }");
+        assert!(result.is_ok(), "Should parse brace-style abstract: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_abstract_brace_with_suffix() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"abstract Duration(i64) with Suffix("ms") { value: i64 }"#);
+        assert!(result.is_ok(), "Should parse brace abstract with suffix: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_abstract_brace_with_suffixes() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"abstract Duration(i64) with Suffixes("ms, s, m, h") { value: i64 }"#);
+        assert!(result.is_ok(), "Should parse brace abstract with suffixes: {:?}", result.err());
+    }
+
+    // --- Expression-bodied impl methods ---
+
+    #[test]
+    fn test_parse_impl_method_expression_body() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            impl Duration(i64) {
+                fn from_ms(v: i64) -> Duration: Duration { value: v }
+                fn to_ms(self) -> i64: self.value
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse expression-bodied methods: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_impl_method_brace_body() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            impl Calculator {
+                fn compute(self, x: i32) -> i32 {
+                    let temp = x * 2
+                    let result = temp + 1
+                    result
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse brace-bodied method: {:?}", result.err());
+    }
+
+    // --- Mixed styles in impl blocks ---
+
+    #[test]
+    fn test_parse_mixed_impl_styles() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            impl Point {
+                fn brace_method(self) -> i32 {
+                    self.x
+                }
+                fn expr_method(self) -> i32: self.x
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse mixed impl method styles: {:?}", result.err());
+    }
+
+    // --- Complete brace-style example ---
+
+    #[test]
+    fn test_parse_complete_brace_example() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            import prelude
+
+            abstract Duration(i64) with Suffixes("ms, s, m, h") { value: i64 }
+
+            impl Duration(i64) {
+                fn from_ms(v: i64) -> Duration: Duration { value: v }
+                fn to_ms(self) -> i64: self.value
+            }
+
+            fn main() {
+                let delay = 1000ms
+                println(delay.to_ms())
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse complete brace-style example: {:?}", result.err());
     }
 }
 
@@ -1607,15 +1729,19 @@ fn test_spec_compliance_summary() {
     println!("  [x] Type aliases (type X = Y)");
     println!("  [x] Struct definitions (struct Name: fields)");
     println!("  [x] Enum definitions (enum Name {{ variants }})");
-    println!("  [x] Abstract types (abstract Name(T))");
+    println!("  [x] Abstract types (abstract Name(T) with Suffixes(...))");
     println!("  [x] Trait definitions (trait Name {{ methods }})");
     println!("  [x] Impl blocks (impl Trait for Type {{ }})");
     println!("  [x] Opaque types (@opaque(\"$T\") type T)");
     println!("  [x] Generic functions and types (<T: Bound>)");
-    println!("  [x] Function definitions (fn name() {{}})");
+    println!("  [x] Function definitions - brace style (fn name() {{}})");
+    println!("  [x] Function definitions - colon style (fn name(): ...)");
+    println!("  [x] Impl methods - expression-bodied (fn name(): expr)");
+    println!("  [x] Impl methods - indent-bodied (fn name():\\n    statements)");
     println!("  [x] Let bindings (let x = expr)");
     println!("  [x] Assignments (x = expr, self.x = expr)");
-    println!("  [x] Control flow (if/else, while, for, return, break, continue)");
+    println!("  [x] Control flow - brace style (if/else, while, for {{ }})");
+    println!("  [x] Control flow - colon style (if/else, while, for: ...)");
     println!("  [x] Arithmetic operators (+, -, *, /, %)");
     println!("  [x] Comparison operators (==, !=, <, >, <=, >=)");
     println!("  [x] Logical operators (&&, ||, !)");
@@ -1623,11 +1749,11 @@ fn test_spec_compliance_summary() {
     println!("  [x] Pipe operator (|>)");
     println!("  [x] Ternary operator (? :)");
     println!("  [x] Range expressions (.., ..=)");
-    println!("  [x] Method calls (x.method())");
+    println!("  [x] Method calls / static dispatch (x.method(), Type::method())");
     println!("  [x] Indexing (x[i])");
     println!("  [x] Path expressions (Type::method)");
     println!("  [x] Literals (int, float, string, bool, array, tensor, struct)");
-    println!("  [x] Duration/suffixed literals (1000ms, 5s)");
+    println!("  [x] Duration/suffixed literals (1000ms, 5s, 2m, 1h)");
     println!("  [x] Extern calls (extern func())");
     println!("  [x] Comments (// and /* */)");
 
