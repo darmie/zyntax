@@ -702,22 +702,48 @@ impl CraneliftBackend {
             }
 
             // Map undef values to zero constants (for IDF-based SSA)
+            // For struct types, allocate stack space instead of using a zero constant
             for value in function.values.values() {
                 if let HirValueKind::Undef = value.kind {
-                    let ty = type_cache.get(&value.ty).copied().unwrap_or(types::I64);
-                    let cranelift_val = if ty.is_int() {
-                        builder.ins().iconst(ty, 0)
-                    } else if ty.is_float() {
-                        if ty == types::F32 {
-                            builder.ins().f32const(0.0)
-                        } else {
-                            builder.ins().f64const(0.0)
-                        }
+                    // Check if this is a struct type that needs stack allocation
+                    if let HirType::Struct(struct_ty) = &value.ty {
+                        // Allocate stack space for the struct
+                        let struct_size = struct_ty.fields.iter()
+                            .map(|f| match f {
+                                HirType::I8 | HirType::U8 | HirType::Bool => 1,
+                                HirType::I16 | HirType::U16 => 2,
+                                HirType::I32 | HirType::U32 | HirType::F32 => 4,
+                                HirType::I64 | HirType::U64 | HirType::F64 | HirType::Ptr(_) => 8,
+                                HirType::I128 | HirType::U128 => 16,
+                                _ => 8, // Default
+                            })
+                            .sum::<usize>();
+                        let struct_size = std::cmp::max(struct_size, 8) as u32; // At least 8 bytes
+
+                        let slot = builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
+                            cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
+                            struct_size,
+                        ));
+                        let ptr = builder.ins().stack_addr(self.module.target_config().pointer_type(), slot, 0);
+                        self.value_map.insert(value.id, ptr);
+                        eprintln!("[CRANELIFT UNDEF] Allocated {} bytes stack for struct undef {:?}", struct_size, value.id);
                     } else {
-                        // For other types, use null constant
-                        builder.ins().iconst(ty, 0)
-                    };
-                    self.value_map.insert(value.id, cranelift_val);
+                        // For scalar types, use zero constant
+                        let ty = type_cache.get(&value.ty).copied().unwrap_or(types::I64);
+                        let cranelift_val = if ty.is_int() {
+                            builder.ins().iconst(ty, 0)
+                        } else if ty.is_float() {
+                            if ty == types::F32 {
+                                builder.ins().f32const(0.0)
+                            } else {
+                                builder.ins().f64const(0.0)
+                            }
+                        } else {
+                            // For other types, use null constant
+                            builder.ins().iconst(ty, 0)
+                        };
+                        self.value_map.insert(value.id, cranelift_val);
+                    }
                 }
             }
 
