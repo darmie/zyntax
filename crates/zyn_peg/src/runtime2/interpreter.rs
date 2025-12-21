@@ -642,6 +642,30 @@ impl<'g> GrammarInterpreter<'g> {
                     span,
                 })
             }
+            "Module" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+
+                TypedDeclaration::Module(zyntax_typed_ast::TypedModule {
+                    name,
+                    declarations: vec![],
+                    visibility: Visibility::Public,
+                    span,
+                })
+            }
+            "Impl" => {
+                let trait_name = self.get_field_as_interned("trait_name", fields, state)?;
+                let for_type_name = self.get_field_as_interned("for_type", fields, state)?;
+                let for_type = Type::Unresolved(for_type_name);
+
+                TypedDeclaration::Impl(zyntax_typed_ast::TypedTraitImpl {
+                    trait_name,
+                    trait_type_args: vec![],
+                    for_type,
+                    methods: vec![],
+                    associated_types: vec![],
+                    span,
+                })
+            }
             _ => return Err(format!("unknown TypedDeclaration variant: {}", variant)),
         };
 

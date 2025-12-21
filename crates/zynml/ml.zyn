@@ -238,22 +238,32 @@
 // Program Structure
 // ============================================================================
 
-program = { SOI ~ top_level_items ~ EOI }
+program = { SOI ~ items:top_level_items ~ EOI }
+  -> items
+
+top_level_items = { decl:top_level_item* }
   -> TypedProgram {
-      "get_child": { "index": 0 }
+      declarations: decl,
   }
 
-top_level_items = { top_level_item* }
-  -> TypedProgram {
-      "get_all_children": true,
-      "define": "program",
-      "args": { "declarations": "$result" }
-  }
-
-top_level_item = { module_decl | config_block | pipeline_def | decorated_item | trait_def | impl_block | abstract_def | enum_def | struct_def | type_def | fn_def | let_stmt | import_stmt | render_stmt | stream_stmt | expr_stmt }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+top_level_item = {
+    module_decl |
+    config_block |
+    pipeline_def |
+    decorated_item |
+    trait_def |
+    impl_block |
+    abstract_def |
+    enum_def |
+    struct_def |
+    type_def |
+    fn_def |
+    let_stmt |
+    import_stmt |
+    render_stmt |
+    stream_stmt |
+    expr_stmt
+}
 
 // ============================================================================
 // Import Statement
@@ -263,49 +273,30 @@ top_level_item = { module_decl | config_block | pipeline_def | decorated_item | 
 // import prelude
 // import zynml.tensor as T
 import_stmt = { import_aliased | import_simple }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
 
 // import zynml.tensor as T
-import_aliased = { "import" ~ module_path ~ "as" ~ identifier }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "import_aliased", "args": {
-              "module_path": "$1",
-              "alias": "$2"
-          }}
-      ]
+import_aliased = { "import" ~ path:module_path ~ "as" ~ alias:identifier }
+  -> TypedDeclaration::Import {
+      path: [intern(path)],
   }
 
 // import tensor
-import_simple = { "import" ~ identifier }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "import", "args": {
-              "module_name": "$1"
-          }}
-      ]
+import_simple = { "import" ~ name:identifier }
+  -> TypedDeclaration::Import {
+      path: [intern(name)],
   }
 
 // Module path: zynml.tensor.ops
-module_path = { identifier ~ ("." ~ identifier)* }
-  -> String {
-      "get_text": true
-  }
+module_path = @{ identifier ~ ("." ~ identifier)* }
 
 // ============================================================================
 // Module Declaration
 // ============================================================================
 
 // module recommendation_pipeline
-module_decl = { "module" ~ identifier }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "module", "args": {
-              "name": "$1"
-          }}
-      ]
+module_decl = { "module" ~ name:identifier }
+  -> TypedDeclaration::Module {
+      name: intern(name),
   }
 
 // ============================================================================
@@ -1233,7 +1224,6 @@ type_args = { type_expr ~ ("," ~ type_expr)* }
 
 // Function definitions - split by presence of type params, params, return type, and block style
 // Supports both brace-style { } and Python-style colon : blocks
-// to ensure predictable child indices (PEG doesn't emit placeholders for missing optionals)
 fn_def = {
     fn_def_generic_return_colon | fn_def_generic_return |
     fn_def_generic_colon | fn_def_generic |
@@ -1241,312 +1231,223 @@ fn_def = {
     fn_def_params_colon | fn_def_params |
     fn_def_simple_colon | fn_def_simple
 }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
 
 // ========== Brace-style function definitions ==========
 
 // fn map<T, U>(items) -> ReturnType { ... }
-fn_def_generic_return = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "params": "$3",
-              "return_type": "$4",
-              "body": "$5"
-          }}
-      ]
+fn_def_generic_return = { "fn" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ "->" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
 // fn process<T>(x) { ... }
-fn_def_generic = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "params": "$3",
-              "return_type": "void",
-              "body": "$4"
-          }}
-      ]
+fn_def_generic = { "fn" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // fn process(x, y) -> ReturnType { ... }
-fn_def_return = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+fn_def_return = { "fn" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ "->" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
 // fn process(x, y) { ... } - with params, no return type
-fn_def_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "void",
-              "body": "$3"
-          }}
-      ]
+fn_def_params = { "fn" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // fn main() { ... } - no params, no return type
-fn_def_simple = { "fn" ~ identifier ~ "(" ~ ")" ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": [],
-              "return_type": "void",
-              "body": "$2"
-          }}
-      ]
+fn_def_simple = { "fn" ~ name:identifier ~ "(" ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // ========== Python-style colon function definitions ==========
 
 // fn map<T, U>(items) -> ReturnType:
 //     statements...
-fn_def_generic_return_colon = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "params": "$3",
-              "return_type": "$4",
-              "body": "$5"
-          }}
-      ]
+fn_def_generic_return_colon = { "fn" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ "->" ~ ret:type_expr ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
 // fn process<T>(x):
 //     statements...
-fn_def_generic_colon = { "fn" ~ identifier ~ type_params ~ "(" ~ fn_params? ~ ")" ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "params": "$3",
-              "return_type": "void",
-              "body": "$4"
-          }}
-      ]
+fn_def_generic_colon = { "fn" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // fn process(x, y) -> ReturnType:
 //     statements...
-fn_def_return_colon = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+fn_def_return_colon = { "fn" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ "->" ~ ret:type_expr ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
 // fn process(x, y):
 //     statements...
-fn_def_params_colon = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "void",
-              "body": "$3"
-          }}
-      ]
+fn_def_params_colon = { "fn" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // fn main():
 //     statements...
-fn_def_simple_colon = { "fn" ~ identifier ~ "(" ~ ")" ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": [],
-              "return_type": "void",
-              "body": "$2"
-          }}
-      ]
+fn_def_simple_colon = { "fn" ~ name:identifier ~ "(" ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
-fn_params = { fn_param ~ ("," ~ fn_param)* }
-  -> List {
-      "get_all_children": true
-  }
+fn_params = { param:fn_param ~ ("," ~ param:fn_param)* }
+  -> param
 
 // Parameter with optional type annotation
 // Supports: x, x: Int, self, self: Tensor
-fn_param = { identifier ~ (":" ~ type_expr)? }
+fn_param = { name:identifier ~ (":" ~ ty:type_expr)? }
   -> TypedParameter {
-      "commands": [
-          { "define": "param", "args": {
-              "name": "$1",
-              "type": "$2"
-          }}
-      ]
+      name: intern(name),
+      type_annotation: ty,
   }
 
 // ============================================================================
 // Statements
 // ============================================================================
 
-statement = { let_stmt | assign_stmt | if_stmt | while_stmt | for_stmt | try_stmt | match_stmt | return_stmt | break_stmt | continue_stmt | expr_stmt }
-  -> TypedStatement {
-      "get_child": { "index": 0 }
-  }
+statement = {
+    let_stmt |
+    assign_stmt |
+    if_stmt |
+    while_stmt |
+    for_stmt |
+    try_stmt |
+    match_stmt |
+    return_stmt |
+    break_stmt |
+    continue_stmt |
+    expr_stmt
+}
 
 // let x = expr
 // let mel = audio |> resample(16000) |> to_mono()
-let_stmt = { "let" ~ identifier ~ "=" ~ expr }
-  -> TypedStatement {
-      "commands": [
-          { "define": "let_stmt", "args": {
-              "name": "$1",
-              "type": { "define": "infer_type" },
-              "init": "$2",
-              "is_const": false
-          }}
-      ]
+let_stmt = { "let" ~ name:identifier ~ "=" ~ init:expr }
+  -> TypedStatement::Let {
+      name: intern(name),
+      type_annotation: None,
+      initializer: Some(init),
+      is_mutable: true,
   }
 
 // x = expr
 assign_stmt = { field_assign_stmt | simple_assign_stmt }
-  -> TypedStatement {
-      "get_child": { "index": 0 }
-  }
 
 // self.field = expr
-field_assign_stmt = { identifier ~ "." ~ identifier ~ "=" ~ expr }
-  -> TypedStatement {
-      "commands": [
-          { "define": "field_assignment", "args": {
-              "object": "$1",
-              "field": "$2",
-              "value": "$3"
-          }}
-      ]
+field_assign_stmt = { obj:identifier ~ "." ~ field:identifier ~ "=" ~ value:expr }
+  -> TypedStatement::Assignment {
+      target: TypedExpression::FieldAccess {
+          object: Box::new(TypedExpression::Variable { name: intern(obj) }),
+          field: intern(field),
+      },
+      value: value,
   }
 
 // x = expr
-simple_assign_stmt = { identifier ~ "=" ~ expr }
-  -> TypedStatement {
-      "commands": [
-          { "define": "assignment", "args": {
-              "target": { "define": "variable", "args": { "name": "$1" } },
-              "value": "$2"
-          }}
-      ]
+simple_assign_stmt = { target:identifier ~ "=" ~ value:expr }
+  -> TypedStatement::Assignment {
+      target: TypedExpression::Variable { name: intern(target) },
+      value: value,
   }
 
 // if condition { ... } else { ... }
-if_stmt = { "if" ~ expr ~ block ~ ("else" ~ block)? }
-  -> TypedStatement {
-      "commands": [
-          { "define": "if_stmt", "args": {
-              "condition": "$1",
-              "then_branch": "$2",
-              "else_branch": "$3"
-          }}
-      ]
+if_stmt = { "if" ~ cond:expr ~ then_body:block ~ ("else" ~ else_body:block)? }
+  -> TypedStatement::If {
+      condition: cond,
+      then_branch: then_body,
+      else_branch: else_body,
   }
 
 // while condition { ... }
-while_stmt = { "while" ~ expr ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "while_stmt", "args": {
-              "condition": "$1",
-              "body": "$2"
-          }}
-      ]
+while_stmt = { "while" ~ cond:expr ~ body:block }
+  -> TypedStatement::While {
+      condition: cond,
+      body: body,
   }
 
 // for i in range(10) { ... }
 // for item in items { ... }
-for_stmt = { "for" ~ identifier ~ "in" ~ expr ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "for_stmt", "args": {
-              "variable": "$1",
-              "iterable": "$2",
-              "body": "$3"
-          }}
-      ]
+for_stmt = { "for" ~ var:identifier ~ "in" ~ iter:expr ~ body:block }
+  -> TypedStatement::For {
+      variable: intern(var),
+      iterable: iter,
+      body: body,
   }
 
 // return expr
-return_stmt = { "return" ~ expr? }
-  -> TypedStatement {
-      "commands": [
-          { "define": "return_stmt", "args": {
-              "value": "$1"
-          }}
-      ]
+return_stmt = { "return" ~ value:expr? }
+  -> TypedStatement::Return {
+      value: value,
   }
 
 // break
-break_stmt = { "break" ~ expr? }
-  -> TypedStatement {
-      "commands": [
-          { "define": "break_stmt", "args": {
-              "value": "$1"
-          }}
-      ]
+break_stmt = { "break" ~ value:expr? }
+  -> TypedStatement::Break {
+      value: value,
   }
 
 // continue
 continue_stmt = { "continue" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "continue_stmt", "args": {} }
-      ]
-  }
+  -> TypedStatement::Continue {}
 
 // ============================================================================
 // Try/Catch Statement
 // ============================================================================
 
 // try { ... } catch ErrorType as e { ... }
-try_stmt = { "try" ~ block ~ catch_clause+ }
-  -> TypedStatement {
-      "commands": [
-          { "define": "try_stmt", "args": {
-              "body": "$1",
-              "catches": "$2"
-          }}
-      ]
+try_stmt = { "try" ~ body:block ~ catches:catch_clause+ }
+  -> TypedStatement::Try {
+      body: body,
+      catches: catches,
   }
 
 // catch ErrorType as e { ... }
 // catch _ { ... }  (catch all)
-catch_clause = { "catch" ~ identifier ~ ("as" ~ identifier)? ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "catch", "args": {
-              "error_type": "$1",
-              "binding": "$2",
-              "body": "$3"
-          }}
-      ]
+catch_clause = { "catch" ~ error_type:identifier ~ ("as" ~ binding:identifier)? ~ body:block }
+  -> TypedCatch {
+      error_type: intern(error_type),
+      binding: binding,
+      body: body,
   }
 
 // ============================================================================
@@ -1554,56 +1455,37 @@ catch_clause = { "catch" ~ identifier ~ ("as" ~ identifier)? ~ block }
 // ============================================================================
 
 // match expr { case pattern { ... } case _ { ... } }
-match_stmt = { "match" ~ expr ~ "{" ~ match_arm+ ~ "}" }
-  -> TypedStatement {
-      "commands": [
-          { "define": "match_stmt", "args": {
-              "expr": "$1",
-              "arms": "$2"
-          }}
-      ]
+match_stmt = { "match" ~ scrutinee:expr ~ "{" ~ arms:match_arm+ ~ "}" }
+  -> TypedStatement::Match {
+      scrutinee: scrutinee,
+      arms: arms,
   }
 
 // case "pattern" { ... }
 // case _ { ... }
-match_arm = { "case" ~ pattern ~ block }
-  -> TypedStatement {
-      "commands": [
-          { "define": "match_arm", "args": {
-              "pattern": "$1",
-              "body": "$2"
-          }}
-      ]
+match_arm = { "case" ~ pat:pattern ~ body:block }
+  -> TypedMatchArm {
+      pattern: pat,
+      body: body,
   }
 
 // Pattern: literal, identifier (binding), or wildcard (_)
 pattern = { string_literal | int_literal | bool_literal | wildcard | identifier }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
 
 // Wildcard pattern
 wildcard = { "_" }
-  -> TypedExpression {
-      "define": "wildcard"
-  }
+  -> TypedExpression::Wildcard {}
 
 // expr as statement
-expr_stmt = { expr }
-  -> TypedStatement {
-      "commands": [
-          { "define": "expression_stmt", "args": {
-              "expr": "$1"
-          }}
-      ]
+expr_stmt = { e:expr }
+  -> TypedStatement::Expression {
+      expr: e,
   }
 
 // { statements } - brace-style block
-block = { "{" ~ statement* ~ "}" }
+block = { "{" ~ stmts:statement* ~ "}" }
   -> TypedBlock {
-      "get_all_children": true,
-      "define": "block",
-      "args": { "statements": "$result" }
+      statements: stmts,
   }
 
 // Python-style indented block with colon
@@ -1634,177 +1516,102 @@ expr_block = { expr }
 // ============================================================================
 
 // Expression with pipe operator (lowest precedence)
-expr = { pipe_expr }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
+expr = { e:pipe_expr }
+  -> e
 
 // Pipe operator: x |> f(args) |> g()
 // Transforms: a |> f(b) into f(a, b)
-pipe_expr = { ternary_expr ~ ("|>" ~ pipe_call)* }
-  -> TypedExpression {
-      "get_all_children": true,
-      "fold_left": {
-          "op": "pipe",
-          "transform": "prepend_arg"
-      }
-  }
+// For now, simplified - just parse and pass first operand
+pipe_expr = { first:ternary_expr ~ ("|>" ~ pipe_call)* }
+  -> first
 
-pipe_call = { identifier ~ "(" ~ call_args? ~ ")" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "pipe_target", "args": {
-              "callee": { "define": "variable", "args": { "name": "$1" } },
-              "args": "$2"
-          }}
-      ]
+pipe_call = { callee:identifier ~ "(" ~ args:call_args? ~ ")" }
+  -> TypedExpression::Call {
+      callee: Box::new(TypedExpression::Variable { name: intern(callee) }),
+      args: args,
   }
 
 // Ternary conditional: condition ? true_expr : false_expr
-// Two separate rules to handle optional ternary syntax
 ternary_expr = { ternary_with_branches | or_expr }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
+
+ternary_with_branches = { cond:or_expr ~ "?" ~ then_expr:or_expr ~ ":" ~ else_expr:or_expr }
+  -> TypedExpression::Ternary {
+      condition: Box::new(cond),
+      then_branch: Box::new(then_expr),
+      else_branch: Box::new(else_expr),
   }
 
-ternary_with_branches = { or_expr ~ "?" ~ or_expr ~ ":" ~ or_expr }
-  -> TypedExpression {
-      "define": "ternary", "args": {
-          "condition": "$1",
-          "then_expr": "$2",
-          "else_expr": "$3"
-      }
-  }
+// Logical OR - simplified (just pass through inner expression for now)
+or_expr = { inner:and_expr ~ ("||" ~ and_expr)* }
+  -> inner
 
-// Logical OR
-or_expr = { and_expr ~ ("||" ~ and_expr)* }
-  -> TypedExpression {
-      "get_all_children": true,
-      "fold_left": { "op": "||" }
-  }
+// Logical AND - simplified (just pass through inner expression for now)
+and_expr = { inner:comparison_expr ~ ("&&" ~ comparison_expr)* }
+  -> inner
 
-// Logical AND
-and_expr = { comparison_expr ~ ("&&" ~ comparison_expr)* }
-  -> TypedExpression {
-      "get_all_children": true,
-      "fold_left": { "op": "&&" }
-  }
+// Comparison - simplified (just pass through inner expression for now)
+comparison_expr = { inner:range_expr ~ (comparison_op ~ range_expr)? }
+  -> inner
 
-// Comparison: ==, !=, <, >, <=, >=
-comparison_expr = { range_expr ~ (comparison_op ~ range_expr)? }
-  -> TypedExpression {
-      "get_all_children": true,
-      "fold_binary": true
-  }
-
-comparison_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
-  -> String {
-      "get_text": true
-  }
+comparison_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">" }
 
 // Range: 0..10 (exclusive), 0..=10 (inclusive)
 range_expr = { range_inclusive | range_exclusive | additive_expr }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
+
+range_exclusive = { start:additive_expr ~ ".." ~ end:additive_expr }
+  -> TypedExpression::Range {
+      start: Box::new(start),
+      end: Box::new(end),
+      inclusive: false,
   }
 
-range_exclusive = { additive_expr ~ ".." ~ additive_expr }
-  -> TypedExpression {
-      "commands": [
-          { "define": "range", "args": {
-              "start": "$1",
-              "end": "$2",
-              "inclusive": false
-          }}
-      ]
+range_inclusive = { start:additive_expr ~ "..=" ~ end:additive_expr }
+  -> TypedExpression::Range {
+      start: Box::new(start),
+      end: Box::new(end),
+      inclusive: true,
   }
 
-range_inclusive = { additive_expr ~ "..=" ~ additive_expr }
-  -> TypedExpression {
-      "commands": [
-          { "define": "range", "args": {
-              "start": "$1",
-              "end": "$2",
-              "inclusive": true
-          }}
-      ]
-  }
+// Addition and subtraction - simplified (just pass through for now)
+additive_expr = { inner:multiplicative_expr ~ (additive_op ~ multiplicative_expr)* }
+  -> inner
 
-// Addition and subtraction
-additive_expr = { multiplicative_expr ~ (additive_op ~ multiplicative_expr)* }
-  -> TypedExpression {
-      "get_all_children": true,
-      "fold_left_ops": true
-  }
+additive_op = @{ "+" | "-" }
 
-additive_op = { "+" | "-" }
-  -> String {
-      "get_text": true
-  }
-
-// Multiplication, division, modulo
-multiplicative_expr = { unary_expr ~ (multiplicative_op ~ unary_expr)* }
-  -> TypedExpression {
-      "get_all_children": true,
-      "fold_left_ops": true
-  }
+// Multiplication, division, modulo - simplified (just pass through for now)
+multiplicative_expr = { inner:unary_expr ~ (multiplicative_op ~ unary_expr)* }
+  -> inner
 
 // Note: "@" in quotes is a literal character, not the pest atomic rule marker
-multiplicative_op = { "@" | "*" | "/" | "%" }
-  -> String {
-      "get_text": true
-  }
+multiplicative_op = @{ "@" | "*" | "/" | "%" }
 
-// Unary operators: -, !
-unary_expr = { unary_op? ~ postfix_expr }
-  -> TypedExpression {
-      "get_all_children": true,
-      "apply_unary": true
-  }
+// Unary operators - simplified (just pass through operand for now)
+unary_expr = { unary_op? ~ operand:postfix_expr }
+  -> operand
 
-unary_op = { "-" | "!" }
-  -> String {
-      "get_text": true
-  }
+unary_op = @{ "-" | "!" }
 
 // Postfix: function calls, indexing, member access
-postfix_expr = { primary_expr ~ postfix_op* }
-  -> TypedExpression {
-      "get_all_children": true,
-      "fold_postfix": true
-  }
+// Simplified - just pass through primary for now
+postfix_expr = { base:primary_expr ~ postfix_op* }
+  -> base
 
 postfix_op = { call_op | index_op | member_op }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
 
-// Function call: f(args)
-call_op = { "(" ~ call_args? ~ ")" }
-  -> TypedExpression {
-      "get_child": { "index": 0 },
-      "define": "call_args",
-      "args": { "args": "$result" }
-  }
+// Function call: f(args) - not used in simplified version
+call_op = { "(" ~ args:call_args? ~ ")" }
+  -> TypedExpression::CallArgs { args: args }
 
-call_args = { expr ~ ("," ~ expr)* }
-  -> List {
-      "get_all_children": true
-  }
+call_args = { first:expr ~ ("," ~ rest:expr)* }
+  -> first
 
-// Indexing: x[i]
-index_op = { "[" ~ expr ~ "]" }
-  -> TypedExpression {
-      "define": "index",
-      "args": { "index": "$1" }
-  }
+// Indexing: x[i] - not used in simplified version
+index_op = { "[" ~ idx:expr ~ "]" }
+  -> TypedExpression::IndexOp { index: idx }
 
-// Member access: x.field
-member_op = { "." ~ identifier }
-  -> TypedExpression {
-      "define": "member",
-      "args": { "field": "$1" }
-  }
+// Member access: x.field - not used in simplified version
+member_op = { "." ~ field:identifier }
+  -> TypedExpression::MemberOp { field: intern(field) }
 
 // Primary expressions
 primary_expr = {
@@ -1825,9 +1632,6 @@ primary_expr = {
     path_expr |
     var_expr
 }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
 
 // ============================================================================
 // Load with Type Cast
@@ -1882,12 +1686,9 @@ compute_body = { (decorator | statement)* }
 
 // Path expression: Type::method or module::function
 // Used for associated functions (static methods) like Duration::from(1000)
-path_expr = { identifier ~ "::" ~ identifier }
-  -> TypedExpression {
-      "define": "path",
-      "args": {
-          "segments": ["$0", "$1"]
-      }
+path_expr = { ns:identifier ~ "::" ~ name:identifier }
+  -> TypedExpression::Path {
+      segments: [intern(ns), intern(name)],
   }
 
 // Extern function call: extern name(args)
@@ -1904,18 +1705,12 @@ extern_call = { "extern" ~ identifier ~ "(" ~ call_args? ~ ")" }
   }
 
 // Grouped expression: (expr)
-grouped_expr = { "(" ~ expr ~ ")" }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
+grouped_expr = { "(" ~ inner:expr ~ ")" }
+  -> inner
 
 // Variable reference
-var_expr = { identifier }
-  -> TypedExpression {
-      "get_text": true,
-      "define": "variable",
-      "args": { "name": "$result" }
-  }
+var_expr = { name:identifier }
+  -> TypedExpression::Variable { name: intern(name) }
 
 // ============================================================================
 // Tensor Literals
@@ -1984,48 +1779,26 @@ array_element = { array_literal | expr }
 
 // Float: 3.14, -2.5, 1e-3
 float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
-  -> TypedExpression {
-      "get_text": true,
-      "parse_float": true,
-      "define": "float_literal",
-      "args": { "value": "$result" }
-  }
+  -> TypedExpression::FloatLiteral { value: parse_float(text()) }
 
 // Suffixed literal: 1000ms, 5s, 3ns (abstract type suffix)
 // Must come before int_literal to match first
 suffixed_literal = @{ "-"? ~ ASCII_DIGIT+ ~ ASCII_ALPHA+ }
-  -> TypedExpression {
-      "get_text": true,
-      "define": "suffixed_literal",
-      "args": { "text": "$result" }
-  }
+  -> TypedExpression::SuffixedLiteral { text: text() }
 
 // Integer: 42, -10, 0
 int_literal = @{ "-"? ~ ASCII_DIGIT+ }
-  -> TypedExpression {
-      "get_text": true,
-      "parse_int": true,
-      "define": "int_literal",
-      "args": { "value": "$result" }
-  }
+  -> TypedExpression::IntLiteral { value: parse_int(text()) }
 
 // Duration: 1h, 5m, 30s, 500ms, 2d (deprecated - use abstract types)
 duration_literal = @{ ASCII_DIGIT+ ~ duration_unit }
-  -> TypedExpression {
-      "get_text": true,
-      "define": "duration_literal",
-      "args": { "value": "$result" }
-  }
+  -> TypedExpression::DurationLiteral { text: text() }
 
 duration_unit = { "ms" | "s" | "m" | "h" | "d" }
 
 // String: "hello world" or """multiline string"""
 string_literal = @{ triple_quoted_string | regular_string }
-  -> TypedExpression {
-      "get_text": true,
-      "define": "string_literal",
-      "args": { "value": "$result" }
-  }
+  -> TypedExpression::StringLiteral { value: text() }
 
 // Triple-quoted string for multiline/docstrings
 triple_quoted_string = { "\"\"\"" ~ triple_string_inner* ~ "\"\"\"" }
@@ -2039,18 +1812,10 @@ string_inner = { !("\"" | "\\") ~ ANY | "\\" ~ ANY }
 
 // Boolean: true, false
 bool_literal = { "true" | "false" }
-  -> TypedExpression {
-      "get_text": true,
-      "parse_bool": true,
-      "define": "bool_literal",
-      "args": { "value": "$result" }
-  }
+  -> TypedExpression::BoolLiteral { value: parse_bool(text()) }
 
-// Identifier
+// Identifier - returns the text directly for use in bindings
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
-  -> String {
-      "get_text": true
-  }
 
 // ============================================================================
 // Whitespace and Comments
