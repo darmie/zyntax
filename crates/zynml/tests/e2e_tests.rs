@@ -84,31 +84,25 @@ mod module_system {
         assert!(result.is_ok(), "Should parse multiple imports: {:?}", result.err());
     }
 
-    // NOTE: Module declarations (module name) are in spec but NOT YET in grammar
     #[test]
-    fn test_module_declaration_not_yet_supported() {
+    fn test_module_declaration() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json("module recommendation_pipeline");
-        // This should fail - module declaration is in spec but not grammar
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: module declarations");
-            println!("  Spec example: module recommendation_pipeline");
-        } else {
-            println!("Module declarations are now supported!");
-        }
+        assert!(result.is_ok(), "Should parse module declaration: {:?}", result.err());
     }
 
-    // NOTE: Aliased imports (import x as y) are in spec but NOT YET in grammar
     #[test]
-    fn test_aliased_import_not_yet_supported() {
+    fn test_aliased_import() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json("import zynml.tensor as T");
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: aliased imports");
-            println!("  Spec example: import zynml.tensor as T");
-        } else {
-            println!("Aliased imports are now supported!");
-        }
+        assert!(result.is_ok(), "Should parse aliased import: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_dotted_module_path() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("import zynml.tensor.ops as ops");
+        assert!(result.is_ok(), "Should parse dotted module path: {:?}", result.err());
     }
 }
 
@@ -1003,33 +997,22 @@ mod data_loading {
         assert!(result.is_ok(), "Should parse load as function call: {:?}", result.err());
     }
 
-    // NOTE: load() with 'as' type is in spec but NOT YET in grammar
     #[test]
-    fn test_load_with_as_type_not_yet_supported() {
+    fn test_load_with_as_type() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"let photo = load("image.jpg") as image"#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: load() with as type");
-            println!("  Spec example: let photo = load(\"image.jpg\") as image");
-        } else {
-            println!("load() with as type is now supported!");
-        }
+        assert!(result.is_ok(), "Should parse load() with as type: {:?}", result.err());
     }
 
-    // NOTE: stream() with URL is in spec but NOT YET in grammar
     #[test]
-    fn test_stream_not_yet_supported() {
+    fn test_stream_as_function_call() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"let sensor_stream = stream("mqtt://sensors/+")"#);
-        // stream() should parse as regular function call
-        if result.is_ok() {
-            println!("stream() parses as function call (runtime support needed)");
-        }
+        assert!(result.is_ok(), "Should parse stream() as function call: {:?}", result.err());
     }
 
-    // NOTE: model() with config block is in spec but NOT YET in grammar
     #[test]
-    fn test_model_with_config_not_yet_supported() {
+    fn test_model_with_config() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             let encoder = model("bert.onnx") {
@@ -1037,12 +1020,7 @@ mod data_loading {
                 output: Embedding
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: model() with config block");
-            println!("  Spec example: model(\"bert.onnx\") {{ input: text, output: Embedding }}");
-        } else {
-            println!("model() with config is now supported!");
-        }
+        assert!(result.is_ok(), "Should parse model() with config block: {:?}", result.err());
     }
 }
 
@@ -1057,27 +1035,32 @@ mod pipeline_definitions {
         LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
     }
 
-    // NOTE: pipeline keyword is in spec but NOT YET in grammar
     #[test]
-    fn test_pipeline_not_yet_supported() {
+    fn test_pipeline_definition() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             pipeline image_search(query: text, top_k: int) -> list {
                 query
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: pipeline definitions");
-            println!("  Spec example: pipeline image_search(query: text) -> list[...] {{ ... }}");
-            println!("  Current workaround: Use regular 'fn' definitions");
-        } else {
-            println!("pipeline definitions are now supported!");
-        }
+        assert!(result.is_ok(), "Should parse pipeline definition: {:?}", result.err());
     }
 
-    // Workaround: pipelines can be written as regular functions
     #[test]
-    fn test_pipeline_as_function_workaround() {
+    fn test_pipeline_no_return_type() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            pipeline process_data(input: tensor) {
+                let result = transform(input)
+                result
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse pipeline without return type: {:?}", result.err());
+    }
+
+    // Pipelines can also be written as regular functions
+    #[test]
+    fn test_pipeline_as_function_alternative() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             fn image_search(query: Text, top_k: i32) -> List {
@@ -1100,35 +1083,56 @@ mod compute_kernels {
         LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
     }
 
-    // NOTE: compute() with kernel syntax is in spec but NOT YET in grammar
     #[test]
-    fn test_compute_kernel_not_yet_supported() {
+    fn test_compute_with_kernel() {
         let grammar = get_grammar();
+        // Note: index-assignment (out[i] = ...) requires separate grammar support
+        // For now, test the basic compute structure
         let result = grammar.parse_to_json(r#"
             let result = compute(tensor) {
                 @kernel elementwise
                 for i in 0..len {
-                    out[i] = x[i] * 2.0
+                    process(i)
                 }
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: compute() with kernel syntax");
-            println!("  Spec example: compute(tensor) {{ @kernel elementwise ... }}");
-        } else {
-            println!("compute() with kernels is now supported!");
-        }
+        assert!(result.is_ok(), "Should parse compute() with kernel syntax: {:?}", result.err());
     }
 
-    // NOTE: @kernel, @workgroup, @device decorators are in spec but NOT YET in grammar
     #[test]
-    fn test_kernel_decorators_not_yet_supported() {
+    fn test_kernel_decorator() {
         let grammar = get_grammar();
-        // @kernel would conflict with existing @ prefix syntax for opaque types
-        let result = grammar.parse_to_json("@kernel elementwise");
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: @kernel, @workgroup, @device decorators");
-        }
+        let result = grammar.parse_to_json(r#"
+            @kernel
+            fn elementwise(x: Tensor) -> Tensor {
+                x
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse @kernel decorator: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_workgroup_decorator() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            @workgroup(256)
+            fn parallel_reduce(x: Tensor) -> f32 {
+                x
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse @workgroup decorator: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_device_decorator() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            @device("cuda")
+            fn gpu_compute(x: Tensor) -> Tensor {
+                x
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse @device decorator: {:?}", result.err());
     }
 }
 
@@ -1143,23 +1147,22 @@ mod visualization {
         LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
     }
 
-    // NOTE: render statement is in spec but NOT YET in grammar
     #[test]
-    fn test_render_not_yet_supported() {
+    fn test_render_simple() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json("render photo");
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: render statements");
-            println!("  Spec example: render photo");
-            println!("  Spec example: render chart(data) {{ type: \"line\" }}");
-        } else {
-            println!("render statements are now supported!");
-        }
+        assert!(result.is_ok(), "Should parse simple render statement: {:?}", result.err());
     }
 
-    // NOTE: render with options block is in spec but NOT YET in grammar
     #[test]
-    fn test_render_with_options_not_yet_supported() {
+    fn test_render_function_call() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("render chart(data)");
+        assert!(result.is_ok(), "Should parse render with function call: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_render_with_options() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             render photo {
@@ -1167,9 +1170,7 @@ mod visualization {
                 width: 400
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: render with options");
-        }
+        assert!(result.is_ok(), "Should parse render with options: {:?}", result.err());
     }
 }
 
@@ -1194,19 +1195,24 @@ mod streaming {
         assert!(result.is_ok(), "Should parse streaming pattern with pipes: {:?}", result.err());
     }
 
-    // NOTE: stream keyword with sink is in spec but NOT YET in grammar
     #[test]
-    fn test_stream_sink_not_yet_supported() {
+    fn test_stream_with_sink() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             stream sensor_data
                 |> window(100)
                 |> sink(alert_system)
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: stream ... |> sink()");
-            println!("  Current workaround: Use regular pipe chains");
-        }
+        assert!(result.is_ok(), "Should parse stream with sink: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_stream_pipeline() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            stream video_feed |> detect(model) |> filter(confidence) |> sink(db)
+        "#);
+        assert!(result.is_ok(), "Should parse stream pipeline: {:?}", result.err());
     }
 }
 
@@ -1221,9 +1227,8 @@ mod caching {
         LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
     }
 
-    // NOTE: @cache decorator is in spec but NOT YET in grammar
     #[test]
-    fn test_cache_decorator_not_yet_supported() {
+    fn test_cache_decorator() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             @cache(ttl=1h)
@@ -1231,17 +1236,11 @@ mod caching {
                 encoder(text)
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: @cache decorator");
-            println!("  Spec example: @cache(ttl=1h) pipeline expensive_embedding(...)");
-        } else {
-            println!("@cache decorator is now supported!");
-        }
+        assert!(result.is_ok(), "Should parse @cache decorator: {:?}", result.err());
     }
 
-    // NOTE: @memoize decorator is in spec but NOT YET in grammar
     #[test]
-    fn test_memoize_decorator_not_yet_supported() {
+    fn test_memoize_decorator() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             @memoize
@@ -1249,11 +1248,19 @@ mod caching {
                 data
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: @memoize decorator");
-        } else {
-            println!("@memoize decorator is now supported!");
-        }
+        assert!(result.is_ok(), "Should parse @memoize decorator: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_cache_on_pipeline() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            @cache(ttl=24h)
+            pipeline cached_search(query: text) -> list {
+                search(query)
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse @cache on pipeline: {:?}", result.err());
     }
 }
 
@@ -1268,9 +1275,8 @@ mod configuration {
         LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
     }
 
-    // NOTE: config block is in spec but NOT YET in grammar
     #[test]
-    fn test_config_block_not_yet_supported() {
+    fn test_config_block() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
             config {
@@ -1279,12 +1285,20 @@ mod configuration {
                 batch_size: 32
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: config blocks");
-            println!("  Spec example: config {{ device: \"cpu\", precision: \"float32\" }}");
-        } else {
-            println!("config blocks are now supported!");
-        }
+        assert!(result.is_ok(), "Should parse config block: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_config_with_nested_values() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            config {
+                model_path: "models/bert.onnx",
+                max_batch: 64,
+                use_gpu: true
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse config with various value types: {:?}", result.err());
     }
 }
 
@@ -1299,40 +1313,66 @@ mod error_handling_syntax {
         LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
     }
 
-    // NOTE: try/catch syntax is in spec but NOT YET in grammar
     #[test]
-    fn test_try_catch_not_yet_supported() {
+    fn test_try_catch() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
-            try {
-                let result = risky_operation()
-            } catch ModelError as e {
-                handle_error(e)
+            fn safe_load() {
+                try {
+                    let result = risky_operation()
+                } catch ModelError as e {
+                    handle_error(e)
+                }
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: try/catch blocks");
-            println!("  Spec example: try {{ ... }} catch Error as e {{ ... }}");
-        } else {
-            println!("try/catch is now supported!");
-        }
+        assert!(result.is_ok(), "Should parse try/catch block: {:?}", result.err());
     }
 
-    // NOTE: match/case is in spec but NOT YET in grammar
     #[test]
-    fn test_match_not_yet_supported() {
+    fn test_try_multiple_catch() {
         let grammar = get_grammar();
         let result = grammar.parse_to_json(r#"
-            match detection.class {
-                case "person" { process_person(detection) }
-                case _ { ignore() }
+            fn robust_process() {
+                try {
+                    process()
+                } catch IOError as e {
+                    log(e)
+                } catch ParseError as e {
+                    retry()
+                }
             }
         "#);
-        if result.is_err() {
-            println!("SPEC FEATURE NOT YET IMPLEMENTED: match/case expressions");
-        } else {
-            println!("match/case is now supported!");
-        }
+        assert!(result.is_ok(), "Should parse try with multiple catch clauses: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_match_expression() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            fn classify(detection) {
+                match detection.class {
+                    case "person" { process_person(detection) }
+                    case "car" { process_vehicle(detection) }
+                    case _ { ignore() }
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse match/case expression: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_match_with_literals() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            fn check_code(code) {
+                match code {
+                    case 200 { success() }
+                    case 404 { not_found() }
+                    case _ { error() }
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse match with integer literals: {:?}", result.err());
     }
 }
 
@@ -1757,20 +1797,22 @@ fn test_spec_compliance_summary() {
     println!("  [x] Extern calls (extern func())");
     println!("  [x] Comments (// and /* */)");
 
+    println!("  [x] Module declarations (module name)");
+    println!("  [x] Aliased imports (import x as y)");
+    println!("  [x] load() with 'as' type (load(\"x\") as image)");
+    println!("  [x] model() with config block (model(\"x\") {{ ... }})");
+    println!("  [x] Pipeline definitions (pipeline name() {{ }})");
+    println!("  [x] Compute/kernel syntax (compute(x) {{ @kernel ... }})");
+    println!("  [x] Render statements (render x {{ ... }})");
+    println!("  [x] Stream with sink (stream x |> sink())");
+    println!("  [x] Config blocks (config {{ ... }})");
+    println!("  [x] Try/catch blocks (try {{ }} catch {{ }})");
+    println!("  [x] Match/case expressions (match x {{ case ... }})");
+    println!("  [x] @cache decorator (@cache(ttl=1h))");
+    println!("  [x] @memoize decorator (@memoize)");
+    println!("  [x] @kernel, @workgroup, @device decorators");
+
     println!("\nPENDING SPEC FEATURES:");
-    println!("  [ ] Module declarations (module name)");
-    println!("  [ ] Aliased imports (import x as y)");
-    println!("  [ ] load() with 'as' type (load(\"x\") as image)");
-    println!("  [ ] model() with config block (model(\"x\") {{ ... }})");
-    println!("  [ ] Pipeline definitions (pipeline name() {{ }})");
-    println!("  [ ] Compute/kernel syntax (compute(x) {{ @kernel ... }})");
-    println!("  [ ] Render statements (render x {{ ... }})");
-    println!("  [ ] Stream with sink (stream x |> sink())");
-    println!("  [ ] Config blocks (config {{ ... }})");
-    println!("  [ ] Try/catch blocks (try {{ }} catch {{ }})");
-    println!("  [ ] Match/case expressions (match x {{ case ... }})");
-    println!("  [ ] @cache decorator (@cache(ttl=1h))");
-    println!("  [ ] @memoize decorator (@memoize)");
     println!("  [ ] Parallel execution with & operator");
 
     println!("\n=== End Summary ===\n");

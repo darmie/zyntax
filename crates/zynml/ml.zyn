@@ -250,7 +250,7 @@ top_level_items = { top_level_item* }
       "args": { "declarations": "$result" }
   }
 
-top_level_item = { trait_def | impl_block | abstract_def | enum_def | struct_def | type_def | fn_def | let_stmt | import_stmt | expr_stmt }
+top_level_item = { module_decl | config_block | pipeline_def | decorated_item | trait_def | impl_block | abstract_def | enum_def | struct_def | type_def | fn_def | let_stmt | import_stmt | render_stmt | stream_stmt | expr_stmt }
   -> TypedDeclaration {
       "get_child": { "index": 0 }
   }
@@ -261,11 +261,187 @@ top_level_item = { trait_def | impl_block | abstract_def | enum_def | struct_def
 
 // import tensor
 // import prelude
-import_stmt = { "import" ~ identifier }
+// import zynml.tensor as T
+import_stmt = { import_aliased | import_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// import zynml.tensor as T
+import_aliased = { "import" ~ module_path ~ "as" ~ identifier }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "import_aliased", "args": {
+              "module_path": "$1",
+              "alias": "$2"
+          }}
+      ]
+  }
+
+// import tensor
+import_simple = { "import" ~ identifier }
   -> TypedDeclaration {
       "commands": [
           { "define": "import", "args": {
               "module_name": "$1"
+          }}
+      ]
+  }
+
+// Module path: zynml.tensor.ops
+module_path = { identifier ~ ("." ~ identifier)* }
+  -> String {
+      "get_text": true
+  }
+
+// ============================================================================
+// Module Declaration
+// ============================================================================
+
+// module recommendation_pipeline
+module_decl = { "module" ~ identifier }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "module", "args": {
+              "name": "$1"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Config Block
+// ============================================================================
+
+// config { device: "cpu", precision: "float32", batch_size: 32 }
+config_block = { "config" ~ "{" ~ config_entries ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "config", "args": {
+              "entries": "$1"
+          }}
+      ]
+  }
+
+config_entries = { config_entry ~ ("," ~ config_entry)* ~ ","? }
+  -> List {
+      "get_all_children": true
+  }
+
+config_entry = { identifier ~ ":" ~ expr }
+  -> TypedExpression {
+      "commands": [
+          { "define": "config_entry", "args": {
+              "key": "$1",
+              "value": "$2"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Pipeline Definition
+// ============================================================================
+
+// pipeline image_search(query: text, top_k: int) -> list { ... }
+pipeline_def = { "pipeline" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ ("->" ~ type_expr)? ~ block }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "pipeline", "args": {
+              "name": "$1",
+              "params": "$2",
+              "return_type": "$3",
+              "body": "$4"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Decorated Items (@cache, @memoize, @kernel, @workgroup, @device)
+// ============================================================================
+
+// @cache(ttl=1h) fn expensive() { ... }
+// @memoize fn compute() { ... }
+// @kernel elementwise
+decorated_item = { decorator+ ~ (fn_def | pipeline_def) }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "decorated", "args": {
+              "decorators": "$1",
+              "item": "$2"
+          }}
+      ]
+  }
+
+// Decorator: @name or @name(args)
+decorator = { "@" ~ identifier ~ decorator_args? }
+  -> TypedExpression {
+      "commands": [
+          { "define": "decorator", "args": {
+              "name": "$1",
+              "args": "$2"
+          }}
+      ]
+  }
+
+decorator_args = { "(" ~ decorator_arg_list ~ ")" }
+  -> List {
+      "get_child": { "index": 0 }
+  }
+
+decorator_arg_list = { decorator_arg ~ ("," ~ decorator_arg)* }
+  -> List {
+      "get_all_children": true
+  }
+
+// ttl=1h or just identifier for kernel types
+decorator_arg = { identifier ~ "=" ~ expr | identifier | expr }
+  -> TypedExpression {
+      "get_all_children": true,
+      "define": "decorator_arg"
+  }
+
+// ============================================================================
+// Render Statement (Visualization for ZynBook)
+// ============================================================================
+
+// render photo
+// render chart(data) { type: "line", title: "My Chart" }
+render_stmt = { render_with_options | render_simple }
+  -> TypedDeclaration {
+      "get_child": { "index": 0 }
+  }
+
+// render photo { title: "Original Image", width: 400 }
+render_with_options = { "render" ~ expr ~ "{" ~ config_entries ~ "}" }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "render", "args": {
+              "expr": "$1",
+              "options": "$2"
+          }}
+      ]
+  }
+
+// render photo
+render_simple = { "render" ~ expr }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "render", "args": {
+              "expr": "$1"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Stream Statement
+// ============================================================================
+
+// stream sensor_data |> window(100) |> sink(alert_system)
+stream_stmt = { "stream" ~ identifier ~ ("|>" ~ pipe_call)+ }
+  -> TypedDeclaration {
+      "commands": [
+          { "define": "stream", "args": {
+              "source": "$1",
+              "pipeline": "$2"
           }}
       ]
   }
@@ -1233,7 +1409,7 @@ fn_param = { identifier ~ (":" ~ type_expr)? }
 // Statements
 // ============================================================================
 
-statement = { let_stmt | assign_stmt | if_stmt | while_stmt | for_stmt | return_stmt | break_stmt | continue_stmt | expr_stmt }
+statement = { let_stmt | assign_stmt | if_stmt | while_stmt | for_stmt | try_stmt | match_stmt | return_stmt | break_stmt | continue_stmt | expr_stmt }
   -> TypedStatement {
       "get_child": { "index": 0 }
   }
@@ -1343,6 +1519,73 @@ continue_stmt = { "continue" }
       "commands": [
           { "define": "continue_stmt", "args": {} }
       ]
+  }
+
+// ============================================================================
+// Try/Catch Statement
+// ============================================================================
+
+// try { ... } catch ErrorType as e { ... }
+try_stmt = { "try" ~ block ~ catch_clause+ }
+  -> TypedStatement {
+      "commands": [
+          { "define": "try_stmt", "args": {
+              "body": "$1",
+              "catches": "$2"
+          }}
+      ]
+  }
+
+// catch ErrorType as e { ... }
+// catch _ { ... }  (catch all)
+catch_clause = { "catch" ~ identifier ~ ("as" ~ identifier)? ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "catch", "args": {
+              "error_type": "$1",
+              "binding": "$2",
+              "body": "$3"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Match/Case Statement
+// ============================================================================
+
+// match expr { case pattern { ... } case _ { ... } }
+match_stmt = { "match" ~ expr ~ "{" ~ match_arm+ ~ "}" }
+  -> TypedStatement {
+      "commands": [
+          { "define": "match_stmt", "args": {
+              "expr": "$1",
+              "arms": "$2"
+          }}
+      ]
+  }
+
+// case "pattern" { ... }
+// case _ { ... }
+match_arm = { "case" ~ pattern ~ block }
+  -> TypedStatement {
+      "commands": [
+          { "define": "match_arm", "args": {
+              "pattern": "$1",
+              "body": "$2"
+          }}
+      ]
+  }
+
+// Pattern: literal, identifier (binding), or wildcard (_)
+pattern = { string_literal | int_literal | bool_literal | wildcard | identifier }
+  -> TypedExpression {
+      "get_child": { "index": 0 }
+  }
+
+// Wildcard pattern
+wildcard = { "_" }
+  -> TypedExpression {
+      "define": "wildcard"
   }
 
 // expr as statement
@@ -1565,6 +1808,9 @@ member_op = { "." ~ identifier }
 
 // Primary expressions
 primary_expr = {
+    load_as_expr |
+    model_config_expr |
+    compute_expr |
     extern_call |
     tensor_literal |
     struct_literal |
@@ -1581,6 +1827,57 @@ primary_expr = {
 }
   -> TypedExpression {
       "get_child": { "index": 0 }
+  }
+
+// ============================================================================
+// Load with Type Cast
+// ============================================================================
+
+// load("image.jpg") as image
+load_as_expr = { "load" ~ "(" ~ string_literal ~ ")" ~ "as" ~ identifier }
+  -> TypedExpression {
+      "commands": [
+          { "define": "load_as", "args": {
+              "path": "$1",
+              "type": "$2"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Model with Config Block
+// ============================================================================
+
+// model("bert.onnx") { input: text, output: Embedding }
+model_config_expr = { "model" ~ "(" ~ string_literal ~ ")" ~ "{" ~ config_entries ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "model_config", "args": {
+              "path": "$1",
+              "config": "$2"
+          }}
+      ]
+  }
+
+// ============================================================================
+// Compute Expression (GPU Kernel Dispatch)
+// ============================================================================
+
+// compute(tensor) { @kernel elementwise for i in 0..len { out[i] = x[i] * 2.0 } }
+compute_expr = { "compute" ~ "(" ~ call_args ~ ")" ~ "{" ~ compute_body ~ "}" }
+  -> TypedExpression {
+      "commands": [
+          { "define": "compute", "args": {
+              "args": "$1",
+              "body": "$2"
+          }}
+      ]
+  }
+
+// Compute body can have decorators and statements
+compute_body = { (decorator | statement)* }
+  -> List {
+      "get_all_children": true
   }
 
 // Path expression: Type::method or module::function
