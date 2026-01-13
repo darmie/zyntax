@@ -3,23 +3,24 @@
 program = { SOI ~ declarations ~ EOI  }
 declarations = { declaration*  }
 declaration = { struct_decl | enum_decl | extern_fn_decl | fn_decl | const_decl | var_decl  }
-struct_decl = { "const" ~ identifier ~ "=" ~ "struct" ~ "{" ~ struct_fields? ~ "}" ~ ";"  }
-struct_fields = { struct_field ~ ("," ~ struct_field)* ~ ","?  }
-struct_field = { identifier ~ ":" ~ type_expr  }
-enum_decl = { "const" ~ identifier ~ "=" ~ "enum" ~ "{" ~ enum_variants? ~ "}" ~ ";"  }
-enum_variants = { enum_variant ~ ("," ~ enum_variant)* ~ ","?  }
-enum_variant = { identifier  }
+struct_decl = { "const" ~ identifier ~ "=" ~ "struct" ~ "{" ~ struct_field_list? ~ "}" ~ ";"  }
+struct_field_list = { struct_field*  }
+struct_field = { identifier ~ ":" ~ type_expr ~ ","?  }
+enum_decl = { "const" ~ identifier ~ "=" ~ "enum" ~ "{" ~ enum_variant_list? ~ "}" ~ ";"  }
+enum_variant_list = { enum_variant*  }
+enum_variant = { identifier ~ ","?  }
 extern_fn_decl = { extern_fn_decl_with_params | extern_fn_decl_no_params  }
-extern_fn_decl_with_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ ";"  }
+extern_fn_decl_with_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ fn_param_list ~ ")" ~ type_expr ~ ";"  }
 extern_fn_decl_no_params = { "extern" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ ";"  }
 fn_decl = { async_fn_decl | sync_fn_decl  }
 sync_fn_decl = { fn_decl_with_params | fn_decl_no_params  }
 async_fn_decl = { async_fn_decl_with_params | async_fn_decl_no_params  }
-async_fn_decl_with_params = { "async" ~ "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block  }
+async_fn_decl_with_params = { "async" ~ "fn" ~ identifier ~ "(" ~ fn_param_list ~ ")" ~ type_expr ~ block  }
 async_fn_decl_no_params = { "async" ~ "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block  }
-fn_decl_with_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ type_expr ~ block  }
+fn_decl_with_params = { "fn" ~ identifier ~ "(" ~ fn_param_list ~ ")" ~ type_expr ~ block  }
 fn_decl_no_params = { "fn" ~ identifier ~ "(" ~ ")" ~ type_expr ~ block  }
-fn_params = { fn_param_any ~ ("," ~ fn_param_any)*  }
+fn_param_list = { fn_param_item*  }
+fn_param_item = { fn_param_any ~ ","?  }
 fn_param_any = { comptime_param | fn_param  }
 comptime_param = { "comptime" ~ identifier ~ ":" ~ type_expr  }
 fn_param = { identifier ~ ":" ~ type_expr  }
@@ -29,12 +30,13 @@ const_decl_untyped = { "const" ~ identifier ~ "=" ~ expr ~ ";"  }
 var_decl = { var_decl_typed | var_decl_untyped  }
 var_decl_typed = { "var" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";"  }
 var_decl_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";"  }
-type_expr = { pointer_type | optional_type | error_union_type | array_type | primitive_type | identifier  }
+type_expr = { pointer_type | optional_type | error_union_type | array_type | primitive_type | named_type  }
 pointer_type = { "*" ~ "const"? ~ type_expr  }
 optional_type = { "?" ~ type_expr  }
 error_union_type = { "!" ~ type_expr  }
 array_type = { "[" ~ integer_literal? ~ "]" ~ type_expr  }
-primitive_type = { "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" | "type"  }
+primitive_type = @{ "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void" | "type"  }
+named_type = { identifier  }
 statement = { if_stmt | while_stmt | for_stmt | return_stmt | break_stmt | continue_stmt | local_const | local_var | assign_stmt | expr_stmt  }
 break_stmt = { "break" ~ ";"  }
 continue_stmt = { "continue" ~ ";"  }
@@ -53,52 +55,33 @@ local_var_typed = { "var" ~ identifier ~ ":" ~ type_expr ~ "=" ~ expr ~ ";"  }
 local_var_untyped = { "var" ~ identifier ~ "=" ~ expr ~ ";"  }
 expr_stmt = { expr ~ ";"  }
 block = { "{" ~ statement* ~ "}"  }
-expr = { logical_or  }
-logical_or = { logical_and ~ (or_op ~ logical_and)*  }
-logical_and = { comparison ~ (and_op ~ comparison)*  }
-comparison = { addition ~ ((eq_op | neq_op | lte_op | gte_op | lt_op | gt_op) ~ addition)*  }
-addition = { multiplication ~ ((add_op | sub_op) ~ multiplication)*  }
-multiplication = { unary ~ ((mul_op | div_op) ~ unary)*  }
-unary = { unary_with_op | primary  }
+expr = { comparison_expr  }
+comparison_expr = { add_expr ~ (comparison_op ~ add_expr)?  }
+comparison_op = @{ "==" | "!=" | "<=" | ">=" | "<" | ">"  }
+add_expr = { mul_expr ~ (add_op ~ mul_expr)?  }
+add_op = @{ "+" | "-"  }
+mul_expr = { unary_expr ~ (mul_op ~ unary_expr)?  }
+mul_op = @{ "*" | "/"  }
+unary_expr = { unary_with_op | primary  }
 unary_with_op = { unary_op ~ primary  }
+unary_op = { "-" | "!"  }
 primary = { postfix_expr  }
 postfix_expr = { call_expr | field_expr | index_expr | atom  }
-call_expr = { atom ~ "(" ~ call_args? ~ ")"  }
+call_expr = { atom ~ "(" ~ call_arg_list? ~ ")"  }
+call_arg_list = { call_arg*  }
+call_arg = { expr ~ ","?  }
 field_expr = { atom ~ "." ~ identifier  }
 index_expr = { atom ~ "[" ~ expr ~ "]"  }
-call_args = { expr ~ ("," ~ expr)*  }
-atom = { switch_expr | try_expr | await_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | type_value | identifier_expr | paren_expr  }
-switch_expr = { "switch" ~ "(" ~ expr ~ ")" ~ "{" ~ switch_cases? ~ "}"  }
-switch_cases = { switch_case ~ ("," ~ switch_case)* ~ ","?  }
-switch_case = { switch_case_value | switch_case_else  }
-switch_case_value = { switch_pattern ~ "=>" ~ expr  }
-switch_case_else = { "else" ~ "=>" ~ expr  }
-switch_pattern = { switch_or_pattern  }
-switch_or_pattern = { switch_primary_pattern ~ ("|" ~ switch_primary_pattern)*  }
-switch_primary_pattern = { switch_struct_pattern | switch_tagged_union_pattern | switch_error_pattern | switch_pointer_pattern | switch_range_pattern | switch_array_pattern | switch_literal_pattern | switch_wildcard_pattern | switch_identifier_pattern  }
-switch_range_pattern = { switch_simple_literal ~ ".." ~ switch_simple_literal  }
-switch_array_pattern = { ".{" ~ switch_array_elements? ~ "}"  }
-switch_array_elements = { switch_pattern ~ ("," ~ switch_pattern)* ~ ","?  }
-switch_literal_pattern = { switch_simple_literal  }
-switch_simple_literal = { integer_literal | string_literal  }
-switch_wildcard_pattern = { "_"  }
-switch_identifier_pattern = { identifier  }
-switch_struct_pattern = { identifier ~ "{" ~ switch_struct_field_patterns? ~ "}"  }
-switch_struct_field_patterns = { switch_struct_field_pattern ~ ("," ~ switch_struct_field_pattern)* ~ ","?  }
-switch_struct_field_pattern = { "." ~ identifier ~ ("=" ~ switch_pattern)?  }
-switch_tagged_union_pattern = { "." ~ identifier  }
-switch_error_pattern = { "error" ~ "." ~ identifier  }
-switch_pointer_pattern = { "*" ~ switch_primary_pattern  }
-type_value = { type_expr_as_value  }
-type_expr_as_value = { primitive_type  }
-struct_init = { identifier ~ "{" ~ struct_init_fields? ~ "}"  }
-struct_init_fields = { struct_init_field ~ ("," ~ struct_init_field)* ~ ","?  }
-struct_init_field = { "." ~ identifier ~ "=" ~ expr  }
+atom = { try_expr | await_expr | struct_init | array_literal | bool_literal | string_literal | integer_literal | identifier_expr | paren_expr  }
 try_expr = { "try" ~ primary  }
 await_expr = { "await" ~ primary  }
+struct_init = { identifier ~ "{" ~ struct_init_field_list? ~ "}"  }
+struct_init_field_list = { struct_init_field*  }
+struct_init_field = { "." ~ identifier ~ "=" ~ expr ~ ","?  }
+array_literal = { "[" ~ array_element_list? ~ "]"  }
+array_element_list = { array_element*  }
+array_element = { expr ~ ","?  }
 paren_expr = _{ "(" ~ expr ~ ")"  }
-array_literal = { "[" ~ array_elements? ~ "]"  }
-array_elements = { expr ~ ("," ~ expr)*  }
 identifier_expr = { identifier  }
 bool_literal = { "true" | "false"  }
 integer_literal = @{ "-"? ~ ASCII_DIGIT+  }
@@ -107,23 +90,10 @@ string_inner = { (!("\"" | "\\") ~ ANY) | escape_seq  }
 escape_seq = { "\\" ~ ("n" | "r" | "t" | "\\" | "\"" | "0")  }
 keyword = @{ ("struct" | "enum" | "fn" | "const" | "var" | "if" | "else" | "while" | "for" |
      "return" | "break" | "continue" | "try" | "await" | "async" | "and" | "or" | "true" | "false" |
-     "comptime" | "type" | "switch" |
+     "comptime" | "type" | "switch" | "extern" | "error" |
      "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "f32" | "f64" | "bool" | "void")
     ~ !(ASCII_ALPHANUMERIC | "_")
  }
 identifier = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")*  }
-and_op = { "and"  }
-or_op = { "or"  }
-eq_op = { "=="  }
-neq_op = { "!="  }
-lte_op = { "<="  }
-gte_op = { ">="  }
-lt_op = { "<"  }
-gt_op = { ">"  }
-add_op = { "+"  }
-sub_op = { "-"  }
-mul_op = { "*"  }
-div_op = { "/"  }
-unary_op = { "-" | "!"  }
 WHITESPACE = _{ " " | "\t" | "\n" | "\r"  }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* ~ "\n"?  }

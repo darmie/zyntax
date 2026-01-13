@@ -26,6 +26,9 @@ log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Regex for pattern processing
+regex = "1.10"
+
 # Interned strings (shared with typed_ast)
 internment = "0.8"
 

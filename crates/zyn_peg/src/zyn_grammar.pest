@@ -115,10 +115,28 @@ rule_def = {
 
 rule_modifier = { "@" | "!" | "$" | "_" }
 
-// Action block: -> TypedExpression { JSON commands }
+// Action block: -> TypedExpression { fields } or -> binding_passthrough
 // JSON-based action mappings that call host functions at runtime
 action_block = {
-    "->" ~ rust_type ~ "{" ~ action_body ~ "}"
+    "->" ~ (
+        // TypedAST construction: -> TypeName { fields } or -> Type::Variant { fields }
+        type_path ~ "{" ~ action_body? ~ "}"
+      | // Helper function call: -> intern(binding) or -> parse_int(text())
+        identifier ~ "(" ~ action_args? ~ ")"
+      | // Simple passthrough: -> binding_name (must come after function call)
+        identifier
+    )
+}
+
+// Type path with optional variant: TypedProgram or TypedDeclaration::Function or Type::Unit
+type_path = { rust_type ~ ("::" ~ identifier)? }
+
+// Arguments for helper function calls in actions
+action_args = { action_arg ~ ("," ~ action_arg)* }
+action_arg = {
+    identifier ~ "(" ~ action_args? ~ ")"  // Nested function call: intern(name)
+  | identifier                              // Binding reference: name
+  | string_literal                          // String literal: "hello"
 }
 
 // action_body: JSON object or legacy field syntax
@@ -186,8 +204,11 @@ prefix = {
 }
 
 postfix = {
-    primary ~ ("*" | "+" | "?" | repeat)?
+    primary ~ repeat_modifier?
 }
+
+// Repeat modifiers: *, +, ?, or {n} / {n,m}
+repeat_modifier = { "*" | "+" | "?" | repeat }
 
 repeat = { "{" ~ integer ~ ("," ~ integer?)? ~ "}" }
 
@@ -195,9 +216,14 @@ primary = {
     "(" ~ pattern ~ ")"
   | string_literal
   | char_range
+  | named_rule_ref
   | rule_ref
   | builtin_rule
 }
+
+// Named binding: name:identifier or name:identifier* etc.
+// The binding applies to the whole expression including repeat modifier
+named_rule_ref = { identifier ~ ":" ~ identifier ~ repeat_modifier? }
 
 rule_ref = { identifier }
 

@@ -19,6 +19,7 @@ use zyntax_typed_ast::{
     TypedIf, TypedWhile, TypedFor, TypedUnary, TypedFieldAccess, TypedIndex,
     TypedRange, TypedStructLiteral, TypedFieldInit, TypedPattern,
     TypedParameter, TypedVariant, TypedVariantFields, TypedTypeAlias, ParameterKind,
+    TypedInterface,
     UnaryOp,
     typed_node, Span,
     type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention, NullabilityKind, ConstValue},
@@ -101,7 +102,10 @@ impl<'g> GrammarInterpreter<'g> {
                     let span = Span::new(start_pos, pos);
                     match self.execute_action(action, state, span) {
                         Ok(result) => ParseResult::Success(result, pos),
-                        Err(e) => state.fail(&e),
+                        Err(e) => {
+                            trace!("execute_rule: {} action FAILED: {}", rule.name, e);
+                            state.fail(&e)
+                        }
                     }
                 } else {
                     ParseResult::Success(parsed_value, pos)
@@ -657,12 +661,80 @@ impl<'g> GrammarInterpreter<'g> {
                 let for_type_name = self.get_field_as_interned("for_type", fields, state)?;
                 let for_type = Type::Unresolved(for_type_name);
 
+                // Get methods and associated types from impl_items
+                let items = self.get_field_optional_decl_list("items", fields, state)?;
+                let mut methods = vec![];
+                let mut associated_types = vec![];
+
+                for item in items {
+                    match item.node {
+                        TypedDeclaration::Function(func) => {
+                            // Convert TypedFunction to TypedMethod
+                            let self_name = state.intern("self");
+                            let method_params: Vec<zyntax_typed_ast::TypedMethodParam> = func.params
+                                .into_iter()
+                                .map(|p| {
+                                    let is_self = p.name == self_name;
+                                    zyntax_typed_ast::TypedMethodParam {
+                                        name: p.name,
+                                        ty: p.ty,
+                                        mutability: p.mutability,
+                                        is_self,
+                                        kind: p.kind,
+                                        default_value: p.default_value,
+                                        attributes: p.attributes,
+                                        span: p.span,
+                                    }
+                                })
+                                .collect();
+
+                            methods.push(zyntax_typed_ast::TypedMethod {
+                                name: func.name,
+                                type_params: func.type_params,
+                                params: method_params,
+                                return_type: func.return_type,
+                                body: func.body,
+                                visibility: func.visibility,
+                                is_static: false,
+                                is_async: func.is_async,
+                                is_override: false,
+                                span: item.span,
+                            });
+                        }
+                        TypedDeclaration::TypeAlias(alias) => {
+                            associated_types.push(zyntax_typed_ast::TypedImplAssociatedType {
+                                name: alias.name,
+                                ty: alias.target,
+                                span: alias.span,
+                            });
+                        }
+                        _ => {
+                            // Skip other items for now
+                        }
+                    }
+                }
+
                 TypedDeclaration::Impl(zyntax_typed_ast::TypedTraitImpl {
                     trait_name,
                     trait_type_args: vec![],
                     for_type,
+                    methods,
+                    associated_types,
+                    span,
+                })
+            }
+            "Interface" => {
+                // Interface is used for trait definitions
+                let name = self.get_field_as_interned("name", fields, state)?;
+                // TODO: support type_params, methods, associated_types
+
+                TypedDeclaration::Interface(zyntax_typed_ast::TypedInterface {
+                    name,
+                    type_params: vec![],
+                    extends: vec![],
                     methods: vec![],
                     associated_types: vec![],
+                    visibility: Visibility::Public,
                     span,
                 })
             }
@@ -995,6 +1067,57 @@ impl<'g> GrammarInterpreter<'g> {
                 } else {
                     self.eval_expr(&args[0], state)
                 }
+            }
+            "prepend_list" => {
+                // prepend_list(first, rest) - prepend first to the list rest
+                // Useful for comma-separated lists: first:expr ~ ("," ~ rest:expr)*
+                // When the repetition matches zero times, rest won't be bound - treat as empty
+                if args.len() != 2 {
+                    return Err("prepend_list() requires exactly 2 arguments".to_string());
+                }
+                let first = self.eval_expr(&args[0], state)?;
+
+                // Try to evaluate rest - if binding not found, treat as empty list
+                let rest = match self.eval_expr(&args[1], state) {
+                    Ok(v) => v,
+                    Err(e) if e.contains("not found") => ParsedValue::List(vec![]),
+                    Err(e) => return Err(e),
+                };
+
+                let mut result = vec![first];
+                match rest {
+                    ParsedValue::List(items) => result.extend(items),
+                    ParsedValue::Optional(Some(inner)) => {
+                        if let ParsedValue::List(items) = *inner {
+                            result.extend(items);
+                        } else {
+                            result.push(*inner);
+                        }
+                    }
+                    ParsedValue::Optional(None) => {} // Empty rest, just return [first]
+                    ParsedValue::None => {} // Empty rest
+                    other => result.push(other),
+                }
+                Ok(ParsedValue::List(result))
+            }
+            "concat_list" => {
+                // concat_list(list1, list2) - concatenate two lists
+                if args.len() != 2 {
+                    return Err("concat_list() requires exactly 2 arguments".to_string());
+                }
+                let list1 = self.eval_expr(&args[0], state)?;
+                let list2 = self.eval_expr(&args[1], state)?;
+
+                let mut result = Vec::new();
+                match list1 {
+                    ParsedValue::List(items) => result.extend(items),
+                    other => result.push(other),
+                }
+                match list2 {
+                    ParsedValue::List(items) => result.extend(items),
+                    other => result.push(other),
+                }
+                Ok(ParsedValue::List(result))
             }
             _ => Err(format!("unknown helper function: {}", function)),
         }
@@ -1777,6 +1900,62 @@ impl<'g> GrammarInterpreter<'g> {
         }
     }
 
+    /// Get a field as a list of declarations (for impl items)
+    fn get_field_optional_decl_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedNode<TypedDeclaration>>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            if let Ok(decl) = self.parsed_value_to_decl(item) {
+                                result.push(decl);
+                            }
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    ParsedValue::Optional(None) => Ok(vec![]),
+                    ParsedValue::Optional(Some(inner)) => {
+                        match *inner {
+                            ParsedValue::List(items) => {
+                                let mut result = Vec::new();
+                                for item in items {
+                                    if let Ok(decl) = self.parsed_value_to_decl(item) {
+                                        result.push(decl);
+                                    }
+                                }
+                                Ok(result)
+                            }
+                            other => {
+                                if let Ok(decl) = self.parsed_value_to_decl(other) {
+                                    Ok(vec![decl])
+                                } else {
+                                    Ok(vec![])
+                                }
+                            }
+                        }
+                    }
+                    ParsedValue::Declaration(d) => Ok(vec![*d]),
+                    other => {
+                        if let Ok(decl) = self.parsed_value_to_decl(other) {
+                            Ok(vec![decl])
+                        } else {
+                            Ok(vec![])
+                        }
+                    }
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
     /// Convert ParsedValue to TypedField
     fn parsed_value_to_field<'a>(
         &self,
@@ -1879,7 +2058,15 @@ impl<'g> GrammarInterpreter<'g> {
     fn parsed_value_to_decl(&self, val: ParsedValue) -> Result<TypedNode<TypedDeclaration>, String> {
         match val {
             ParsedValue::Declaration(d) => Ok(*d),
-            _ => Err("cannot convert value to declaration".to_string()),
+            ParsedValue::Statement(s) => {
+                // Try to extract declaration from expression statement
+                log::warn!("Got Statement when expecting Declaration, trying to convert. Statement: {:?}", s.node);
+                Err("cannot convert value to declaration".to_string())
+            }
+            other => {
+                log::error!("Cannot convert value to declaration. Got: {:?}", std::mem::discriminant(&other));
+                Err("cannot convert value to declaration".to_string())
+            }
         }
     }
 

@@ -1038,6 +1038,20 @@ pub fn generate_pest_grammar_string(grammar: &ZynGrammar) -> Result<String> {
     generate_pest_grammar(grammar)
 }
 
+/// Strip name bindings from a pattern for pest compatibility.
+/// Converts `name:rule` to just `rule` since pest doesn't support named bindings.
+///
+/// Examples:
+/// - `items:top_level_items` -> `top_level_items`
+/// - `name:identifier ~ ":" ~ value:expr` -> `identifier ~ ":" ~ expr`
+fn strip_name_bindings(pattern: &str) -> String {
+    use regex::Regex;
+    // Match identifier followed by colon followed by identifier (the binding syntax)
+    // We need to handle cases like `name:identifier` but not break strings like `":"`
+    let re = Regex::new(r"\b([a-zA-Z_][a-zA-Z0-9_]*):([a-zA-Z_][a-zA-Z0-9_]*)").unwrap();
+    re.replace_all(pattern, "$2").to_string()
+}
+
 /// Generate a pest-compatible grammar from ZynGrammar rules
 fn generate_pest_grammar(grammar: &ZynGrammar) -> Result<String> {
     let mut lines = Vec::new();
@@ -1059,9 +1073,12 @@ fn generate_pest_grammar(grammar: &ZynGrammar) -> Result<String> {
             None => "",
         };
 
+        // Strip name bindings from the pattern for pest compatibility
+        let pest_pattern = strip_name_bindings(&rule.pattern);
+
         lines.push(format!(
             "{} = {}{{ {} }}",
-            rule.name, modifier, rule.pattern
+            rule.name, modifier, pest_pattern
         ));
     }
 

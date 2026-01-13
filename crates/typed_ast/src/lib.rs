@@ -148,7 +148,7 @@ pub use typed_ast::{
     TypedExtern, TypedExternClass, TypedExternStruct, TypedExternEnum,
     TypedExternEnumVariant, TypedExternTypeDef, TypedExternMethod, TypedExternProperty,
     // Trait implementation types
-    TypedTraitImpl, TypedImplAssociatedType,
+    TypedTraitImpl, TypedImplAssociatedType, TypedInterface,
 };
 
 pub use type_inference::{

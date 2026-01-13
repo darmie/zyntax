@@ -294,8 +294,20 @@ fn build_action_block(pair: Pair<Rule>) -> Result<ActionBlock, String> {
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::rust_type => {
+            Rule::type_path => {
+                // type_path = { rust_type ~ ("::" ~ identifier)? }
+                // Extract the full type path including variant
                 return_type = inner.as_str().trim().to_string();
+            }
+            Rule::rust_type => {
+                // Legacy support: direct rust_type
+                return_type = inner.as_str().trim().to_string();
+            }
+            Rule::identifier => {
+                // Helper function call or passthrough: -> intern(binding) or -> binding
+                if return_type.is_empty() {
+                    return_type = inner.as_str().trim().to_string();
+                }
             }
             Rule::action_body => {
                 for field_pair in inner.into_inner() {

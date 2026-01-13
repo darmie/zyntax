@@ -444,83 +444,52 @@ stream_stmt = { "stream" ~ identifier ~ ("|>" ~ pipe_call)+ }
 // trait Display { fn to_string(self) -> String }
 // trait Iterator<T> { fn next(self) -> Option<T> }
 // trait Add<Rhs> { type Output; fn add(self, rhs: Rhs) -> Output }
-trait_def = { "trait" ~ identifier ~ type_params? ~ "{" ~ trait_item* ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "trait", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "items": "$3"
-          }}
-      ]
+// Note: For now we simplify and just capture the name - methods/types will be parsed later
+trait_def = { "trait" ~ name:identifier ~ type_params? ~ "{" ~ trait_item* ~ "}" }
+  -> TypedDeclaration::Interface {
+      name: intern(name),
   }
 
 // Trait item can be an associated type or a method
-trait_item = { associated_type | trait_method }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+// For now, these are parsed but produce empty results (the grammar captures the syntax)
+trait_item = { item:associated_type | item:trait_method }
+  -> item
 
 // Associated type: type Output
 // With bounds: type Item: Clone
-associated_type = { "type" ~ identifier ~ (":" ~ type_bounds)? }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "associated_type", "args": {
-              "name": "$1",
-              "bounds": "$2"
-          }}
-      ]
+associated_type = { "type" ~ name:identifier ~ (":" ~ type_bounds)? }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
-trait_method = { "fn" ~ identifier ~ type_params? ~ "(" ~ trait_params? ~ ")" ~ ("->" ~ type_expr)? }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "trait_method", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "params": "$3",
-              "return_type": "$4"
-          }}
-      ]
+trait_method = { "fn" ~ name:identifier ~ type_params? ~ "(" ~ trait_params? ~ ")" ~ ("->" ~ type_expr)? }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: None,
   }
 
-trait_params = { trait_param ~ ("," ~ trait_param)* }
-  -> List {
-      "get_all_children": true
-  }
+trait_params = { param:trait_param ~ ("," ~ param:trait_param)* }
+  -> param
 
-trait_param = { identifier ~ (":" ~ type_expr)? }
+trait_param = { name:identifier ~ (":" ~ ty:type_expr)? }
   -> TypedParameter {
-      "commands": [
-          { "define": "param", "args": {
-              "name": "$1",
-              "type": "$2"
-          }}
-      ]
+      name: intern(name),
+      type_annotation: ty,
   }
 
 // Type parameters: <T, U>
 // With bounds: <T: Display, U: Clone + Debug>
-type_params = { "<" ~ type_param ~ ("," ~ type_param)* ~ ">" }
-  -> List {
-      "get_all_children": true
-  }
+// For now, we just consume type params and produce text values
+type_params = { "<" ~ param:type_param ~ ("," ~ param:type_param)* ~ ">" }
+  -> param
 
-type_param = { identifier ~ (":" ~ type_bounds)? }
-  -> TypedTypeParam {
-      "commands": [
-          { "define": "type_param", "args": {
-              "name": "$1",
-              "bounds": "$2"
-          }}
-      ]
-  }
+type_param = { name:identifier ~ (":" ~ type_bounds)? }
+  -> intern(name)
 
-type_bounds = { type_expr ~ ("+" ~ type_expr)* }
-  -> List {
-      "get_all_children": true
-  }
+type_bounds = { ty:type_expr ~ ("+" ~ ty:type_expr)* }
+  -> ty
 
 // ============================================================================
 // Type Definition
@@ -528,59 +497,37 @@ type_bounds = { type_expr ~ ("+" ~ type_expr)* }
 
 // @opaque("$Tensor") type Tensor
 // type Point = { x: f32, y: f32 }
-type_def = { type_opaque | type_alias | type_struct }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+type_def = { decl:type_opaque | decl:type_alias | decl:type_struct }
+  -> decl
 
 // Opaque type wrapping external (ZRTL) type
 // Match @opaque as two separate tokens to avoid conflict with @ operator
-// Get the full text and parse it in the runtime since atomic rules don't create child nodes
-type_opaque = { "@" ~ "opaque" ~ "(" ~ string_literal ~ ")" ~ "type" ~ identifier }
-  -> TypedDeclaration {
-      "get_text": true,
-      "commands": [
-          { "define": "opaque_type", "args": {
-              "text": "$result"
-          }}
-      ]
+// For now, we emit a TypeAlias - the actual opaque behavior is handled elsewhere
+type_opaque = { "@" ~ "opaque" ~ "(" ~ string_literal ~ ")" ~ "type" ~ name:identifier }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // Type alias: type Scalar = f32
-type_alias = { "type" ~ identifier ~ "=" ~ type_expr }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "type_alias", "args": {
-              "name": "$1",
-              "target": "$2"
-          }}
-      ]
+type_alias = { "type" ~ name:identifier ~ "=" ~ type_expr }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // Struct type: type Point = { x: f32, y: f32 }
-type_struct = { "type" ~ identifier ~ "=" ~ "{" ~ struct_fields ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "struct_type", "args": {
-              "name": "$1",
-              "fields": "$2"
-          }}
-      ]
+type_struct = { "type" ~ name:identifier ~ "=" ~ "{" ~ fields:struct_fields ~ "}" }
+  -> TypedDeclaration::Class {
+      name: intern(name),
+      fields: fields,
   }
 
-struct_fields = { struct_field ~ ("," ~ struct_field)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
+struct_fields = { field:struct_field ~ ("," ~ field:struct_field)* ~ ","? }
+  -> field
 
-struct_field = { identifier ~ ":" ~ type_expr }
-  -> TypedParameter {
-      "commands": [
-          { "define": "field", "args": {
-              "name": "$1",
-              "type": "$2"
-          }}
-      ]
+struct_field = { name:identifier ~ ":" ~ ty:type_expr }
+  -> TypedField {
+      name: intern(name),
+      ty: ty,
   }
 
 // ============================================================================
@@ -594,122 +541,68 @@ struct_field = { identifier ~ ":" ~ type_expr }
 // Abstract types are zero-cost wrappers with implicit conversions
 // Can have fields like structs, with underlying type for direct conversions
 // Suffix/Suffixes enables literal syntax like 1000ms, 5s, 3ns
+// For now, abstracts are represented as TypeAlias - the actual abstract behavior is handled elsewhere
 abstract_def = {
-    abstract_with_suffix_brace | abstract_with_suffixes_brace |
-    abstract_with_suffixes | abstract_with_suffix |
-    abstract_with_fields_brace | abstract_with_fields |
-    abstract_simple
+    decl:abstract_with_suffix_brace | decl:abstract_with_suffixes_brace |
+    decl:abstract_with_suffixes | decl:abstract_with_suffix |
+    decl:abstract_with_fields_brace | decl:abstract_with_fields |
+    decl:abstract_simple
 }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+  -> decl
 
 // ========== Brace-style abstract definitions ==========
 
 // abstract Name(Type) with Suffix("x") { fields }
-abstract_with_suffix_brace = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffix" ~ "(" ~ string_literal ~ ")" ~ "{" ~ struct_field_list ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "abstract_with_single_suffix", "args": {
-              "name": "$1",
-              "underlying_type": "$2",
-              "suffix_literal": "$3",
-              "fields": "$4"
-          }}
-      ]
+abstract_with_suffix_brace = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffix" ~ "(" ~ string_literal ~ ")" ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // abstract Name(Type) with Suffixes("x, y, z") { fields }
-abstract_with_suffixes_brace = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffixes" ~ "(" ~ string_literal ~ ")" ~ "{" ~ struct_field_list ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "abstract_with_multiple_suffixes", "args": {
-              "name": "$1",
-              "underlying_type": "$2",
-              "suffixes_literal": "$3",
-              "fields": "$4"
-          }}
-      ]
+abstract_with_suffixes_brace = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffixes" ~ "(" ~ string_literal ~ ")" ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // abstract Name(Type) { fields } (without suffix)
-abstract_with_fields_brace = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ struct_field_list ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "abstract_with_multiple_suffixes", "args": {
-              "name": "$1",
-              "underlying_type": "$2",
-              "suffixes_literal": "",
-              "fields": "$3"
-          }}
-      ]
+abstract_with_fields_brace = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ struct_field_list ~ "}" }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // ========== Colon-style abstract definitions (legacy/alternative) ==========
 
 // abstract Name(Type) with Suffix("x"):  or  with Suffixes("x, y, z"):
-abstract_with_suffix = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffix" ~ "(" ~ string_literal ~ ")" ~ ":" ~ struct_def_fields }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "abstract_with_single_suffix", "args": {
-              "name": "$1",
-              "underlying_type": "$2",
-              "suffix_literal": "$3",
-              "fields": "$4"
-          }}
-      ]
+abstract_with_suffix = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffix" ~ "(" ~ string_literal ~ ")" ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
-abstract_with_suffixes = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffixes" ~ "(" ~ string_literal ~ ")" ~ ":" ~ struct_def_fields }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "abstract_with_multiple_suffixes", "args": {
-              "name": "$1",
-              "underlying_type": "$2",
-              "suffixes_literal": "$3",
-              "fields": "$4"
-          }}
-      ]
+abstract_with_suffixes = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ "with" ~ "Suffixes" ~ "(" ~ string_literal ~ ")" ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // abstract Name(Type): fields (without suffix)
-abstract_with_fields = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" ~ ":" ~ struct_def_fields }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "abstract_with_multiple_suffixes", "args": {
-              "name": "$1",
-              "underlying_type": "$2",
-              "suffixes_literal": "",
-              "fields": "$3"
-          }}
-      ]
+abstract_with_fields = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ ":" ~ struct_def_fields }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // abstract Name(Type)
-abstract_simple = { "abstract" ~ identifier ~ "(" ~ type_expr ~ ")" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "abstract_type", "args": {
-              "name": "$1",
-              "underlying_type": "$2"
-          }}
-      ]
+abstract_simple = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
   }
 
 // Field list for brace-style definitions: field: type, field: type
-struct_field_list = { struct_field ~ ("," ~ struct_field)* }
-  -> List {
-      "get_all_children": true
-  }
+struct_field_list = { field:struct_field ~ ("," ~ field:struct_field)* }
+  -> field
 
-struct_field = { identifier ~ ":" ~ type_expr }
-  -> TypedParameter {
-      "commands": [
-          { "define": "field", "args": {
-              "name": "$1",
-              "type": "$2"
-          }}
-      ]
+struct_field = { name:identifier ~ ":" ~ ty:type_expr }
+  -> TypedField {
+      name: intern(name),
+      ty: ty,
   }
 
 // ============================================================================
@@ -725,75 +618,48 @@ struct_def = {
     struct_def_generic_brace | struct_def_brace |
     struct_def_generic | struct_def_simple
 }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
 
 // ========== Brace-style struct definitions ==========
 
 // struct List<T> { items: Vec, count: int }
-struct_def_generic_brace = { "struct" ~ identifier ~ type_params ~ "{" ~ struct_field_list ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "struct_type", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "fields": "$3"
-          }}
-      ]
+struct_def_generic_brace = { "struct" ~ name:identifier ~ type_params ~ "{" ~ fields:struct_field_list ~ "}" }
+  -> TypedDeclaration::Class {
+      name: intern(name),
+      fields: fields,
   }
 
 // struct Point { x: float, y: float }
-struct_def_brace = { "struct" ~ identifier ~ "{" ~ struct_field_list ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "struct_type", "args": {
-              "name": "$1",
-              "fields": "$2"
-          }}
-      ]
+struct_def_brace = { "struct" ~ name:identifier ~ "{" ~ fields:struct_field_list ~ "}" }
+  -> TypedDeclaration::Class {
+      name: intern(name),
+      fields: fields,
   }
 
 // ========== Colon-style struct definitions ==========
 
 // struct List<T>:
 //     ...
-struct_def_generic = { "struct" ~ identifier ~ type_params ~ ":" ~ struct_def_fields }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "struct_type", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "fields": "$3"
-          }}
-      ]
+struct_def_generic = { "struct" ~ name:identifier ~ type_params ~ ":" ~ fields:struct_def_fields }
+  -> TypedDeclaration::Class {
+      name: intern(name),
+      fields: fields,
   }
 
 // struct Point:
 //     ...
-struct_def_simple = { "struct" ~ identifier ~ ":" ~ struct_def_fields }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "struct_type", "args": {
-              "name": "$1",
-              "fields": "$2"
-          }}
-      ]
+struct_def_simple = { "struct" ~ name:identifier ~ ":" ~ fields:struct_def_fields }
+  -> TypedDeclaration::Class {
+      name: intern(name),
+      fields: fields,
   }
 
-struct_def_fields = { struct_def_field+ }
-  -> List {
-      "get_all_children": true
-  }
+struct_def_fields = { field:struct_def_field+ }
+  -> field
 
-struct_def_field = { identifier ~ ":" ~ type_expr }
-  -> TypedParameter {
-      "commands": [
-          { "define": "field", "args": {
-              "name": "$1",
-              "type": "$2"
-          }}
-      ]
+struct_def_field = { name:identifier ~ ":" ~ ty:type_expr }
+  -> TypedField {
+      name: intern(name),
+      ty: ty,
   }
 
 // ============================================================================
@@ -805,67 +671,44 @@ struct_def_field = { identifier ~ ":" ~ type_expr }
 //     None
 // }
 // Split into generic and non-generic variants
-enum_def = { enum_def_generic | enum_def_simple }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+enum_def = { decl:enum_def_generic | decl:enum_def_simple }
+  -> decl
 
 // enum Option<T> { ... }
-enum_def_generic = { "enum" ~ identifier ~ type_params ~ "{" ~ enum_variants ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "enum_type", "args": {
-              "name": "$1",
-              "type_params": "$2",
-              "variants": "$3"
-          }}
-      ]
+enum_def_generic = { "enum" ~ name:identifier ~ type_params ~ "{" ~ variants:enum_variants ~ "}" }
+  -> TypedDeclaration::Enum {
+      name: intern(name),
+      variants: variants,
   }
 
 // enum Color { Red, Green, Blue }
-enum_def_simple = { "enum" ~ identifier ~ "{" ~ enum_variants ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "enum_type", "args": {
-              "name": "$1",
-              "variants": "$2"
-          }}
-      ]
+enum_def_simple = { "enum" ~ name:identifier ~ "{" ~ variants:enum_variants ~ "}" }
+  -> TypedDeclaration::Enum {
+      name: intern(name),
+      variants: variants,
   }
 
 // Enum variants list
-enum_variants = { enum_variant ~ ("," ~ enum_variant)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
+enum_variants = { variant:enum_variant ~ ("," ~ variant:enum_variant)* ~ ","? }
+  -> variant
 
 // Enum variant: Name or Name(T1, T2, ...)
 // Split into tuple variant and unit variant
-enum_variant = { enum_variant_tuple | enum_variant_unit }
-  -> TypedEnumVariant {
-      "get_child": { "index": 0 }
+enum_variant = { v:enum_variant_tuple | v:enum_variant_unit }
+  -> v
+
+// Some(T) - tuple variant with associated types
+enum_variant_tuple = { name:identifier ~ "(" ~ type_expr ~ ("," ~ type_expr)* ~ ")" }
+  -> TypedVariant {
+      name: intern(name),
+      fields: TypedVariantFields::Unit,
   }
 
-// Some(T)
-enum_variant_tuple = { identifier ~ "(" ~ type_expr ~ ("," ~ type_expr)* ~ ")" }
-  -> TypedEnumVariant {
-      "commands": [
-          { "define": "enum_variant", "args": {
-              "name": "$1",
-              "data": "$result"
-          }}
-      ],
-      "collect_results_from": [2, 3]
-  }
-
-// None
-enum_variant_unit = { identifier }
-  -> TypedEnumVariant {
-      "commands": [
-          { "define": "enum_variant", "args": {
-              "name": "$1"
-          }}
-      ]
+// None - unit variant (no associated data)
+enum_variant_unit = { name:identifier }
+  -> TypedVariant {
+      name: intern(name),
+      fields: TypedVariantFields::Unit,
   }
 
 // ============================================================================
@@ -877,181 +720,125 @@ enum_variant_unit = { identifier }
 // impl Duration(i64): fn from_ms(value: i64) -> Self { ... }
 // Split into multiple rules to avoid optional capture index shifting
 // Order matters: try more specific rules first
-impl_block = { impl_abstract_inherent | impl_block_with_args | impl_block_trait | impl_block_inherent }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+impl_block = { decl:impl_abstract_inherent | decl:impl_block_with_args | decl:impl_block_trait | decl:impl_block_inherent }
+  -> decl
 
 // Inherent impl for abstract types: impl<T> TypeName(UnderlyingType) { methods }
 // Split into generic and non-generic variants
-impl_abstract_inherent = { impl_abstract_inherent_generic | impl_abstract_inherent_simple }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+impl_abstract_inherent = { decl:impl_abstract_inherent_generic | decl:impl_abstract_inherent_simple }
+  -> decl
 
 // impl<T> Container<T>(i64) { ... }
-// Captures: $1=type_params, $2=identifier, $3=type_expr, $4=impl_items (literals not counted!)
-impl_abstract_inherent_generic = { "impl" ~ type_params ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_abstract_inherent", "args": {
-              "type_params": "$1",
-              "type_name": "$2",
-              "underlying_type": "$3",
-              "items": "$4"
-          }}
-      ]
+// For now, emit as Impl since we need a for_type
+impl_abstract_inherent_generic = { "impl" ~ type_params ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(name),
+      for_type: intern(name),
+      items: items,
   }
 
 // impl Duration(i64) { ... }
-// Captures: $1=identifier, $2=type_expr, $3=impl_items (literals not counted!)
-impl_abstract_inherent_simple = { "impl" ~ identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_abstract_inherent", "args": {
-              "type_name": "$1",
-              "underlying_type": "$2",
-              "items": "$3"
-          }}
-      ]
+impl_abstract_inherent_simple = { "impl" ~ name:identifier ~ "(" ~ type_expr ~ ")" ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(name),
+      for_type: intern(name),
+      items: items,
   }
 
 // impl<T> Trait<Args> for Type<T> { ... }
 // Split into generic and non-generic variants
-impl_block_with_args = { impl_block_with_args_generic | impl_block_with_args_simple }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+impl_block_with_args = { decl:impl_block_with_args_generic | decl:impl_block_with_args_simple }
+  -> decl
 
 // impl<T> Add<T> for Container<T> { ... }
-// Captures: $1=type_params, $2=identifier(trait), $3=type_args_angle, $4=type_expr, $5=impl_items (literals not counted!)
-impl_block_with_args_generic = { "impl" ~ type_params ~ identifier ~ type_args_angle ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_block", "args": {
-              "type_params": "$1",
-              "trait_name": "$2",
-              "trait_args": "$3",
-              "type_name": "$4",
-              "items": "$5"
-          }}
-      ]
+impl_block_with_args_generic = { "impl" ~ type_params ~ trait_name:identifier ~ type_args_angle ~ "for" ~ for_type:type_expr_name ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(trait_name),
+      for_type: intern(for_type),
+      items: items,
   }
 
 // impl Add<Tensor> for Tensor { ... }
-// Captures: $1=identifier(trait), $2=type_args_angle, $3=type_expr, $4=impl_items (literals not counted!)
-impl_block_with_args_simple = { "impl" ~ identifier ~ type_args_angle ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_block", "args": {
-              "trait_name": "$1",
-              "trait_args": "$2",
-              "type_name": "$3",
-              "items": "$4"
-          }}
-      ]
+impl_block_with_args_simple = { "impl" ~ trait_name:identifier ~ type_args_angle ~ "for" ~ for_type:type_expr_name ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(trait_name),
+      for_type: intern(for_type),
+      items: items,
   }
 
 // impl<T> Trait for Type<T> { ... } - trait implementation
 // Split into generic and non-generic variants
-impl_block_trait = { impl_block_trait_generic | impl_block_trait_simple }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+impl_block_trait = { decl:impl_block_trait_generic | decl:impl_block_trait_simple }
+  -> decl
 
 // impl<T> Iterator for ListIterator<T> { ... }
-// Captures: $1=type_params, $2=identifier(trait), $3=type_expr, $4=impl_items (literals not counted!)
-impl_block_trait_generic = { "impl" ~ type_params ~ identifier ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_block", "args": {
-              "type_params": "$1",
-              "trait_name": "$2",
-              "trait_args": "none",
-              "type_name": "$3",
-              "items": "$4"
-          }}
-      ]
+impl_block_trait_generic = { "impl" ~ type_params ~ trait_name:identifier ~ "for" ~ for_type:type_expr_name ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(trait_name),
+      for_type: intern(for_type),
+      items: items,
   }
 
 // impl Display for Point { ... }
-// Captures: $1=identifier(trait), $2=type_expr, $3=impl_items (literals not counted!)
-impl_block_trait_simple = { "impl" ~ identifier ~ "for" ~ type_expr ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_block", "args": {
-              "trait_name": "$1",
-              "trait_args": "none",
-              "type_name": "$2",
-              "items": "$3"
-          }}
-      ]
+impl_block_trait_simple = { "impl" ~ trait_name:identifier ~ "for" ~ for_type:type_expr_name ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(trait_name),
+      for_type: intern(for_type),
+      items: items,
   }
 
 // impl<T> Type<T> { ... } - inherent implementation (no trait)
 // Split into generic and non-generic variants (optional not supported)
-impl_block_inherent = { impl_block_inherent_generic | impl_block_inherent_simple }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+impl_block_inherent = { decl:impl_block_inherent_generic | decl:impl_block_inherent_simple }
+  -> decl
 
 // impl<T> List<T> { ... }
-// Captures: $1=type_params, $2=impl_type_name_generic, $3=impl_items (literals not counted!)
-impl_block_inherent_generic = { "impl" ~ type_params ~ impl_type_name_generic ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_inherent", "args": {
-              "type_params": "$1",
-              "type_name": "$2",
-              "items": "$3"
-          }}
-      ]
+impl_block_inherent_generic = { "impl" ~ type_params ~ for_type:impl_type_name_generic ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(for_type),
+      for_type: intern(for_type),
+      items: items,
   }
 
 // impl List { ... }
-// Captures: $1=identifier, $2=impl_items (literals not counted!)
-impl_block_inherent_simple = { "impl" ~ identifier ~ "{" ~ impl_items ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_inherent", "args": {
-              "type_name": "$1",
-              "items": "$2"
-          }}
-      ]
+impl_block_inherent_simple = { "impl" ~ for_type:identifier ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(for_type),
+      for_type: intern(for_type),
+      items: items,
   }
 
 // Type name for generic impl blocks - captures the base identifier
-impl_type_name_generic = { identifier ~ "<" ~ type_args ~ ">" }
-  -> String {
-      "get_child": { "index": 0 }
-  }
+impl_type_name_generic = { name:identifier ~ "<" ~ type_args ~ ">" }
+  -> name
 
-impl_items = { impl_item* }
-  -> List {
-      "get_all_children": true
-  }
+// Helper to get just the name from a type expression for impl blocks
+type_expr_name = { generic_type_name | simple_type_name }
+
+generic_type_name = { name:identifier ~ "<" ~ type_args ~ ">" }
+  -> name
+
+simple_type_name = { name:identifier }
+  -> name
+
+impl_items = { item:impl_item* }
+  -> item
 
 // Impl items: associated types and methods (expression-bodied, indent-bodied, and brace-bodied)
 // NOTE: indent-bodied must come after expression-bodied to prefer single-expression form when applicable
 impl_item = {
-    impl_assoc_type |
-    impl_method_return_expr | impl_method_return_indent | impl_method_return |
-    impl_method_params_expr | impl_method_params_indent | impl_method_params |
-    impl_method_simple_indent | impl_method_simple
+    decl:impl_assoc_type |
+    decl:impl_method_return_expr | decl:impl_method_return_indent | decl:impl_method_return |
+    decl:impl_method_params_expr | decl:impl_method_params_indent | decl:impl_method_params |
+    decl:impl_method_simple_indent | decl:impl_method_simple
 }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+  -> decl
 
 // type Output = Tensor
-impl_assoc_type = { "type" ~ identifier ~ "=" ~ type_expr }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "impl_assoc_type", "args": {
-              "name": "$1",
-              "type": "$2"
-          }}
-      ]
+impl_assoc_type = { "type" ~ name:identifier ~ "=" ~ target:type_expr }
+  -> TypedDeclaration::TypeAlias {
+      name: intern(name),
+      target: target,
   }
 
 // Impl methods can't have their own type params (they use the impl block's)
@@ -1060,73 +847,53 @@ impl_assoc_type = { "type" ~ identifier ~ "=" ~ type_expr }
 // ========== Expression-bodied methods (single expression after colon) ==========
 
 // fn add(self, rhs: T) -> ReturnType: expression
-impl_method_return_expr = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ expr_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+impl_method_return_expr = { "fn" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ "->" ~ ret:type_expr ~ ":" ~ body:expr_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
 // fn process(self, other: T): expression
-impl_method_params_expr = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ ":" ~ expr_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "void",
-              "body": "$3"
-          }}
-      ]
+impl_method_params_expr = { "fn" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ ":" ~ body:expr_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // ========== Indent-bodied methods (Python-style colon with statement block) ==========
 
 // fn add(self, rhs: T) -> ReturnType:
 //     statements...
-impl_method_return_indent = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+impl_method_return_indent = { "fn" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ "->" ~ ret:type_expr ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
 // fn process(self, other: T):
 //     statements...
-impl_method_params_indent = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "void",
-              "body": "$3"
-          }}
-      ]
+impl_method_params_indent = { "fn" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // fn simple():
 //     statements...
-impl_method_simple_indent = { "fn" ~ identifier ~ "(" ~ ")" ~ ":" ~ indent_block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": [],
-              "return_type": "void",
-              "body": "$2"
-          }}
-      ]
+impl_method_simple_indent = { "fn" ~ name:identifier ~ "(" ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // ========== Block-bodied methods (with braces) ==========
@@ -1134,89 +901,60 @@ impl_method_simple_indent = { "fn" ~ identifier ~ "(" ~ ")" ~ ":" ~ indent_block
 // fn add(self, rhs: T) -> ReturnType { ... }
 // NOTE: Impl methods are initially typed as functions but marked with is_self on parameters
 // The compiler will re-type the body expressions with correct self type during lowering
-impl_method_return = { "fn" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ "->" ~ type_expr ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+impl_method_return = { "fn" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ "->" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
   }
 
 // fn process(self, other: T) { ... }
-impl_method_params = { "fn" ~ identifier ~ "(" ~ fn_params ~ ")" ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "void",
-              "body": "$3"
-          }}
-      ]
+impl_method_params = { "fn" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // fn simple() { ... }
-impl_method_simple = { "fn" ~ identifier ~ "(" ~ ")" ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "function", "args": {
-              "name": "$1",
-              "params": [],
-              "return_type": "void",
-              "body": "$2"
-          }}
-      ]
+impl_method_simple = { "fn" ~ name:identifier ~ "(" ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // Type arguments in angle brackets (for trait impl)
-type_args_angle = { "<" ~ type_args ~ ">" }
-  -> List {
-      "get_child": { "index": 0 }
-  }
+type_args_angle = { "<" ~ args:type_args ~ ">" }
+  -> args
 
 // ============================================================================
 // Type Expressions
 // ============================================================================
 
-type_expr = { generic_type | array_type | simple_type }
-  -> TypedType {
-      "get_child": { "index": 0 }
+type_expr = { ty:generic_type | ty:array_type | ty:simple_type }
+  -> ty
+
+simple_type = { name:identifier }
+  -> Type::Named {
+      name: intern(name),
   }
 
-simple_type = { identifier }
-  -> TypedType {
-      "get_text": true,
-      "define": "named_type",
-      "args": { "name": "$result" }
+array_type = { "Array" ~ "<" ~ elem:type_expr ~ ">" }
+  -> Type::Named {
+      name: intern("Array"),
   }
 
-array_type = { "Array" ~ "<" ~ type_expr ~ ">" }
-  -> TypedType {
-      "commands": [
-          { "define": "array_type", "args": {
-              "element_type": "$1"
-          }}
-      ]
+generic_type = { name:identifier ~ "<" ~ type_args ~ ">" }
+  -> Type::Named {
+      name: intern(name),
   }
 
-generic_type = { identifier ~ "<" ~ type_args ~ ">" }
-  -> TypedType {
-      "commands": [
-          { "define": "generic_type", "args": {
-              "name": "$1",
-              "type_args": "$2"
-          }}
-      ]
-  }
-
-type_args = { type_expr ~ ("," ~ type_expr)* }
-  -> List {
-      "get_all_children": true
-  }
+type_args = { ty:type_expr ~ ("," ~ ty:type_expr)* }
+  -> ty
 
 // ============================================================================
 // Function Definition
@@ -1605,6 +1343,12 @@ call_op = { "(" ~ args:call_args? ~ ")" }
 call_args = { first:expr ~ ("," ~ rest:expr)* }
   -> first
 
+// Call args as a proper list - returns list of expressions
+// Pattern matches: expr ("," expr)*
+// rest binding on the repetition collects all values into a List
+call_args_list = { first:expr ~ ("," ~ rest:expr)* }
+  -> prepend_list(first, rest)
+
 // Indexing: x[i] - not used in simplified version
 index_op = { "[" ~ idx:expr ~ "]" }
   -> TypedExpression::IndexOp { index: idx }
@@ -1694,14 +1438,10 @@ path_expr = { ns:identifier ~ "::" ~ name:identifier }
 // Extern function call: extern name(args)
 // The extern keyword explicitly marks this as a call to a ZRTL builtin
 // The name is resolved via @builtin mappings (e.g., tensor_to_string -> $Tensor$to_string)
-extern_call = { "extern" ~ identifier ~ "(" ~ call_args? ~ ")" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "call", "args": {
-              "callee": { "define": "variable", "args": { "name": "$1" } },
-              "args": "$2"
-          }}
-      ]
+extern_call = { "extern" ~ name:identifier ~ "(" ~ args:call_args_list? ~ ")" }
+  -> TypedExpression::Call {
+      callee: Box::new(TypedExpression::Variable { name: intern(name) }),
+      args: args,
   }
 
 // Grouped expression: (expr)

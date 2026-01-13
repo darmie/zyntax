@@ -524,6 +524,28 @@ impl<'a> GrammarParser<'a> {
         let first_path = self.parse_type_path()?;
         self.skip_ws();
 
+        // Check for function call: -> intern(name)
+        if self.peek_char() == Some('(') {
+            self.advance(); // consume '('
+            self.skip_ws();
+
+            // Parse arguments
+            let mut args = Vec::new();
+            while self.peek_char() != Some(')') {
+                let arg = self.parse_expr()?;
+                args.push(arg);
+                self.skip_ws();
+                if self.peek_char() == Some(',') {
+                    self.advance();
+                    self.skip_ws();
+                }
+            }
+            self.expect_char(')')?;
+
+            // Function call action
+            return Ok((ActionIR::HelperCall { function: first_path.clone(), args }, "Any".to_string()));
+        }
+
         // Check for simple pass-through: -> binding (no '{' follows)
         // If the first_path is a simple identifier (no ::) and no '{' follows,
         // it's a pass-through action

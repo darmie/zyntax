@@ -142,29 +142,32 @@ fn run_program(file: &PathBuf, plugins_dir: &PathBuf, verbose: bool, all_plugins
 
 /// Parse a ZynML program and display the AST
 fn parse_and_display(file: &PathBuf, format: &str) -> Result<()> {
-    use zyntax_embed::LanguageGrammar;
+    use zynml::Grammar2;
 
-    // Compile grammar
-    let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR)
+    // Compile grammar using Grammar2 (direct TypedAST generation)
+    let grammar = Grammar2::from_source(ZYNML_GRAMMAR)
         .context("Failed to compile ZynML grammar")?;
 
     // Read source
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
-    // Parse to JSON
-    let json = grammar.parse_to_json(&source)
+    // Parse to TypedProgram
+    let program = grammar.parse_with_filename(&source, &file.to_string_lossy())
         .context("Failed to parse ZynML program")?;
 
     match format {
         "json" => {
-            // Pretty print JSON
-            let parsed: serde_json::Value = serde_json::from_str(&json)?;
-            println!("{}", serde_json::to_string_pretty(&parsed)?);
+            // Serialize TypedProgram to JSON
+            let json = serde_json::to_string_pretty(&program)?;
+            println!("{}", json);
         }
         "tree" | _ => {
             println!("AST for: {}\n", file.display());
-            print_ast_tree(&json)?;
+            println!("Parsed {} declarations", program.declarations.len());
+            for decl in &program.declarations {
+                println!("  - {:?}", std::mem::discriminant(&decl.node));
+            }
         }
     }
 
