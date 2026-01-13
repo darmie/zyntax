@@ -423,6 +423,44 @@ mod function_definitions {
         assert!(result.is_ok(), "Should parse function without return type: {:?}", result.err());
     }
 
+    // --- Python-style def keyword ---
+
+    #[test]
+    fn test_parse_def_simple() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("def main() { }");
+        assert!(result.is_ok(), "Should parse def simple: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_def_with_return_type() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("def greet(): int { 42 }");
+        assert!(result.is_ok(), "Should parse def with return type: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_def_with_params() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            def add(a: i32, b: i32): i32 {
+                a + b
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse def with params: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_async_def() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(r#"
+            async def fetch(url: str): Response {
+                println(url)
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse async def: {:?}", result.err());
+    }
+
     // --- Expression-bodied methods (single expr after colon) ---
 
     #[test]
@@ -1501,20 +1539,65 @@ mod grammar2_parsing {
     }
 
     #[test]
-    fn test_grammar2_parse_simple() {
+    fn test_grammar2_parse_fn_simple() {
         let grammar = get_grammar2();
+        let result = grammar.parse("fn main() { }");
+        assert!(result.is_ok(), "Should parse fn main(): {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
 
-        let result = grammar.parse("fn main() { let x = 42 }");
+    #[test]
+    fn test_grammar2_parse_def_simple() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("def main() { }");
+        assert!(result.is_ok(), "Should parse def main(): {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
 
-        match result {
-            Ok(program) => {
-                println!("Parsed {} declarations", program.declarations.len());
+    #[test]
+    fn test_grammar2_parse_def_with_return_type() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("def greet(): int { 42 }");
+        assert!(result.is_ok(), "Should parse def with return type: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
+
+    #[test]
+    fn test_grammar2_parse_def_with_params() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("def add(a: int, b: int): int { a + b }");
+        assert!(result.is_ok(), "Should parse def with params: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
+
+    #[test]
+    fn test_grammar2_parse_function_with_call() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("def greet() { println(\"Hello\") }");
+        assert!(result.is_ok(), "Should parse def with function call: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
+
+    #[test]
+    fn test_grammar2_parse_multiple_functions() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            def greet(name: str): str {
+                println(name)
             }
-            Err(e) => {
-                // Grammar2 might not be fully implemented for ZynML yet
-                println!("Grammar2 parse not fully supported: {}", e);
+
+            fn main() {
+                greet("World")
             }
-        }
+        "#);
+        assert!(result.is_ok(), "Should parse multiple functions: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 2, "Should have 2 declarations");
     }
 
     #[test]
@@ -1525,15 +1608,32 @@ mod grammar2_parsing {
                 x: float
                 y: float
         "#);
+        assert!(result.is_ok(), "Should parse struct: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
 
-        match result {
-            Ok(program) => {
-                println!("Parsed struct with {} declarations", program.declarations.len());
-            }
-            Err(e) => {
-                println!("Grammar2 struct parse: {}", e);
-            }
-        }
+    #[test]
+    fn test_grammar2_parse_struct_brace_style() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("struct Point { x: float, y: float }");
+        assert!(result.is_ok(), "Should parse brace-style struct: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
+
+    #[test]
+    fn test_grammar2_parse_let_statement() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("fn test() { let x = 42 }");
+        assert!(result.is_ok(), "Should parse let statement: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_mut_let() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("fn test() { mut x: int = 0 }");
+        assert!(result.is_ok(), "Should parse mut let: {:?}", result.err());
     }
 }
 

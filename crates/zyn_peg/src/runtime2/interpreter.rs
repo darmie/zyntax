@@ -2239,6 +2239,12 @@ impl<'g> GrammarInterpreter<'g> {
                 let start_pos = state.pos();
                 let saved_bindings = state.save_bindings();
 
+                // Extract binding name from inner pattern if it's a bound RuleRef
+                let inner_binding = match inner.as_ref() {
+                    PatternIR::RuleRef { binding: Some(name), .. } => Some(name.clone()),
+                    _ => None,
+                };
+
                 match self.execute_pattern(inner, state, atomic) {
                     ParseResult::Success(v, pos) => {
                         ParseResult::Success(ParsedValue::Optional(Some(Box::new(v))), pos)
@@ -2246,6 +2252,11 @@ impl<'g> GrammarInterpreter<'g> {
                     ParseResult::Failure(_) => {
                         state.set_pos(start_pos);
                         state.restore_bindings(saved_bindings);
+                        // If there was a binding on the inner pattern, set it to Optional(None)
+                        // so the action can access it
+                        if let Some(bind_name) = inner_binding {
+                            state.set_binding(&bind_name, ParsedValue::Optional(None));
+                        }
                         ParseResult::Success(ParsedValue::Optional(None), start_pos)
                     }
                 }

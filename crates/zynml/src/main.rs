@@ -152,17 +152,19 @@ fn parse_and_display(file: &PathBuf, format: &str) -> Result<()> {
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
-    // Parse to TypedProgram
+    // Parse to TypedProgram using Grammar2
     let program = grammar.parse_with_filename(&source, &file.to_string_lossy())
         .context("Failed to parse ZynML program")?;
 
     match format {
         "json" => {
             // Serialize TypedProgram to JSON
-            let json = serde_json::to_string_pretty(&program)?;
+            let json = serde_json::to_string_pretty(&program)
+                .context("Failed to serialize AST to JSON")?;
             println!("{}", json);
         }
         "tree" | _ => {
+            // Print tree view
             println!("AST for: {}\n", file.display());
             println!("Parsed {} declarations", program.declarations.len());
             for decl in &program.declarations {
@@ -222,20 +224,20 @@ fn print_ast_tree(json: &str) -> Result<()> {
 
 /// Check a ZynML program for errors without running it
 fn check_program(file: &PathBuf) -> Result<()> {
-    use zyntax_embed::LanguageGrammar;
+    use zynml::Grammar2;
 
-    // Compile grammar
-    let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR)
+    // Compile grammar using Grammar2 (direct TypedAST generation)
+    let grammar = Grammar2::from_source(ZYNML_GRAMMAR)
         .context("Failed to compile ZynML grammar")?;
 
     // Read source
     let source = std::fs::read_to_string(file)
         .with_context(|| format!("Failed to read file: {}", file.display()))?;
 
-    // Try to parse
-    match grammar.parse_to_json(&source) {
-        Ok(_) => {
-            println!("OK: {} is valid ZynML", file.display());
+    // Try to parse with Grammar2
+    match grammar.parse_with_filename(&source, &file.to_string_lossy()) {
+        Ok(program) => {
+            println!("OK: {} is valid ZynML ({} declarations)", file.display(), program.declarations.len());
             Ok(())
         }
         Err(e) => {

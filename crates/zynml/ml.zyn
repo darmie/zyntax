@@ -935,7 +935,27 @@ type_args_angle = { "<" ~ args:type_args ~ ">" }
 // Type Expressions
 // ============================================================================
 
-type_expr = { ty:generic_type | ty:array_type | ty:simple_type }
+// Type expressions with optional shorthand
+// ?T is shorthand for Option<T>
+// Examples:
+//   ?int           -> Option<int>
+//   ?str           -> Option<str>
+//   ?List<int>     -> Option<List<int>>
+//   List<int>      -> List<int>
+//   int            -> int
+//
+type_expr = { ty:optional_type | ty:generic_type | ty:array_type | ty:simple_type }
+  -> ty
+
+// ?T shorthand for Option<T>
+optional_type = { "?" ~ inner:type_expr_non_optional }
+  -> Type::Named {
+      name: intern("Option"),
+      type_args: [inner],
+  }
+
+// Type expression without the optional prefix (to avoid infinite recursion)
+type_expr_non_optional = { ty:generic_type | ty:array_type | ty:simple_type }
   -> ty
 
 simple_type = { name:identifier }
@@ -960,15 +980,196 @@ type_args = { ty:type_expr ~ ("," ~ ty:type_expr)* }
 // Function Definition
 // ============================================================================
 
-// Function definitions - split by presence of type params, params, return type, and block style
+// Function definitions - supports both `fn` and `def` keywords
+// Return type syntax: `-> ReturnType` (Rust-style) or `: ReturnType` (Python-style)
 // Supports both brace-style { } and Python-style colon : blocks
+//
+// Examples:
+//   fn foo(x: int) -> int { x * 2 }      // Rust-style
+//   def foo(x: int): int { x * 2 }       // Python-style (preferred)
+//   async def fetch(url: str): Data { }  // Async function
+//
 fn_def = {
+    // Async functions (must come first to match `async` keyword)
+    async_def_return_block | async_def_return_colon |
+    async_def_params_block | async_def_params_colon |
+    async_def_simple_block | async_def_simple_colon |
+    // Python-style with `def` keyword (preferred)
+    def_generic_return_colon | def_generic_return_block |
+    def_generic_colon | def_generic_block |
+    def_return_colon | def_return_block |
+    def_params_colon | def_params_block |
+    def_simple_colon | def_simple_block |
+    // Rust-style with `fn` keyword (legacy)
     fn_def_generic_return_colon | fn_def_generic_return |
     fn_def_generic_colon | fn_def_generic |
     fn_def_return_colon | fn_def_return |
     fn_def_params_colon | fn_def_params |
     fn_def_simple_colon | fn_def_simple
 }
+
+// ========== Async function definitions ==========
+// async def fetch(url: str): Response { await http.get(url) }
+
+// async def fetch(url: str): Response { ... }
+async_def_return_block = { "async" ~ "def" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+      is_async: true,
+  }
+
+// async def fetch(url: str): Response:
+//     statements...
+async_def_return_colon = { "async" ~ "def" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+      is_async: true,
+  }
+
+// async def process(data) { ... }
+async_def_params_block = { "async" ~ "def" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
+      is_async: true,
+  }
+
+// async def process(data):
+//     statements...
+async_def_params_colon = { "async" ~ "def" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
+      is_async: true,
+  }
+
+// async def run() { ... }
+async_def_simple_block = { "async" ~ "def" ~ name:identifier ~ "(" ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
+      is_async: true,
+  }
+
+// async def run():
+//     statements...
+async_def_simple_colon = { "async" ~ "def" ~ name:identifier ~ "(" ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
+      is_async: true,
+  }
+
+// ========== Python-style function definitions with `def` keyword ==========
+
+// def map<T, U>(items): ReturnType { ... }
+def_generic_return_block = { "def" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+  }
+
+// def map<T, U>(items): ReturnType:
+//     statements...
+def_generic_return_colon = { "def" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+  }
+
+// def process<T>(x) { ... }
+def_generic_block = { "def" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
+  }
+
+// def process<T>(x):
+//     statements...
+def_generic_colon = { "def" ~ name:identifier ~ type_params ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
+  }
+
+// def process(x, y): ReturnType { ... }
+def_return_block = { "def" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+  }
+
+// def process(x, y): ReturnType:
+//     statements...
+def_return_colon = { "def" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+  }
+
+// def process(x, y) { ... }
+def_params_block = { "def" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
+  }
+
+// def process(x, y):
+//     statements...
+def_params_colon = { "def" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
+  }
+
+// def main() { ... }
+def_simple_block = { "def" ~ name:identifier ~ "(" ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
+  }
+
+// def main():
+//     statements...
+def_simple_colon = { "def" ~ name:identifier ~ "(" ~ ")" ~ ":" ~ body:indent_block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
+  }
 
 // ========== Brace-style function definitions ==========
 
@@ -1072,12 +1273,50 @@ fn_def_simple_colon = { "fn" ~ name:identifier ~ "(" ~ ")" ~ ":" ~ body:indent_b
 fn_params = { param:fn_param ~ ("," ~ param:fn_param)* }
   -> param
 
-// Parameter with optional type annotation
-// Supports: x, x: Int, self, self: Tensor
-fn_param = { name:identifier ~ (":" ~ ty:type_expr)? }
+// Parameter with optional type annotation and optional default value
+// Supports:
+//   x                    - Untyped parameter
+//   x: Int               - Typed parameter
+//   x: Int = 10          - Typed parameter with default value
+//   x = 10               - Untyped parameter with default value (type inferred)
+//   self                 - Self parameter
+//   self: Tensor         - Typed self parameter
+//
+// Examples:
+//   def search(query: str, top_k: int = 10, threshold: float = 0.5): List<Result> { }
+//
+fn_param = { param_typed_default | param_default | param_typed | param_simple }
+
+// x: Type = default_value
+param_typed_default = { name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ default:expr }
   -> TypedParameter {
       name: intern(name),
-      type_annotation: ty,
+      type_annotation: Some(ty),
+      default_value: Some(default),
+  }
+
+// x = default_value (type inferred)
+param_default = { name:identifier ~ "=" ~ default:expr }
+  -> TypedParameter {
+      name: intern(name),
+      type_annotation: None,
+      default_value: Some(default),
+  }
+
+// x: Type
+param_typed = { name:identifier ~ ":" ~ ty:type_expr }
+  -> TypedParameter {
+      name: intern(name),
+      type_annotation: Some(ty),
+      default_value: None,
+  }
+
+// x (untyped, no default)
+param_simple = { name:identifier }
+  -> TypedParameter {
+      name: intern(name),
+      type_annotation: None,
+      default_value: None,
   }
 
 // ============================================================================
@@ -1098,14 +1337,55 @@ statement = {
     expr_stmt
 }
 
-// let x = expr
-// let mel = audio |> resample(16000) |> to_mono()
-let_stmt = { "let" ~ name:identifier ~ "=" ~ init:expr }
+// Variable binding with optional mutability
+// Immutable (default): x: int = 10  or  let x = 10
+// Mutable: mut x: int = 0  or  mut x = 0
+//
+// Examples:
+//   x: int = 10          // Immutable with type annotation
+//   mut counter = 0      // Mutable, type inferred
+//   mut items: List = [] // Mutable with type annotation
+//   let x = 10           // Legacy let syntax (mutable for backwards compatibility)
+//
+// Note: Simple `x = 42` without type annotation is handled by assign_stmt.
+// New variables must use `let`, `mut`, or include a type annotation.
+//
+let_stmt = { legacy_let | mut_typed_let | mut_let | typed_let }
+
+// let x = expr (standard syntax, mutable for backwards compatibility)
+legacy_let = { "let" ~ name:identifier ~ "=" ~ init:expr }
   -> TypedStatement::Let {
       name: intern(name),
       type_annotation: None,
       initializer: Some(init),
       is_mutable: true,
+  }
+
+// mut x: Type = expr
+mut_typed_let = { "mut" ~ name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ init:expr }
+  -> TypedStatement::Let {
+      name: intern(name),
+      type_annotation: Some(ty),
+      initializer: Some(init),
+      is_mutable: true,
+  }
+
+// mut x = expr
+mut_let = { "mut" ~ name:identifier ~ "=" ~ init:expr }
+  -> TypedStatement::Let {
+      name: intern(name),
+      type_annotation: None,
+      initializer: Some(init),
+      is_mutable: true,
+  }
+
+// x: Type = expr (immutable with type annotation)
+typed_let = { name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ init:expr }
+  -> TypedStatement::Let {
+      name: intern(name),
+      type_annotation: Some(ty),
+      initializer: Some(init),
+      is_mutable: false,
   }
 
 // x = expr
@@ -1270,14 +1550,31 @@ pipe_call = { callee:identifier ~ "(" ~ args:call_args? ~ ")" }
   }
 
 // Ternary conditional: condition ? true_expr : false_expr
-ternary_expr = { ternary_with_branches | or_expr }
+// Also: value_a if condition else value_b (Python-style)
+ternary_expr = { python_ternary | ternary_with_branches | null_coalesce_expr }
 
-ternary_with_branches = { cond:or_expr ~ "?" ~ then_expr:or_expr ~ ":" ~ else_expr:or_expr }
+// Python-style ternary: value_a if condition else value_b
+python_ternary = { then_expr:null_coalesce_expr ~ "if" ~ cond:null_coalesce_expr ~ "else" ~ else_expr:null_coalesce_expr }
   -> TypedExpression::Ternary {
       condition: Box::new(cond),
       then_branch: Box::new(then_expr),
       else_branch: Box::new(else_expr),
   }
+
+// C-style ternary: condition ? true_expr : false_expr
+ternary_with_branches = { cond:null_coalesce_expr ~ "?" ~ then_expr:null_coalesce_expr ~ ":" ~ else_expr:null_coalesce_expr }
+  -> TypedExpression::Ternary {
+      condition: Box::new(cond),
+      then_branch: Box::new(then_expr),
+      else_branch: Box::new(else_expr),
+  }
+
+// Null-coalescing operator: a ?? b
+// Returns a if a is Some, otherwise returns b
+// Example: username = get_username() ?? "anonymous"
+// For now, pass through (NullCoalesce not in TypedAST yet)
+null_coalesce_expr = { inner:or_expr ~ ("??" ~ or_expr)* }
+  -> inner
 
 // Logical OR - simplified (just pass through inner expression for now)
 or_expr = { inner:and_expr ~ ("||" ~ and_expr)* }
@@ -1323,8 +1620,19 @@ multiplicative_expr = { inner:unary_expr ~ (multiplicative_op ~ unary_expr)* }
 // Note: "@" in quotes is a literal character, not the pest atomic rule marker
 multiplicative_op = @{ "@" | "*" | "/" | "%" }
 
-// Unary operators - simplified (just pass through operand for now)
-unary_expr = { unary_op? ~ operand:postfix_expr }
+// Unary operators and await expression
+// await expr - suspends async function until promise resolves
+// -expr, !expr - negation and logical not
+unary_expr = { await_expr | unary_prefix_expr }
+
+// await expression: await promise
+await_expr = { "await" ~ operand:postfix_expr }
+  -> TypedExpression::Await {
+      operand: Box::new(operand),
+  }
+
+// Unary prefix operators
+unary_prefix_expr = { unary_op? ~ operand:postfix_expr }
   -> operand
 
 unary_op = @{ "-" | "!" }
@@ -1340,13 +1648,36 @@ postfix_op = { call_op | index_op | member_op }
 call_op = { "(" ~ args:call_args? ~ ")" }
   -> TypedExpression::CallArgs { args: args }
 
-call_args = { first:expr ~ ("," ~ rest:expr)* }
+// Call arguments with support for keyword arguments (named arguments)
+// Python-style: foo(x=10, y=20)
+// Mixed: foo(value, x=10)
+//
+// Examples:
+//   search("query")                           - Positional only
+//   search(query="ML", top_k=5)               - Keyword only
+//   search("ML", top_k=5, threshold=0.5)      - Mixed
+//
+call_args = { first:call_arg ~ ("," ~ rest:call_arg)* }
   -> first
+
+// Individual call argument - can be positional or keyword
+call_arg = { keyword_arg | positional_arg }
+
+// name=value (keyword argument)
+keyword_arg = { name:identifier ~ "=" ~ !("=") ~ value:expr }
+  -> TypedExpression::KeywordArg {
+      name: intern(name),
+      value: value,
+  }
+
+// expr (positional argument)
+positional_arg = { value:expr }
+  -> value
 
 // Call args as a proper list - returns list of expressions
 // Pattern matches: expr ("," expr)*
 // rest binding on the repetition collects all values into a List
-call_args_list = { first:expr ~ ("," ~ rest:expr)* }
+call_args_list = { first:call_arg ~ ("," ~ rest:call_arg)* }
   -> prepend_list(first, rest)
 
 // Indexing: x[i] - not used in simplified version
@@ -1370,6 +1701,7 @@ primary_expr = {
     suffixed_literal |
     duration_literal |
     int_literal |
+    f_string_literal |
     string_literal |
     bool_literal |
     grouped_expr |
@@ -1535,6 +1867,63 @@ duration_literal = @{ ASCII_DIGIT+ ~ duration_unit }
   -> TypedExpression::DurationLiteral { text: text() }
 
 duration_unit = { "ms" | "s" | "m" | "h" | "d" }
+
+// ============================================================================
+// F-String (String Interpolation)
+// ============================================================================
+//
+// f-strings allow embedding expressions in strings using {expr} syntax
+// Examples:
+//   f"Hello, {name}!"
+//   f"Value: {value:.2f}"
+//   f"Result: {x + y}"
+//   f"""
+//   Name: {name}
+//   Age: {age}
+//   """
+//
+// Format specifiers (after colon) are supported:
+//   {value:.2f}   - Float with 2 decimal places
+//   {num:x}       - Hexadecimal
+//   {text:>10}    - Right-aligned in 10 chars
+//
+f_string_literal = { f_string_triple | f_string_regular }
+  -> TypedExpression::FString {
+      parts: parts,
+  }
+
+// f"""multiline {expr} string"""
+f_string_triple = { "f\"\"\"" ~ parts:f_string_part* ~ "\"\"\"" }
+  -> parts
+
+// f"single line {expr} string"
+f_string_regular = { "f\"" ~ parts:f_string_part* ~ "\"" }
+  -> parts
+
+// Parts of an f-string: either text or interpolated expression
+f_string_part = { f_string_interp | f_string_text }
+
+// {expr} or {expr:format_spec}
+f_string_interp = { "{" ~ expr:expr ~ format_spec? ~ "}" }
+  -> TypedExpression::FStringInterp {
+      expr: expr,
+      format_spec: format_spec,
+  }
+
+// Optional format specifier: :format
+format_spec = { ":" ~ spec:format_spec_inner }
+  -> spec
+
+// Format specifier content (anything except } and {)
+format_spec_inner = @{ (!("}" | "{") ~ ANY)+ }
+
+// Plain text in f-string (between interpolations)
+f_string_text = @{ (!("\"" | "{" | "}") ~ ANY)+ }
+  -> TypedExpression::StringLiteral { value: text() }
+
+// ============================================================================
+// Regular Strings
+// ============================================================================
 
 // String: "hello world" or """multiline string"""
 string_literal = @{ triple_quoted_string | regular_string }
