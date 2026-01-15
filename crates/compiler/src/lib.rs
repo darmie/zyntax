@@ -30,6 +30,7 @@ pub mod vtable_registry;  // Vtable management and caching
 pub mod associated_type_resolver;  // Associated type resolution for trait dispatch
 pub mod analysis;
 pub mod effect_analysis;  // Effect inference and checking for algebraic effects
+pub mod effect_handler_resolution;  // Handler resolution for effect dispatch
 pub mod borrow_check;  // HIR-level borrow checking pass
 pub mod optimization;
 pub mod memory_optimization;  // Memory-aware optimizations
@@ -91,6 +92,13 @@ pub use effect_analysis::{
     EffectError, EffectErrorKind, EffectWarning, EffectWarningKind,
     analyze_effects, analyze_effects_with_call_graph, has_effect_errors,
     get_function_effect_summary, EffectSummary,
+};
+pub use effect_handler_resolution::{
+    HandlerResolver, ModuleHandlerResolution, FunctionHandlerResolution,
+    HandlerResolution, PerformSite, ResolvedHandler, HandlerOptimization,
+    HandlerScopeTree, HandlerScopeNode, ResolutionStats,
+    resolve_handlers, resolve_handlers_with_analysis,
+    can_inline_handler, get_optimization_level,
 };
 pub use async_support::{
     AsyncCompiler, AsyncStateMachine, AsyncState, AsyncRuntime, AsyncRuntimeType,
