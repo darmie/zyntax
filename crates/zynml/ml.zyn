@@ -251,6 +251,8 @@ top_level_item = {
     config_block |
     pipeline_def |
     decorated_item |
+    effect_def |
+    handler_def |
     trait_def |
     impl_block |
     abstract_def |
@@ -457,6 +459,78 @@ annotation_ident_value = { name:identifier }
 
 // Decorator alias for backward compatibility (same as annotation)
 decorator = { annotation }
+
+// ============================================================================
+// Algebraic Effects
+// ============================================================================
+//
+// ZynML supports algebraic effects for composable, type-safe side effects.
+// This enables probabilistic programming, state management, async operations,
+// and other effect-based abstractions.
+//
+// Effect declaration:
+//   effect Probabilistic {
+//       def sample<T>(dist: Distribution<T>): T
+//       def observe<T>(dist: Distribution<T>, value: T)
+//       def factor(score: float)
+//   }
+//
+// Effect handler:
+//   handler MCMC for Probabilistic {
+//       def sample<T>(self, dist: Distribution<T>, resume: Resume<T>): T { ... }
+//   }
+//
+// Function effect annotation:
+//   @effect(Probabilistic, Differentiable)
+//   def model(x: Tensor): Tensor { ... }
+//
+// Handler application:
+//   @with(MCMC(warmup=500))
+//   def inference(data: Tensor): Tensor { ... }
+
+// Effect declaration: effect Name<T> { operations... }
+effect_def = { "effect" ~ name:identifier ~ type_params:type_params? ~ "{" ~ ops:effect_op* ~ "}" }
+  -> TypedDeclaration::Effect {
+      name: intern(name),
+      type_params: type_params,
+      operations: ops,
+  }
+
+// Return type clause for functions and effect operations: `: Type`
+fn_return_clause = { ":" ~ ty:type_expr }
+  -> ty
+
+// Effect operation: def sample<T>(dist: Distribution<T>): T
+effect_op = { "def" ~ name:identifier ~ type_params:type_params? ~ "(" ~ params:fn_params? ~ ")" ~ ret:fn_return_clause? }
+  -> TypedEffectOp {
+      name: intern(name),
+      type_params: type_params,
+      params: params,
+      return_type: ret,
+  }
+
+// Effect handler declaration: handler Name for Effect { ... }
+// Supports: handler MCMC for Probabilistic { ... }
+//           handler RefState<S> for State<S> { ... }
+// Note: Effect type arguments like <S> in State<S> are parsed but currently
+// discarded since they should match the handler's type params.
+handler_def = { "handler" ~ name:identifier ~ type_params:type_params? ~ "for" ~ effect:identifier ~ ("<" ~ type_args ~ ">")? ~ "{" ~ impls:handler_impl* ~ "}" }
+  -> TypedDeclaration::EffectHandler {
+      name: intern(name),
+      effect_name: intern(effect),
+      type_params: type_params,
+      handlers: impls,
+  }
+
+// Handler implementation: def sample<T>(self, ..., resume: Resume<T>): T { body }
+handler_impl = { "def" ~ name:identifier ~ type_params:type_params? ~ "(" ~ params:fn_params? ~ ")" ~ ret:fn_return_clause? ~ body:block }
+  -> TypedEffectHandlerImpl {
+      op_name: intern(name),
+      type_params: type_params,
+      params: params,
+      return_type: ret,
+      body: Some(body),
+  }
 
 // ============================================================================
 // Render Statement (Visualization for ZynBook)

@@ -1981,6 +1981,218 @@ mod annotations {
 }
 
 // ============================================================================
+// Algebraic Effects Tests (Tier 3: Annotations & Effects System)
+// ============================================================================
+
+mod algebraic_effects {
+    use super::*;
+
+    fn get_grammar2() -> Grammar2 {
+        Grammar2::from_source(ZYNML_GRAMMAR).expect("Grammar should compile")
+    }
+
+    // --- Effect Declaration ---
+
+    #[test]
+    fn test_grammar2_parse_effect_declaration_simple() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            effect IO {
+                def read(): str
+                def write(s: str)
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse simple effect declaration: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
+
+    #[test]
+    fn test_grammar2_parse_effect_declaration_generic() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            effect State<S> {
+                def get(): S
+                def put(s: S)
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse generic effect declaration: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_effect_declaration_probabilistic() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            effect Probabilistic {
+                def sample(dist: Distribution): float
+                def observe(dist: Distribution, value: float)
+                def factor(score: float)
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse probabilistic effect: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_effect_declaration_async() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            effect Async {
+                def await_promise(promise: Promise): Result
+                def spawn(task: Task): Promise
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse async effect: {:?}", result.err());
+    }
+
+    // --- Effect Handler Declaration ---
+
+    #[test]
+    fn test_grammar2_parse_handler_simple() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            handler PrintIO for IO {
+                def read(): str {
+                    "input"
+                }
+                def write(s: str) {
+                    println(s)
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse simple handler: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
+
+    #[test]
+    fn test_grammar2_parse_handler_generic() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            handler RefState<S> for State<S> {
+                def get(): S {
+                    self.value
+                }
+                def put(s: S) {
+                    self.value = s
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse generic handler: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_handler_mcmc() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            handler MCMC for Probabilistic {
+                def sample(dist: Distribution): float {
+                    dist.sample()
+                }
+                def observe(dist: Distribution, value: float) {
+                    self.score = self.score + dist.log_prob(value)
+                }
+                def factor(score: float) {
+                    self.score = self.score + score
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse MCMC handler: {:?}", result.err());
+    }
+
+    // --- Effect and Handler Combined ---
+
+    #[test]
+    fn test_grammar2_parse_effect_and_handler() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            effect Logger {
+                def log(msg: str)
+            }
+
+            handler ConsoleLogger for Logger {
+                def log(msg: str) {
+                    println(msg)
+                }
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse effect and handler together: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 2, "Should have 2 declarations");
+    }
+
+    // --- Effect Annotations ---
+
+    #[test]
+    fn test_grammar2_parse_function_with_effect_annotation() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            @effect(IO)
+            def read_file(path: str): str {
+                extern read_file(path)
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse function with @effect annotation: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_function_with_multiple_effects() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            @effect(IO, State)
+            def stateful_io(path: str): str {
+                let data = read(path)
+                put(data)
+                data
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse function with multiple effects: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_pure_function() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            @pure
+            def add(a: int, b: int): int {
+                a + b
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse @pure function: {:?}", result.err());
+    }
+
+    // --- Handler Application ---
+
+    #[test]
+    fn test_grammar2_parse_with_annotation() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            @with(ConsoleLogger)
+            def logged_task() {
+                log("Starting task")
+                do_work()
+                log("Task complete")
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse @with handler annotation: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_with_multiple_handlers() {
+        let grammar = get_grammar2();
+        let result = grammar.parse(r#"
+            @with(MCMC, ConsoleLogger)
+            def inference_with_logging() {
+                log("Starting inference")
+                let x = sample(Normal(0.0, 1.0))
+                log("Sampled value")
+                x
+            }
+        "#);
+        assert!(result.is_ok(), "Should parse @with multiple handlers: {:?}", result.err());
+    }
+}
+
+// ============================================================================
 // Runtime Tests
 // ============================================================================
 

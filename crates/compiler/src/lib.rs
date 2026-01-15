@@ -58,6 +58,7 @@ pub mod zpack;   // ZPack package format for distributing modules + runtimes
 pub use hir::{HirModule, HirFunction, HirBlock, HirInstruction, HirValue, HirId};
 pub use hir_builder::HirBuilder;  // HIR Builder API
 pub use cfg::{ControlFlowGraph, BasicBlock, CfgEdge};
+use log::debug;
 pub use typed_cfg::{TypedCfgBuilder, TypedControlFlowGraph, TypedBasicBlock, TypedTerminator};
 pub use ssa::{SsaBuilder, SsaForm, PhiNode};
 pub use lowering::{
@@ -694,6 +695,7 @@ fn generate_binary_trait_impl(
     let standalone_func = TypedFunction {
         name: mangled_name_interned,
         annotations: vec![],
+        effects: vec![],
         type_params: vec![],
         params: vec![
             TypedParameter {
@@ -773,6 +775,7 @@ fn generate_binary_trait_impl(
         }),
         visibility: zyntax_typed_ast::type_registry::Visibility::Public,
         is_async: false,
+        is_pure: false,
         is_external: false,
         calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
         link_name: None,
@@ -914,6 +917,7 @@ fn generate_comparison_trait_impl(
         let standalone_func = TypedFunction {
             name: mangled_name_interned,
             annotations: vec![],
+            effects: vec![],
             type_params: vec![],
             params: vec![
                 TypedParameter {
@@ -980,6 +984,7 @@ fn generate_comparison_trait_impl(
             }),
             visibility: Visibility::Public,
             is_async: false,
+            is_pure: false,
             is_external: false,
             calling_convention: CallingConvention::Default,
             link_name: None,
@@ -1146,6 +1151,7 @@ fn generate_unary_trait_impl(
     let standalone_func = TypedFunction {
         name: mangled_name_interned,
         annotations: vec![],
+        effects: vec![],
         type_params: vec![],
         params: vec![
             TypedParameter {
@@ -1203,6 +1209,7 @@ fn generate_unary_trait_impl(
         }),
         visibility: Visibility::Public,
         is_async: false,
+        is_pure: false,
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
@@ -1214,8 +1221,8 @@ fn generate_unary_trait_impl(
         Span::default(),
     );
 
-    eprintln!("[AUTO_TRAITS] Generated {} impl for {:?}", trait_name, abstract_type);
-    eprintln!("[AUTO_TRAITS] Generated standalone function '{}' for {} trait", mangled_name, trait_name);
+    debug!("[AUTO_TRAITS] Generated {} impl for {:?}", trait_name, abstract_type);
+    debug!("[AUTO_TRAITS] Generated standalone function '{}' for {} trait", mangled_name, trait_name);
 
     Ok(Some((impl_decl, func_decl)))
 }

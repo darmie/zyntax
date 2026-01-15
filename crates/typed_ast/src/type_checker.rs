@@ -863,6 +863,14 @@ impl TypeChecker {
                 // Extern declarations are validated at the grammar level,
                 // their methods are resolved to runtime symbols
             }
+            TypedDeclaration::Effect(_effect) => {
+                // Effect declarations define algebraic effect types
+                // Type checking for effect operations will be added later
+            }
+            TypedDeclaration::EffectHandler(_handler) => {
+                // Effect handler declarations provide implementations for effects
+                // Type checking for handler implementations will be added later
+            }
         }
     }
 
@@ -963,12 +971,14 @@ impl TypeChecker {
             let func = TypedFunction {
                 name: method.name,
                 annotations: vec![],
+                effects: vec![],
                 type_params: vec![],
                 params,
                 return_type: resolved_return_type,
                 body: method.body.clone(),
                 visibility: Visibility::Public,
                 is_async: method.is_async,
+                is_pure: false,
                 is_external: false,
                 calling_convention: CallingConvention::Default,
                 link_name: None,

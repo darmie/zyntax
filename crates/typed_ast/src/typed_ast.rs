@@ -78,6 +78,10 @@ pub enum TypedDeclaration {
     /// External declaration - type defined outside the compilation unit
     /// whose methods are mapped to runtime symbols
     Extern(TypedExtern),
+    /// Algebraic effect declaration: effect Probabilistic { def sample<T>(...): T }
+    Effect(TypedEffect),
+    /// Effect handler declaration: handler MCMC for Probabilistic { ... }
+    EffectHandler(TypedEffectHandler),
 }
 
 /// External type declaration - represents types defined outside the compilation unit
@@ -229,6 +233,107 @@ pub enum TypedAnnotationValue {
     List(Vec<TypedAnnotationValue>),
 }
 
+// ============================================================================
+// Algebraic Effects
+// ============================================================================
+
+/// Algebraic effect declaration
+///
+/// ```zyn
+/// effect Probabilistic {
+///     def sample<T>(dist: Distribution<T>): T
+///     def observe<T>(dist: Distribution<T>, value: T)
+///     def factor(score: float)
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedEffect {
+    /// Effect name (e.g., "Probabilistic", "State", "Async")
+    pub name: InternedString,
+    /// Type parameters (e.g., State<S> has parameter S)
+    #[serde(default)]
+    pub type_params: Vec<TypedTypeParam>,
+    /// Effect operations (sample, observe, factor, etc.)
+    #[serde(default)]
+    pub operations: Vec<TypedEffectOp>,
+    /// Source span
+    #[serde(default)]
+    pub span: Span,
+}
+
+/// Effect operation declaration
+///
+/// ```zyn
+/// def sample<T>(dist: Distribution<T>): T
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedEffectOp {
+    /// Operation name (e.g., "sample", "observe", "get", "put")
+    pub name: InternedString,
+    /// Type parameters for this operation
+    #[serde(default)]
+    pub type_params: Vec<TypedTypeParam>,
+    /// Parameters
+    #[serde(default)]
+    pub params: Vec<TypedParameter>,
+    /// Return type
+    #[serde(default)]
+    pub return_type: Type,
+    /// Source span
+    #[serde(default)]
+    pub span: Span,
+}
+
+/// Effect handler declaration
+///
+/// ```zyn
+/// handler MCMC for Probabilistic {
+///     def sample<T>(self, dist: Distribution<T>, resume: Resume<T>): T {
+///         // MCMC implementation
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedEffectHandler {
+    /// Handler name (e.g., "MCMC", "VariationalInference")
+    pub name: InternedString,
+    /// Effect being handled (e.g., "Probabilistic")
+    pub effect_name: InternedString,
+    /// Type parameters
+    #[serde(default)]
+    pub type_params: Vec<TypedTypeParam>,
+    /// Handler fields/state
+    #[serde(default)]
+    pub fields: Vec<TypedField>,
+    /// Handler operation implementations
+    #[serde(default)]
+    pub handlers: Vec<TypedEffectHandlerImpl>,
+    /// Source span
+    #[serde(default)]
+    pub span: Span,
+}
+
+/// Effect handler operation implementation
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedEffectHandlerImpl {
+    /// Operation name being handled (e.g., "sample")
+    pub op_name: InternedString,
+    /// Type parameters
+    #[serde(default)]
+    pub type_params: Vec<TypedTypeParam>,
+    /// Parameters (including self and resume)
+    #[serde(default)]
+    pub params: Vec<TypedParameter>,
+    /// Return type
+    #[serde(default)]
+    pub return_type: Type,
+    /// Implementation body
+    pub body: Option<TypedBlock>,
+    /// Source span
+    #[serde(default)]
+    pub span: Span,
+}
+
 /// Function declaration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TypedFunction {
@@ -236,6 +341,8 @@ pub struct TypedFunction {
     pub name: InternedString,
     #[serde(default)]
     pub annotations: Vec<TypedAnnotation>,  // @deprecated, @inline, etc.
+    #[serde(default)]
+    pub effects: Vec<InternedString>,  // Effect names from @effect(Probabilistic, IO)
     #[serde(default)]
     pub type_params: Vec<TypedTypeParam>,  // Generic type parameters
     #[serde(default)]
@@ -247,6 +354,8 @@ pub struct TypedFunction {
     pub visibility: Visibility,
     #[serde(default)]
     pub is_async: bool,
+    #[serde(default)]
+    pub is_pure: bool,  // True for @pure functions (no effects)
     #[serde(default)]
     pub is_external: bool,  // True for extern/foreign functions
     #[serde(default)]

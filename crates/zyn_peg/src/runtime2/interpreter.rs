@@ -266,6 +266,13 @@ impl<'g> GrammarInterpreter<'g> {
             ["TypedAnnotationValue", variant] => {
                 self.construct_annotation_value(variant, fields, state, span)
             }
+            // Effect types
+            ["TypedEffectOp"] => {
+                self.construct_effect_op(fields, state, span)
+            }
+            ["TypedEffectHandlerImpl"] => {
+                self.construct_effect_handler_impl(fields, state, span)
+            }
             // Postfix suffix types for fold operations
             ["SuffixField"] | ["SuffixMethod"] | ["SuffixCall"] | ["SuffixIndex"] | ["SuffixSlice"] => {
                 self.construct_suffix(type_path, fields, state)
@@ -642,12 +649,14 @@ impl<'g> GrammarInterpreter<'g> {
                 TypedDeclaration::Function(TypedFunction {
                     name,
                     annotations: vec![],
+                    effects: vec![],
                     type_params: vec![],
                     params,
                     return_type,
                     body,
                     visibility: Visibility::Public,
                     is_async: false,
+                    is_pure: false,
                     is_external: false,
                     calling_convention: CallingConvention::Default,
                     link_name: None,
@@ -825,6 +834,35 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                     _ => return Err("AnnotatedFunction requires a Function declaration".to_string()),
                 }
+            }
+            "Effect" => {
+                // Algebraic effect declaration: effect Probabilistic { def sample<T>(): T }
+                let name = self.get_field_as_interned("name", fields, state)?;
+                // TODO: Parse type_params when generic effect support is needed
+                let operations = self.get_field_as_effect_op_list("operations", fields, state)?;
+
+                TypedDeclaration::Effect(zyntax_typed_ast::TypedEffect {
+                    name,
+                    type_params: vec![],
+                    operations,
+                    span,
+                })
+            }
+            "EffectHandler" => {
+                // Effect handler declaration: handler MCMC for Probabilistic { ... }
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let effect_name = self.get_field_as_interned("effect_name", fields, state)?;
+                // TODO: Parse type_params when generic handler support is needed
+                let handlers = self.get_field_as_handler_impl_list("handlers", fields, state)?;
+
+                TypedDeclaration::EffectHandler(zyntax_typed_ast::TypedEffectHandler {
+                    name,
+                    effect_name,
+                    type_params: vec![],
+                    fields: vec![],
+                    handlers,
+                    span,
+                })
             }
             _ => return Err(format!("unknown TypedDeclaration variant: {}", variant)),
         };
@@ -1169,6 +1207,52 @@ impl<'g> GrammarInterpreter<'g> {
         };
 
         Ok(ParsedValue::AnnotationValue(value))
+    }
+
+    /// Construct a TypedEffectOp (effect operation declaration)
+    fn construct_effect_op<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let name = self.get_field_as_interned("name", fields, state)?;
+        // TODO: Parse type_params when generic effect op support is needed
+        let params = self.get_field_as_param_list("params", fields, state)?;
+        let return_type = self.get_field_optional("return_type", fields, state)?
+            .unwrap_or(Type::Primitive(PrimitiveType::Unit));
+
+        Ok(ParsedValue::EffectOp(zyntax_typed_ast::TypedEffectOp {
+            name,
+            type_params: vec![],
+            params,
+            return_type,
+            span,
+        }))
+    }
+
+    /// Construct a TypedEffectHandlerImpl (handler operation implementation)
+    fn construct_effect_handler_impl<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let op_name = self.get_field_as_interned("op_name", fields, state)?;
+        // TODO: Parse type_params when generic handler impl support is needed
+        let params = self.get_field_as_param_list("params", fields, state)?;
+        let return_type = self.get_field_optional("return_type", fields, state)?
+            .unwrap_or(Type::Primitive(PrimitiveType::Unit));
+        let body = self.get_field_optional_block("body", fields, state)?;
+
+        Ok(ParsedValue::EffectHandlerImpl(zyntax_typed_ast::TypedEffectHandlerImpl {
+            op_name,
+            type_params: vec![],
+            params,
+            return_type,
+            body,
+            span,
+        }))
     }
 
     /// Construct a TypedParameter (function parameter)
@@ -2728,6 +2812,80 @@ impl<'g> GrammarInterpreter<'g> {
             ParsedValue::Text(s) => Ok(TypedAnnotationValue::String(zyntax_typed_ast::InternedString::new_global(&s))),
             ParsedValue::Interned(s) => Ok(TypedAnnotationValue::Identifier(s)),
             _ => Err(format!("cannot convert value to annotation value: {:?}", val)),
+        }
+    }
+
+    /// Get a field as a list of TypedEffectOp
+    fn get_field_as_effect_op_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<zyntax_typed_ast::TypedEffectOp>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            let op = self.parsed_value_to_effect_op(item)?;
+                            result.push(op);
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    ParsedValue::Optional(None) => Ok(vec![]),
+                    ParsedValue::EffectOp(op) => Ok(vec![op]),
+                    other => Err(format!("field '{}' is not an effect op list: {:?}", name, other)),
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Get a field as a list of TypedEffectHandlerImpl
+    fn get_field_as_handler_impl_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<zyntax_typed_ast::TypedEffectHandlerImpl>, String> {
+        match self.get_field(name, fields) {
+            Some(expr) => {
+                let val = self.eval_expr(expr, state)?;
+                match val {
+                    ParsedValue::List(items) => {
+                        let mut result = Vec::new();
+                        for item in items {
+                            let impl_ = self.parsed_value_to_handler_impl(item)?;
+                            result.push(impl_);
+                        }
+                        Ok(result)
+                    }
+                    ParsedValue::None => Ok(vec![]),
+                    ParsedValue::Optional(None) => Ok(vec![]),
+                    ParsedValue::EffectHandlerImpl(impl_) => Ok(vec![impl_]),
+                    other => Err(format!("field '{}' is not a handler impl list: {:?}", name, other)),
+                }
+            }
+            None => Ok(vec![]),
+        }
+    }
+
+    /// Convert ParsedValue to TypedEffectOp
+    fn parsed_value_to_effect_op(&self, val: ParsedValue) -> Result<zyntax_typed_ast::TypedEffectOp, String> {
+        match val {
+            ParsedValue::EffectOp(op) => Ok(op),
+            _ => Err(format!("cannot convert value to effect op: {:?}", val)),
+        }
+    }
+
+    /// Convert ParsedValue to TypedEffectHandlerImpl
+    fn parsed_value_to_handler_impl(&self, val: ParsedValue) -> Result<zyntax_typed_ast::TypedEffectHandlerImpl, String> {
+        match val {
+            ParsedValue::EffectHandlerImpl(impl_) => Ok(impl_),
+            _ => Err(format!("cannot convert value to handler impl: {:?}", val)),
         }
     }
 

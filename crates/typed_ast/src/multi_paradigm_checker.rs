@@ -409,9 +409,12 @@ impl TypeChecker {
             | TypedDeclaration::Enum(_)
             | TypedDeclaration::Module(_)
             | TypedDeclaration::Import(_)
-            | TypedDeclaration::Extern(_) => {
+            | TypedDeclaration::Extern(_)
+            | TypedDeclaration::Effect(_)
+            | TypedDeclaration::EffectHandler(_) => {
                 // Type declarations are handled by the registry
                 // Extern declarations are resolved to runtime symbols
+                // Effect declarations define algebraic effect types
                 Ok(())
             }
         }

@@ -153,6 +153,8 @@ pub use typed_ast::{
     TypedTraitImpl, TypedImplAssociatedType, TypedInterface,
     // Annotation types
     TypedAnnotation, TypedAnnotationArg, TypedAnnotationValue,
+    // Algebraic effect types
+    TypedEffect, TypedEffectOp, TypedEffectHandler, TypedEffectHandlerImpl,
 };
 
 pub use type_inference::{

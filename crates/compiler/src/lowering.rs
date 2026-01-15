@@ -2072,12 +2072,14 @@ impl LoweringContext {
             let func = TypedFunction {
                 name: mangled_name,  // Use mangled name for trait method
                 annotations: vec![],
+                effects: vec![],
                 type_params: vec![],
                 params,
                 return_type: resolved_return_type,
                 body: retyped_body,  // Use retyped body with updated self types
                 visibility: zyntax_typed_ast::type_registry::Visibility::Public,
                 is_async: method.is_async,
+                is_pure: false,
                 is_external: false,
                 calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
                 link_name: None,
@@ -2724,6 +2726,7 @@ impl LoweringContext {
         let func = TypedFunction {
             name: mangled_name,
             annotations: vec![],
+            effects: vec![],
             type_params: method.type_params.clone(),
             params,
             return_type: method.return_type.clone(),
@@ -2733,6 +2736,7 @@ impl LoweringContext {
             })),
             visibility: method.visibility,
             is_async: method.is_async,
+            is_pure: false,
             is_external: false,
             calling_convention: zyntax_typed_ast::CallingConvention::Default,
             link_name: None,
@@ -2784,12 +2788,14 @@ impl LoweringContext {
         let func = TypedFunction {
             name: ctor_name,
             annotations: vec![],
+            effects: vec![],
             type_params: vec![],
             params,
             return_type,
             body: Some(ctor.body.clone()),
             visibility: ctor.visibility,
             is_async: false,
+            is_pure: false,
             is_external: false,
             calling_convention: zyntax_typed_ast::CallingConvention::Default,
             link_name: None,

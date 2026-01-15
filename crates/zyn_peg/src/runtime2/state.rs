@@ -161,6 +161,10 @@ pub enum ParsedValue {
     AnnotationArg(zyntax_typed_ast::TypedAnnotationArg),
     /// A TypedAnnotationValue (string, int, bool, identifier, list)
     AnnotationValue(zyntax_typed_ast::TypedAnnotationValue),
+    /// A TypedEffectOp (effect operation declaration)
+    EffectOp(zyntax_typed_ast::TypedEffectOp),
+    /// A TypedEffectHandlerImpl (handler operation implementation)
+    EffectHandlerImpl(zyntax_typed_ast::TypedEffectHandlerImpl),
 }
 
 /// Handle to an AST node (opaque, managed by builder)

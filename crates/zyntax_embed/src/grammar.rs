@@ -489,12 +489,14 @@ impl LanguageGrammar {
             let extern_func = TypedFunction {
                 name: InternedString::new_global(target_symbol),
                 annotations: vec![],
+                effects: vec![],
                 type_params: vec![],
                 params,
                 return_type,
                 body: None,  // Extern functions have no body
                 visibility: Visibility::Public,
                 is_async: false,
+                is_pure: false,
                 is_external: true,  // Mark as external
                 calling_convention: CallingConvention::Default, // Placeholder - backend resolves to platform convention
                 link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
