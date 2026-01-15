@@ -481,6 +481,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let func = HirFunction::new(func_name, signature);
@@ -539,6 +541,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let func = HirFunction::new(func_name, signature.clone());
@@ -584,6 +588,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let func = HirFunction::new(func_name, signature);
@@ -636,6 +642,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let func = HirFunction::new(func_name, signature);
@@ -837,6 +845,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let func = HirFunction::new(func_name, signature);
@@ -927,6 +937,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let mut generic_func = HirFunction::new(func_name, signature);
@@ -959,6 +971,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let mut caller = HirFunction::new(arena.intern_string("caller"), caller_sig);

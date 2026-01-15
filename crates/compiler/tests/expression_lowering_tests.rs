@@ -59,6 +59,9 @@ fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) 
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     TypedProgram {
@@ -68,6 +71,8 @@ fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) 
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: TypeRegistry::new(),
     }
 }
 
@@ -93,7 +98,7 @@ fn test_literal_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_literal", body);
+    let mut program = create_test_program(&mut arena, "test_literal", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -152,7 +157,7 @@ fn test_binary_operation_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_add", body);
+    let mut program = create_test_program(&mut arena, "test_add", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -218,7 +223,7 @@ fn test_unary_operation_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_negate", body);
+    let mut program = create_test_program(&mut arena, "test_negate", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -297,7 +302,7 @@ fn test_if_expression_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_if", body);
+    let mut program = create_test_program(&mut arena, "test_if", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -372,7 +377,7 @@ fn test_variable_reference_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_variable", body);
+    let mut program = create_test_program(&mut arena, "test_variable", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -434,7 +439,7 @@ fn test_tuple_construction_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_tuple", body);
+    let mut program = create_test_program(&mut arena, "test_tuple", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -515,7 +520,7 @@ fn test_array_construction_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_array", body);
+    let mut program = create_test_program(&mut arena, "test_array", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -587,7 +592,7 @@ fn test_complex_expression_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_complex", body);
+    let mut program = create_test_program(&mut arena, "test_complex", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -813,7 +818,7 @@ fn test_assignment_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_assignment", body);
+    let mut program = create_test_program(&mut arena, "test_assignment", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());
@@ -946,7 +951,7 @@ fn test_pattern_matching_lowering() {
         span: test_span(),
     };
 
-    let program = create_test_program(&mut arena, "test_match", body);
+    let mut program = create_test_program(&mut arena, "test_match", body);
 
     // Lower to HIR
     let type_registry = Arc::new(TypeRegistry::new());

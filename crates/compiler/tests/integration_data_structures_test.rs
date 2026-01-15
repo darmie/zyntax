@@ -48,6 +48,8 @@ fn test_struct_roundtrip() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -145,6 +147,8 @@ fn test_nested_struct_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -245,6 +249,8 @@ fn test_array_roundtrip() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -326,6 +332,8 @@ fn test_2d_array_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -403,6 +411,8 @@ fn test_array_of_structs_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -478,6 +488,8 @@ fn test_mixed_size_struct() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);

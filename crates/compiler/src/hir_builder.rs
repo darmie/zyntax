@@ -122,6 +122,8 @@ impl<'arena> HirBuilder<'arena> {
                 exports: Vec::new(),
                 version: 0,
                 dependencies: std::collections::HashSet::new(),
+                effects: IndexMap::new(),
+                handlers: IndexMap::new(),
             },
             arena,
             current_function: None,
@@ -1124,6 +1126,8 @@ impl<'b, 'arena> FunctionBuilder<'b, 'arena> {
             lifetime_params: Vec::new(),
             is_variadic: false,
             is_async: false,
+            effects: Vec::new(),
+            is_pure: false,
         };
 
         let mut func = HirFunction::new(self.name, signature.clone());

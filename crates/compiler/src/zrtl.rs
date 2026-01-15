@@ -1593,6 +1593,8 @@ pub fn type_tag_for_hir_type(ty: &crate::hir::HirType) -> TypeTag {
         HirType::Interface { .. } => TypeTag::new(TypeCategory::TraitObject, 1, TypeFlags::NONE),
         HirType::Promise(_) => TypeTag::new(TypeCategory::Opaque, 2, TypeFlags::NONE), // Promise
         HirType::AssociatedType { .. } => TypeTag::new(TypeCategory::Opaque, 3, TypeFlags::NONE), // Associated type
+        HirType::Continuation { .. } => TypeTag::new(TypeCategory::Function, 2, TypeFlags::NONE), // Continuation
+        HirType::EffectRow { .. } => TypeTag::new(TypeCategory::Opaque, 4, TypeFlags::NONE), // Effect row
     }
 }
 

@@ -48,6 +48,8 @@ mod llvm_tests {
             exports: vec![],
             version: 0,
             dependencies: HashSet::new(),
+            effects: indexmap::IndexMap::new(),
+            handlers: indexmap::IndexMap::new(),
         }
     }
 
@@ -68,6 +70,8 @@ mod llvm_tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         }
     }
 

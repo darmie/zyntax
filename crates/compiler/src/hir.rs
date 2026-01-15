@@ -19,6 +19,88 @@ use zyntax_typed_ast::{Type, TypeId, InternedString, Span};
 use uuid::Uuid;
 use serde::{Serialize, Deserialize};
 
+// ============================================================================
+// Algebraic Effects - HIR Types
+// ============================================================================
+
+/// Effect declaration in HIR
+///
+/// Represents an algebraic effect with its operations.
+/// Effects are compiled to handler dispatch mechanisms.
+///
+/// Example:
+/// ```ignore
+/// effect State<S> {
+///     def get(): S
+///     def put(s: S)
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HirEffect {
+    pub id: HirId,
+    pub name: InternedString,
+    pub type_params: Vec<HirTypeParam>,
+    pub operations: Vec<HirEffectOp>,
+}
+
+/// Effect operation signature
+///
+/// Each operation can be performed within the effect's scope
+/// and will be handled by the active handler.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HirEffectOp {
+    pub id: HirId,
+    pub name: InternedString,
+    pub type_params: Vec<HirTypeParam>,
+    pub params: Vec<HirParam>,
+    pub return_type: HirType,
+}
+
+/// Effect handler definition in HIR
+///
+/// A handler provides implementations for all operations of an effect.
+/// Handlers can be stateful (capturing variables from the enclosing scope).
+///
+/// Example:
+/// ```ignore
+/// handler StateHandler<S> for State<S> {
+///     def get(): S { ... }
+///     def put(s: S) { ... }
+/// }
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HirEffectHandler {
+    pub id: HirId,
+    pub name: InternedString,
+    pub effect_id: HirId,
+    pub type_params: Vec<HirTypeParam>,
+    /// Handler state fields (captured from enclosing scope)
+    pub state_fields: Vec<HirHandlerField>,
+    /// Operation implementations
+    pub implementations: Vec<HirEffectHandlerImpl>,
+}
+
+/// Field in a handler's state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HirHandlerField {
+    pub name: InternedString,
+    pub ty: HirType,
+}
+
+/// Implementation of a single effect operation in a handler
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HirEffectHandlerImpl {
+    pub op_name: InternedString,
+    pub type_params: Vec<HirTypeParam>,
+    pub params: Vec<HirParam>,
+    pub return_type: HirType,
+    /// Function body (basic blocks)
+    pub entry_block: HirId,
+    pub blocks: IndexMap<HirId, HirBlock>,
+    /// Whether this handler uses the continuation (resumable)
+    pub is_resumable: bool,
+}
+
 /// Lifetime identifier for memory safety tracking
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct LifetimeId(Uuid);
@@ -107,6 +189,10 @@ pub struct HirModule {
     /// Metadata for hot-reloading support
     pub version: u64,
     pub dependencies: HashSet<HirId>,
+    /// Algebraic effect declarations
+    pub effects: IndexMap<HirId, HirEffect>,
+    /// Effect handler definitions
+    pub handlers: IndexMap<HirId, HirEffectHandler>,
 }
 
 /// HIR function with CFG and SSA form
@@ -139,6 +225,10 @@ pub struct HirFunctionSignature {
     pub lifetime_params: Vec<HirLifetime>,
     pub is_variadic: bool,
     pub is_async: bool,
+    /// Effects this function may perform (algebraic effects)
+    pub effects: Vec<InternedString>,
+    /// Whether this function is pure (no effects, no side effects)
+    pub is_pure: bool,
 }
 
 /// Method signature for trait/interface methods
@@ -447,6 +537,97 @@ pub enum HirInstruction {
         longer: HirLifetime,
         shorter: HirLifetime,
     },
+
+    // ========================================================================
+    // Algebraic Effects Instructions
+    // ========================================================================
+
+    /// Perform an effect operation
+    ///
+    /// Invokes an effect operation, which will be handled by the nearest
+    /// enclosing handler for this effect. The handler may resume the
+    /// computation or abort it.
+    ///
+    /// Example:
+    /// ```ignore
+    /// let value = perform State.get()  // Perform 'get' operation on State effect
+    /// ```
+    PerformEffect {
+        result: Option<HirId>,
+        /// Effect being performed
+        effect_id: HirId,
+        /// Operation name within the effect
+        op_name: InternedString,
+        /// Arguments to the operation
+        args: Vec<HirId>,
+        /// Return type of the operation
+        return_ty: HirType,
+    },
+
+    /// Install an effect handler for a computation
+    ///
+    /// Wraps the computation in `body_block` with the given handler.
+    /// When effect operations are performed in the body, they will be
+    /// dispatched to this handler.
+    ///
+    /// For non-resumable handlers, this can be compiled to simple inlining.
+    /// For resumable handlers, this requires CPS transformation or
+    /// continuation capture.
+    HandleEffect {
+        result: Option<HirId>,
+        /// The handler to install
+        handler_id: HirId,
+        /// Handler state (captured variables)
+        handler_state: Vec<HirId>,
+        /// The computation to wrap
+        body_block: HirId,
+        /// Block to continue to after the handled computation completes
+        continuation_block: HirId,
+        /// Return type of the handled computation
+        return_ty: HirType,
+    },
+
+    /// Resume a suspended computation (continuation)
+    ///
+    /// Used in effect handler implementations to resume the computation
+    /// that performed the effect operation. The value is passed to the
+    /// effect operation's result.
+    ///
+    /// Example:
+    /// ```ignore
+    /// handler StateHandler for State<S> {
+    ///     def get(): S {
+    ///         resume(self.state)  // Resume with current state
+    ///     }
+    /// }
+    /// ```
+    Resume {
+        /// Value to pass to the effect operation's result
+        value: HirId,
+        /// The continuation to resume
+        continuation: HirId,
+    },
+
+    /// Abort the current effect handler scope
+    ///
+    /// Used in effect handlers to abort the computation without resuming.
+    /// The value becomes the result of the HandleEffect instruction.
+    AbortEffect {
+        /// Value to return from the handler
+        value: HirId,
+        /// The handler scope being aborted
+        handler_scope: HirId,
+    },
+
+    /// Capture the current continuation
+    ///
+    /// Creates a reified continuation that can be stored and resumed later.
+    /// Used for multi-shot effects (where a handler may resume multiple times).
+    CaptureContinuation {
+        result: HirId,
+        /// Type of value the continuation expects when resumed
+        resume_ty: HirType,
+    },
 }
 
 /// Block terminator instructions
@@ -613,6 +794,30 @@ impl HirInstruction {
             HirInstruction::BeginLifetime { .. } |
             HirInstruction::EndLifetime { .. } |
             HirInstruction::LifetimeConstraint { .. } => {}
+            // Algebraic effects
+            HirInstruction::PerformEffect { effect_id, args, .. } => {
+                replace(effect_id, replacements);
+                for arg in args {
+                    replace(arg, replacements);
+                }
+            }
+            HirInstruction::HandleEffect { handler_id, handler_state, body_block, continuation_block, .. } => {
+                replace(handler_id, replacements);
+                for s in handler_state {
+                    replace(s, replacements);
+                }
+                replace(body_block, replacements);
+                replace(continuation_block, replacements);
+            }
+            HirInstruction::Resume { value, continuation } => {
+                replace(value, replacements);
+                replace(continuation, replacements);
+            }
+            HirInstruction::AbortEffect { value, handler_scope } => {
+                replace(value, replacements);
+                replace(handler_scope, replacements);
+            }
+            HirInstruction::CaptureContinuation { .. } => {}
         }
     }
 
@@ -716,6 +921,26 @@ impl HirInstruction {
             HirInstruction::BeginLifetime { .. } |
             HirInstruction::EndLifetime { .. } |
             HirInstruction::LifetimeConstraint { .. } => {}
+            // Algebraic effects
+            HirInstruction::PerformEffect { effect_id, args, .. } => {
+                ops.push(*effect_id);
+                ops.extend(args.iter().copied());
+            }
+            HirInstruction::HandleEffect { handler_id, handler_state, body_block, continuation_block, .. } => {
+                ops.push(*handler_id);
+                ops.extend(handler_state.iter().copied());
+                ops.push(*body_block);
+                ops.push(*continuation_block);
+            }
+            HirInstruction::Resume { value, continuation } => {
+                ops.push(*value);
+                ops.push(*continuation);
+            }
+            HirInstruction::AbortEffect { value, handler_scope } => {
+                ops.push(*value);
+                ops.push(*handler_scope);
+            }
+            HirInstruction::CaptureContinuation { .. } => {}
         }
         ops
     }
@@ -901,6 +1126,34 @@ pub enum HirType {
         trait_id: zyntax_typed_ast::TypeId,
         self_ty: Box<HirType>,  // The implementing type
         name: InternedString,    // Associated type name (e.g., "Item")
+    },
+
+    /// Continuation type for algebraic effects
+    ///
+    /// Represents a captured continuation that can be resumed.
+    /// The `resume_ty` is the type of value that can be passed when resuming.
+    /// The `result_ty` is the type of value returned when the continuation completes.
+    ///
+    /// Example:
+    /// In a handler for `effect State<S> { def get(): S }`,
+    /// the continuation type would be `Continuation<S, T>` where S is
+    /// passed to `get()`'s result and T is the return type of the handled computation.
+    Continuation {
+        /// Type of value passed when resuming (becomes the effect operation result)
+        resume_ty: Box<HirType>,
+        /// Type of value returned when the continuation completes
+        result_ty: Box<HirType>,
+    },
+
+    /// Effect row type for effect polymorphism
+    ///
+    /// Represents a set of effects that a function may perform.
+    /// Used for effect inference and checking.
+    EffectRow {
+        /// Known effects in the row
+        effects: Vec<InternedString>,
+        /// Optional tail variable for open effect rows
+        tail: Option<InternedString>,
     },
 }
 
@@ -1432,14 +1685,26 @@ impl HirModule {
             exports: Vec::new(),
             version: 0,
             dependencies: HashSet::new(),
+            effects: IndexMap::new(),
+            handlers: IndexMap::new(),
         }
     }
-    
+
     /// Add a function to the module
     pub fn add_function(&mut self, func: HirFunction) {
         self.functions.insert(func.id, func);
     }
-    
+
+    /// Add an effect declaration to the module
+    pub fn add_effect(&mut self, effect: HirEffect) {
+        self.effects.insert(effect.id, effect);
+    }
+
+    /// Add an effect handler to the module
+    pub fn add_handler(&mut self, handler: HirEffectHandler) {
+        self.handlers.insert(handler.id, handler);
+    }
+
     /// Add a global to the module
     pub fn add_global(&mut self, global: HirGlobal) {
         self.globals.insert(global.id, global);

@@ -42,6 +42,9 @@ fn create_extern_function(
         is_external: true,
         calling_convention,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     }
 }
 

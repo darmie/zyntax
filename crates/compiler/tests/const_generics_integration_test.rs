@@ -45,6 +45,8 @@ fn test_monomorphized_function_compilation() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let generic_func = HirFunction::new(intern_str(&mut arena, "identity"), signature);
@@ -102,6 +104,8 @@ fn test_const_generic_array_compilation() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let func = HirFunction::new(intern_str(&mut arena, "sum_array"), signature);
@@ -221,6 +225,8 @@ fn test_nested_const_generics() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let func = HirFunction::new(intern_str(&mut arena, "matrix_multiply"), signature);
@@ -253,6 +259,8 @@ fn test_const_generic_default_values() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let func = HirFunction::new(intern_str(&mut arena, "create_buffer"), signature);

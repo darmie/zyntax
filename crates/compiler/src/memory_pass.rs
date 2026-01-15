@@ -290,8 +290,10 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
-        
+
         let mut func = HirFunction::new(intern_str(&mut arena, "alloc_test"), sig);
         let size = func.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(4)));
         let ptr = func.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);

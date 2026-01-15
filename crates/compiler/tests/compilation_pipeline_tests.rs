@@ -33,7 +33,8 @@ fn test_arena() -> AstArena {
 /// Helper to create a simple typed program with one function
 fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) -> TypedProgram {
     let name = arena.intern_string(func_name);
-    let function = TypedFunction { type_params: vec![],
+    let function = TypedFunction {
+        type_params: vec![],
         name,
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -43,6 +44,9 @@ fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) 
         is_external: false,
         calling_convention: CallingConvention::Rust,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     TypedProgram {
@@ -52,6 +56,8 @@ fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) 
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: TypeRegistry::new(),
     }
 }
 
@@ -213,6 +219,8 @@ fn test_monomorphization_context_basic() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let generic_func = HirFunction::new(func_name, signature);
@@ -280,6 +288,8 @@ fn test_monomorphization_module_integration() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let generic_func = HirFunction::new(func_name, signature);
@@ -521,6 +531,7 @@ fn test_compilation_pipeline_all_features() {
         hot_reload: false,
         target_triple: "x86_64-unknown-linux-gnu".to_string(),
         import_resolver: None,
+        enable_borrow_check: false,
     };
 
     let result = compile_to_hir(&mut program, type_registry, config);
@@ -588,6 +599,7 @@ fn test_compilation_pipeline_with_memory_optimizations() {
         hot_reload: false,
         target_triple: "x86_64-unknown-linux-gnu".to_string(),
         import_resolver: None,
+        enable_borrow_check: false,
     };
 
     let result = compile_to_hir(&mut program, type_registry, config);
@@ -631,7 +643,8 @@ fn test_compilation_pipeline_with_async_function() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let func = TypedFunction { type_params: vec![],
+    let func = TypedFunction {
+        type_params: vec![],
         name: arena.intern_string("get_value"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -641,15 +654,20 @@ fn test_compilation_pipeline_with_async_function() -> CompilerResult<()> {
         is_external: false,
         calling_convention: CallingConvention::Rust,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
-    let program = TypedProgram {
+    let mut program = TypedProgram {
         declarations: vec![typed_node(
             TypedDeclaration::Function(func),
             Type::Primitive(PrimitiveType::Unit),
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: TypeRegistry::new(),
     };
 
     // Compile with async runtime enabled
@@ -701,7 +719,8 @@ fn test_compilation_pipeline_without_async_runtime() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let func = TypedFunction { type_params: vec![],
+    let func = TypedFunction {
+        type_params: vec![],
         name: arena.intern_string("get_value"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -711,15 +730,20 @@ fn test_compilation_pipeline_without_async_runtime() -> CompilerResult<()> {
         is_external: false,
         calling_convention: CallingConvention::Rust,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
-    let program = TypedProgram {
+    let mut program = TypedProgram {
         declarations: vec![typed_node(
             TypedDeclaration::Function(func),
             Type::Primitive(PrimitiveType::Unit),
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: TypeRegistry::new(),
     };
 
     // Compile with async runtime DISABLED
@@ -771,7 +795,8 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let sync_func = TypedFunction { type_params: vec![],
+    let sync_func = TypedFunction {
+        type_params: vec![],
         name: arena.intern_string("sync_fn"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -781,6 +806,9 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
         is_external: false,
         calling_convention: CallingConvention::Rust,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     // Create async function
@@ -801,7 +829,8 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
         span: test_span(),
     };
 
-    let async_func = TypedFunction { type_params: vec![],
+    let async_func = TypedFunction {
+        type_params: vec![],
         name: arena.intern_string("async_fn"),
         params: vec![],
         return_type: Type::Primitive(PrimitiveType::I32),
@@ -811,9 +840,12 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
         is_external: false,
         calling_convention: CallingConvention::Rust,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
-    let program = TypedProgram {
+    let mut program = TypedProgram {
         declarations: vec![
             typed_node(
                 TypedDeclaration::Function(sync_func),
@@ -827,6 +859,8 @@ fn test_compilation_pipeline_mixed_sync_async() -> CompilerResult<()> {
             ),
         ],
         span: test_span(),
+        source_files: vec![],
+        type_registry: TypeRegistry::new(),
     };
 
     // Compile with async runtime enabled

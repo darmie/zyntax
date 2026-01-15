@@ -51,6 +51,8 @@ fn test_memory_roundtrip_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -128,6 +130,8 @@ fn test_memory_i64_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -205,6 +209,8 @@ fn test_memory_f64_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -293,6 +299,8 @@ fn test_multiple_allocations_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -414,6 +422,8 @@ fn test_memory_update_execution() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);

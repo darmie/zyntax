@@ -325,6 +325,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let mut func = HirFunction::new(arena.intern_string("test"), signature);
@@ -378,6 +380,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let mut func = HirFunction::new(arena.intern_string("test_coalesce"), signature);

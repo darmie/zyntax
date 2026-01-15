@@ -29,6 +29,8 @@ fn test_arc_instrumentation() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
     
     let mut func = HirFunction::new(intern_str(&mut arena, "test_arc"), signature);
@@ -83,6 +85,8 @@ fn test_drop_manager() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
     
     let mut func = HirFunction::new(intern_str(&mut arena, "test_drop"), signature);
@@ -116,6 +120,8 @@ fn test_escape_analysis() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
     
     let mut func = HirFunction::new(intern_str(&mut arena, "test_escape"), signature);

@@ -34,6 +34,9 @@ fn create_extern_function(arena: &mut AstArena, name: &str, cc: CallingConventio
         is_external: true,
         calling_convention: cc,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     }
 }
 
@@ -44,7 +47,8 @@ fn test_extern_function_lowers_to_hir() {
     let extern_func = create_extern_function(&mut arena, "test_extern", CallingConvention::Cdecl);
 
     let span = Span::new(0, 10);
-    let program = TypedProgram {
+    let type_registry = TypeRegistry::new();
+    let mut program = TypedProgram {
         declarations: vec![
             TypedNode::new(
                 TypedDeclaration::Function(extern_func),
@@ -53,9 +57,11 @@ fn test_extern_function_lowers_to_hir() {
             ),
         ],
         span,
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
-    let type_registry = Arc::new(TypeRegistry::new());
+    let type_registry = Arc::new(type_registry);
     let arena_arc = Arc::new(Mutex::new(arena));
 
     // Create lowering context
@@ -102,7 +108,8 @@ fn test_extern_function_compiles_with_cranelift() {
     let extern_func = create_extern_function(&mut arena, "cranelift_test", CallingConvention::Cdecl);
 
     let span = Span::new(0, 10);
-    let program = TypedProgram {
+    let type_registry = TypeRegistry::new();
+    let mut program = TypedProgram {
         declarations: vec![
             TypedNode::new(
                 TypedDeclaration::Function(extern_func),
@@ -111,9 +118,11 @@ fn test_extern_function_compiles_with_cranelift() {
             ),
         ],
         span,
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
-    let type_registry = Arc::new(TypeRegistry::new());
+    let type_registry = Arc::new(type_registry);
     let arena_arc = Arc::new(Mutex::new(arena));
 
     // Create lowering context and lower to HIR
@@ -151,7 +160,8 @@ fn test_calling_convention_conversion() {
         let extern_func = create_extern_function(&mut arena, name, typed_cc);
 
         let span = Span::new(0, 10);
-        let program = TypedProgram {
+        let type_registry = TypeRegistry::new();
+        let mut program = TypedProgram {
             declarations: vec![
                 TypedNode::new(
                     TypedDeclaration::Function(extern_func),
@@ -160,9 +170,11 @@ fn test_calling_convention_conversion() {
                 ),
             ],
             span,
+            source_files: vec![],
+            type_registry: type_registry.clone(),
         };
 
-        let type_registry = Arc::new(TypeRegistry::new());
+        let type_registry = Arc::new(type_registry);
         let arena_arc = Arc::new(Mutex::new(arena));
 
         let module_name = arena_arc.lock().unwrap().intern_string("test_module");
@@ -202,9 +214,13 @@ fn test_non_extern_function_without_body_fails() {
         is_external: false,  // NOT extern
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
-    let program = TypedProgram {
+    let type_registry = TypeRegistry::new();
+    let mut program = TypedProgram {
         declarations: vec![
             TypedNode::new(
                 TypedDeclaration::Function(bad_func),
@@ -213,9 +229,11 @@ fn test_non_extern_function_without_body_fails() {
             ),
         ],
         span,
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
-    let type_registry = Arc::new(TypeRegistry::new());
+    let type_registry = Arc::new(type_registry);
     let arena_arc = Arc::new(Mutex::new(arena));
 
     let module_name = arena_arc.lock().unwrap().intern_string("test_module");
@@ -242,16 +260,19 @@ fn test_multiple_extern_functions() {
     let func2 = create_extern_function(&mut arena, "extern2", CallingConvention::System);
     let func3 = create_extern_function(&mut arena, "extern3", CallingConvention::Rust);
 
-    let program = TypedProgram {
+    let type_registry = TypeRegistry::new();
+    let mut program = TypedProgram {
         declarations: vec![
             TypedNode::new(TypedDeclaration::Function(func1), Type::Primitive(PrimitiveType::I32), span),
             TypedNode::new(TypedDeclaration::Function(func2), Type::Primitive(PrimitiveType::I32), span),
             TypedNode::new(TypedDeclaration::Function(func3), Type::Primitive(PrimitiveType::I32), span),
         ],
         span,
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
-    let type_registry = Arc::new(TypeRegistry::new());
+    let type_registry = Arc::new(type_registry);
     let arena_arc = Arc::new(Mutex::new(arena));
 
     let module_name = arena_arc.lock().unwrap().intern_string("test_module");

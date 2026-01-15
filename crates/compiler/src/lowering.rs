@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::hash::{Hash, Hasher};
 use zyntax_typed_ast::{
     TypedProgram, TypedDeclaration, TypedFunction, TypedNode,
-    InternedString, Type, Visibility, Mutability, AstArena, TypeId
+    InternedString, Type, Visibility, Mutability, AstArena, TypeId,
+    TypedEffect, TypedEffectHandler,
 };
 
 /// Helper to compute a hash for generating synthetic TypeIds
@@ -16,7 +17,12 @@ fn hash_string(s: &str) -> u64 {
     s.hash(&mut hasher);
     hasher.finish()
 }
-use crate::hir::{HirModule, HirFunction, HirFunctionSignature, HirParam, HirType, ParamAttributes, OwnershipMode, HirId, HirLifetime};
+use crate::hir::{
+    HirModule, HirFunction, HirFunctionSignature, HirParam, HirType,
+    ParamAttributes, OwnershipMode, HirId, HirLifetime,
+    HirEffect, HirEffectOp, HirEffectHandler, HirEffectHandlerImpl, HirHandlerField,
+    HirTypeParam,
+};
 use crate::cfg::{ControlFlowGraph, CfgBuilder};
 use crate::ssa::{SsaBuilder, SsaForm};
 use crate::CompilerResult;
@@ -239,6 +245,10 @@ pub struct SymbolTable {
     pub globals: indexmap::IndexMap<InternedString, crate::hir::HirId>,
     /// Types by name
     pub types: indexmap::IndexMap<InternedString, zyntax_typed_ast::TypeId>,
+    /// Algebraic effects by name
+    pub effects: indexmap::IndexMap<InternedString, crate::hir::HirId>,
+    /// Effect handlers by name
+    pub handlers: indexmap::IndexMap<InternedString, crate::hir::HirId>,
 }
 
 /// Import metadata for debugging and error messages
@@ -901,10 +911,22 @@ impl LoweringContext {
                     }
                 }
 
+                TypedDeclaration::Effect(effect) => {
+                    // Pre-register effect in symbol table
+                    let effect_id = HirId::new();
+                    self.symbols.effects.insert(effect.name, effect_id);
+                }
+
+                TypedDeclaration::EffectHandler(handler) => {
+                    // Pre-register handler in symbol table
+                    let handler_id = HirId::new();
+                    self.symbols.handlers.insert(handler.name, handler_id);
+                }
+
                 _ => {}
             }
         }
-        
+
         Ok(())
     }
     
@@ -934,6 +956,14 @@ impl LoweringContext {
 
             TypedDeclaration::Impl(impl_block) => {
                 self.lower_impl_block(impl_block)?;
+            }
+
+            TypedDeclaration::Effect(effect) => {
+                self.lower_effect(effect)?;
+            }
+
+            TypedDeclaration::EffectHandler(handler) => {
+                self.lower_effect_handler(handler)?;
             }
 
             _ => {
@@ -1162,6 +1192,8 @@ impl LoweringContext {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: func.is_async,
+            effects: func.effects.clone(),
+            is_pure: func.is_pure,
         })
     }
     
@@ -1622,6 +1654,159 @@ impl LoweringContext {
                 Some(enum_decl.span),
             );
         }
+
+        Ok(())
+    }
+
+    /// Lower an algebraic effect declaration to HIR
+    fn lower_effect(&mut self, effect: &TypedEffect) -> CompilerResult<()> {
+        // Get the pre-registered effect ID
+        let effect_id = *self.symbols.effects.get(&effect.name).ok_or_else(|| {
+            crate::CompilerError::Lowering(format!(
+                "Effect '{}' not found in symbol table",
+                effect.name
+            ))
+        })?;
+
+        // Convert type parameters
+        let type_params: Vec<HirTypeParam> = effect.type_params.iter().map(|tp| {
+            HirTypeParam {
+                name: tp.name,
+                constraints: vec![],
+            }
+        }).collect();
+
+        // Convert effect operations
+        let operations: Vec<HirEffectOp> = effect.operations.iter().map(|op| {
+            // Convert operation type parameters
+            let op_type_params: Vec<HirTypeParam> = op.type_params.iter().map(|tp| {
+                HirTypeParam {
+                    name: tp.name,
+                    constraints: vec![],
+                }
+            }).collect();
+
+            // Convert operation parameters
+            let params: Vec<HirParam> = op.params.iter().map(|p| {
+                HirParam {
+                    id: HirId::new(),
+                    name: p.name,
+                    ty: self.convert_type(&p.ty),
+                    attributes: ParamAttributes::default(),
+                }
+            }).collect();
+
+            HirEffectOp {
+                id: HirId::new(),
+                name: op.name,
+                type_params: op_type_params,
+                params,
+                return_type: self.convert_type(&op.return_type),
+            }
+        }).collect();
+
+        // Create HIR effect
+        let hir_effect = HirEffect {
+            id: effect_id,
+            name: effect.name,
+            type_params,
+            operations,
+        };
+
+        // Add to module
+        self.module.effects.insert(effect_id, hir_effect);
+
+        Ok(())
+    }
+
+    /// Lower an effect handler declaration to HIR
+    fn lower_effect_handler(&mut self, handler: &TypedEffectHandler) -> CompilerResult<()> {
+        // Get the pre-registered handler ID
+        let handler_id = *self.symbols.handlers.get(&handler.name).ok_or_else(|| {
+            crate::CompilerError::Lowering(format!(
+                "Handler '{}' not found in symbol table",
+                handler.name
+            ))
+        })?;
+
+        // Find the effect being handled
+        let effect_id = *self.symbols.effects.get(&handler.effect_name).ok_or_else(|| {
+            crate::CompilerError::Lowering(format!(
+                "Effect '{}' not found for handler '{}'",
+                handler.effect_name, handler.name
+            ))
+        })?;
+
+        // Convert type parameters
+        let type_params: Vec<HirTypeParam> = handler.type_params.iter().map(|tp| {
+            HirTypeParam {
+                name: tp.name,
+                constraints: vec![],
+            }
+        }).collect();
+
+        // Convert handler state fields
+        let state_fields: Vec<HirHandlerField> = handler.fields.iter().map(|f| {
+            HirHandlerField {
+                name: f.name,
+                ty: self.convert_type(&f.ty),
+            }
+        }).collect();
+
+        // Convert handler implementations
+        // For now, we only store the metadata - actual implementation lowering
+        // happens when we compile the handler's functions
+        let implementations: Vec<HirEffectHandlerImpl> = handler.handlers.iter().map(|impl_| {
+            // Convert type parameters for this implementation
+            let impl_type_params: Vec<HirTypeParam> = impl_.type_params.iter().map(|tp| {
+                HirTypeParam {
+                    name: tp.name,
+                    constraints: vec![],
+                }
+            }).collect();
+
+            // Convert parameters (including the resume continuation if present)
+            let params: Vec<HirParam> = impl_.params.iter().map(|p| {
+                HirParam {
+                    id: HirId::new(),
+                    name: p.name,
+                    ty: self.convert_type(&p.ty),
+                    attributes: ParamAttributes::default(),
+                }
+            }).collect();
+
+            // Check if this handler is resumable (has a Resume parameter)
+            let is_resumable = impl_.params.iter().any(|p| {
+                matches!(&p.ty, Type::Named { id, .. } if {
+                    self.type_registry.get_type_by_id(*id)
+                        .map(|def| def.name.resolve_global().as_deref() == Some("Resume"))
+                        .unwrap_or(false)
+                })
+            });
+
+            HirEffectHandlerImpl {
+                op_name: impl_.op_name,
+                type_params: impl_type_params,
+                params,
+                return_type: self.convert_type(&impl_.return_type),
+                entry_block: HirId::new(),
+                blocks: indexmap::IndexMap::new(), // Will be filled in when we compile the body
+                is_resumable,
+            }
+        }).collect();
+
+        // Create HIR effect handler
+        let hir_handler = HirEffectHandler {
+            id: handler_id,
+            name: handler.name,
+            effect_id,
+            type_params,
+            state_fields,
+            implementations,
+        };
+
+        // Add to module
+        self.module.handlers.insert(handler_id, hir_handler);
 
         Ok(())
     }
@@ -2412,6 +2597,8 @@ impl LoweringContext {
                     lifetime_params: Vec::new(),
                     is_variadic: false,
                     is_async: false,
+                    effects: Vec::new(),
+                    is_pure: false,
                 };
 
                 // Create an import entry for the external function
@@ -2511,6 +2698,8 @@ impl LoweringContext {
                                 lifetime_params: Vec::new(),
                                 is_variadic: false,
                                 is_async: false,
+                                effects: Vec::new(),
+                                is_pure: false,
                             };
 
                             let hir_import = HirImport {
@@ -2601,6 +2790,8 @@ impl LoweringContext {
                                 lifetime_params: Vec::new(),
                                 is_variadic: false,
                                 is_async: false,
+                                effects: Vec::new(),
+                                is_pure: false,
                             };
 
                             let hir_import = HirImport {

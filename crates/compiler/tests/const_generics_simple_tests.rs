@@ -50,6 +50,8 @@ fn test_const_generic_function_signature() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
     
     let func = HirFunction::new(intern_str(&mut arena, "test_array"), signature);
@@ -149,6 +151,8 @@ fn test_monomorphization_context() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
     
     let generic_func = HirFunction::new(intern_str(&mut arena, "identity"), signature);
@@ -207,6 +211,8 @@ fn test_module_monomorphization() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
     
     let generic_func = HirFunction::new(intern_str(&mut arena, "identity"), signature);

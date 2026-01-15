@@ -2583,6 +2583,15 @@ impl CraneliftBackend {
                 // Treated as a pointer to the Promise struct
                 Ok(self.module.target_config().pointer_type())
             }
+            HirType::Continuation { .. } => {
+                // Continuations are represented as pointers to continuation frames
+                Ok(self.module.target_config().pointer_type())
+            }
+            HirType::EffectRow { .. } => {
+                // Effect rows are compile-time only (used for effect polymorphism)
+                // Should never appear in codegen
+                Err(CompilerError::Backend("Effect rows should be resolved before codegen".into()))
+            }
         }
     }
 

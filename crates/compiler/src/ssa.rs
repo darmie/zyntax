@@ -5111,6 +5111,8 @@ impl SsaBuilder {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         // Create entry block for lambda
@@ -5566,7 +5568,16 @@ impl HirInstruction {
             HirInstruction::Fence { .. } |
             HirInstruction::BeginLifetime { .. } |
             HirInstruction::EndLifetime { .. } |
-            HirInstruction::LifetimeConstraint { .. } => None,
+            HirInstruction::LifetimeConstraint { .. } |
+            HirInstruction::Resume { .. } |
+            HirInstruction::AbortEffect { .. } => None,
+
+            // Effect instructions with optional result
+            HirInstruction::PerformEffect { result, .. } |
+            HirInstruction::HandleEffect { result, .. } => *result,
+
+            // CaptureContinuation always has a result
+            HirInstruction::CaptureContinuation { result, .. } => Some(*result),
         }
     }
 }

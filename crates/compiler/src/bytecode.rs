@@ -429,6 +429,8 @@ mod tests {
             exports: Vec::new(),
             version: 1,
             dependencies: std::collections::HashSet::new(),
+            effects: IndexMap::new(),
+            handlers: IndexMap::new(),
         }
     }
 

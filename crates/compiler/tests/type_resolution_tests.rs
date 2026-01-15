@@ -86,6 +86,9 @@ fn test_struct_type_resolution() {
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut program = TypedProgram {
@@ -95,6 +98,8 @@ fn test_struct_type_resolution() {
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
     // Lower to HIR
@@ -109,7 +114,7 @@ fn test_struct_type_resolution() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower program with struct type: {:?}", result.err());
 
     let module = result.unwrap();
@@ -191,6 +196,9 @@ fn test_enum_type_resolution() {
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut program = TypedProgram {
@@ -200,6 +208,8 @@ fn test_enum_type_resolution() {
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
     // Lower to HIR
@@ -214,7 +224,7 @@ fn test_enum_type_resolution() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower program with enum type: {:?}", result.err());
 
     let module = result.unwrap();
@@ -295,6 +305,9 @@ fn test_type_alias_resolution() {
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut program = TypedProgram {
@@ -304,6 +317,8 @@ fn test_type_alias_resolution() {
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
     // Lower to HIR
@@ -318,7 +333,7 @@ fn test_type_alias_resolution() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower program with type alias: {:?}", result.err());
 
     let module = result.unwrap();
@@ -411,6 +426,9 @@ fn test_nested_struct_resolution() {
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut program = TypedProgram {
@@ -420,6 +438,8 @@ fn test_nested_struct_resolution() {
             test_span(),
         )],
         span: test_span(),
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
     // Lower to HIR
@@ -434,7 +454,7 @@ fn test_nested_struct_resolution() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower program with nested struct: {:?}", result.err());
 
     let module = result.unwrap();
@@ -558,6 +578,9 @@ fn test_multiple_struct_types() {
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     let func2 = TypedFunction {
@@ -580,6 +603,9 @@ fn test_multiple_struct_types() {
         is_external: false,
         calling_convention: CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut program = TypedProgram {
@@ -596,6 +622,8 @@ fn test_multiple_struct_types() {
             ),
         ],
         span: test_span(),
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
     // Lower to HIR
@@ -610,7 +638,7 @@ fn test_multiple_struct_types() {
         config,
     );
 
-    let result = ctx.lower_program(&program);
+    let result = ctx.lower_program(&mut program);
     assert!(result.is_ok(), "Failed to lower program with multiple struct types: {:?}", result.err());
 
     let module = result.unwrap();

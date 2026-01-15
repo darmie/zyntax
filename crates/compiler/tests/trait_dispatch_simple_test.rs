@@ -124,11 +124,14 @@ fn test_vtable_generation_simple() {
         is_external: false,
         calling_convention: zyntax_typed_ast::CallingConvention::Default,
         link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
     };
 
     // 5. Create program with the method function
     use zyntax_typed_ast::{TypedNode, typed_node, TypedDeclaration};
-    let program = TypedProgram {
+    let mut program = TypedProgram {
         declarations: vec![
             typed_node(
                 TypedDeclaration::Function(impl_function),
@@ -137,6 +140,8 @@ fn test_vtable_generation_simple() {
             ),
         ],
         span: test_span(),
+        source_files: vec![],
+        type_registry: type_registry.clone(),
     };
 
     // 6. Lower to HIR

@@ -195,6 +195,8 @@ impl<'ctx> LLVMJitBackend<'ctx> {
             exports: Vec::new(),
             version: 0,
             dependencies: HashSet::new(),
+            effects: IndexMap::new(),
+            handlers: IndexMap::new(),
         };
 
         // Compile it

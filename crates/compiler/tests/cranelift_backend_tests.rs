@@ -130,6 +130,8 @@ fn create_test_add_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -268,6 +270,8 @@ fn create_arithmetic_function(name: &str, op: BinaryOp) -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -317,6 +321,8 @@ fn create_comparison_function(name: &str, op: BinaryOp) -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -361,6 +367,8 @@ fn create_control_flow_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -454,6 +462,8 @@ fn create_caller_function(callee_id: HirId) -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -531,6 +541,8 @@ fn create_select_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -595,6 +607,8 @@ fn create_extract_value_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -652,6 +666,8 @@ fn create_insert_value_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -749,6 +765,8 @@ fn create_sqrt_intrinsic_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -794,6 +812,8 @@ fn create_ctpop_intrinsic_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -839,6 +859,8 @@ fn create_malloc_intrinsic_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -884,6 +906,8 @@ fn create_free_intrinsic_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -928,6 +952,8 @@ fn create_incref_intrinsic_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -1021,6 +1047,8 @@ fn create_union_test_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -1082,6 +1110,8 @@ fn create_closure_test_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -1128,6 +1158,8 @@ fn create_pattern_match_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
     
     let mut func = HirFunction::new(name, sig);
@@ -1242,6 +1274,8 @@ fn create_alloca_test_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1283,6 +1317,8 @@ fn create_load_test_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1332,6 +1368,8 @@ fn create_store_test_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1382,6 +1420,8 @@ fn create_gep_test_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1430,6 +1470,8 @@ fn create_combined_memory_test_function() -> HirFunction {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1500,6 +1542,8 @@ fn test_simple_struct_extract() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1559,6 +1603,8 @@ fn test_simple_struct_insert() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1611,6 +1657,8 @@ fn test_array_extract() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1666,6 +1714,8 @@ fn test_array_insert() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1728,6 +1778,8 @@ fn test_nested_struct() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1781,6 +1833,8 @@ fn test_array_of_structs() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1829,6 +1883,8 @@ fn test_2d_array() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1886,6 +1942,8 @@ fn test_mixed_struct_types() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -1949,6 +2007,8 @@ fn test_deeply_nested_struct() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);
@@ -2005,6 +2065,8 @@ fn test_super_trait_upcast() {
         lifetime_params: vec![],
         is_variadic: false,
         is_async: false,
+            effects: vec![],
+            is_pure: false,
     };
 
     let mut func = HirFunction::new(name, sig);

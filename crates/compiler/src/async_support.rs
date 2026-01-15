@@ -1263,6 +1263,8 @@ impl AsyncCompiler {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: false,
+            effects: vec![],
+            is_pure: false,
         };
 
         let mut wrapper = HirFunction::new(
@@ -1738,6 +1740,8 @@ impl AsyncCompiler {
                 lifetime_params: Vec::new(),
                 is_variadic: false,
                 is_async: false,
+                effects: Vec::new(),
+                is_pure: false,
             },
             entry_block: entry_block_id,
             blocks,
@@ -2633,6 +2637,8 @@ impl AsyncCompiler {
                 lifetime_params: Vec::new(),
                 is_variadic: false,
                 is_async: false,
+                effects: Vec::new(),
+                is_pure: false,
             },
             entry_block: entry_block_id,
             blocks,
@@ -2736,8 +2742,10 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: true, // Test is for async function
+            effects: vec![],
+            is_pure: false,
         };
-        
+
         let func = HirFunction::new(intern_str(&mut arena, "async_test"), sig);
         
         let result = compiler.compile_async_function(&func);
@@ -2861,6 +2869,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: true,
+            effects: vec![],
+            is_pure: false,
         };
 
         let func = HirFunction {
@@ -2994,6 +3004,8 @@ mod tests {
             lifetime_params: vec![],
             is_variadic: false,
             is_async: true,
+            effects: vec![],
+            is_pure: false,
         };
 
         let func = HirFunction {
