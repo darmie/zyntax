@@ -23,6 +23,11 @@ use crate::hir::{
     HirGlobal, HirVTable,
 };
 use crate::{CompilerResult, CompilerError};
+use crate::effect_codegen::{
+    EffectCodegenContext, HandlerStackEntry, PerformStrategy,
+    analyze_perform_effect, analyze_handle_effect, mangle_handler_op_name,
+    get_handler_ops_info, runtime as effect_runtime,
+};
 
 /// Convert ZRTL TypeTag to Cranelift type
 fn type_tag_to_cranelift_type(tag: &crate::zrtl::TypeTag) -> types::Type {
@@ -103,6 +108,8 @@ pub struct CraneliftBackend {
     runtime_symbols: Vec<(String, *const u8)>,
     /// Symbol signatures for auto-boxing support (symbol_name → signature)
     symbol_signatures: HashMap<String, crate::zrtl::ZrtlSymbolSig>,
+    /// Effect codegen context for algebraic effects
+    effect_context: EffectCodegenContext,
 }
 
 /// Hot-reload state management
@@ -199,6 +206,7 @@ impl CraneliftBackend {
             exported_symbols: HashMap::new(),
             runtime_symbols,
             symbol_signatures: HashMap::new(),
+            effect_context: EffectCodegenContext::new(),
         })
     }
     
@@ -240,7 +248,7 @@ impl CraneliftBackend {
         // Pass 2: Compile all function bodies
         for (id, function) in &module.functions {
             if !function.is_external {
-                self.compile_function_body(*id, function)?;
+                self.compile_function_body(*id, function, module)?;
             }
         }
 
@@ -385,13 +393,18 @@ impl CraneliftBackend {
     }
     
     /// Compile a single function with hot-reload support (legacy, calls declare + compile_body)
+    ///
+    /// Note: This legacy path does not support algebraic effects. Use compile_module() for
+    /// full effect support.
     pub fn compile_function(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
         eprintln!("[Backend] compile_function called for {:?}", id);
         self.declare_function(id, function)?;
         eprintln!("[Backend] After declare_function, IR:");
         eprintln!("{}", self.codegen_context.func);
         if !function.is_external {
-            self.compile_function_body(id, function)?;
+            // Create empty module for legacy path (effects won't work)
+            let empty_module = HirModule::new(zyntax_typed_ast::InternedString::new_global("__legacy__"));
+            self.compile_function_body(id, function, &empty_module)?;
             eprintln!("[Backend] After compile_function_body, IR:");
             eprintln!("{}", self.codegen_context.func);
         }
@@ -399,7 +412,7 @@ impl CraneliftBackend {
     }
 
     /// Compile just the body of a function (assumes signature already declared)
-    fn compile_function_body(&mut self, id: HirId, function: &HirFunction) -> CompilerResult<()> {
+    fn compile_function_body(&mut self, id: HirId, function: &HirFunction, hir_module: &HirModule) -> CompilerResult<()> {
         // Get the already-declared function ID
         let func_id = *self.function_map.get(&id)
             .ok_or_else(|| CompilerError::Backend(format!("Function {:?} not declared", id)))?;
@@ -2015,10 +2028,234 @@ impl CraneliftBackend {
                             self.value_map.insert(*result, cast_val);
                         }
 
+                        // ================================================================
+                        // Algebraic Effects Instructions (Tier 1: Simple Effects)
+                        // ================================================================
+
+                        HirInstruction::PerformEffect { result, effect_id, op_name, args, return_ty } => {
+                            // Tier 1 implementation: Direct call to handler function
+                            //
+                            // For simple (non-resumable) effects, we can compile PerformEffect
+                            // as a direct function call to the handler implementation.
+                            //
+                            // TODO: Use analyze_perform_effect() to determine optimal strategy
+                            // For now, we use a simple implementation that calls a mangled function.
+
+                            // Look up the handler for this effect in the module
+                            let handler_func_name = if let Some(handler) = hir_module.handlers.values()
+                                .find(|h| h.effect_id == *effect_id)
+                            {
+                                // Find the operation implementation
+                                if let Some(impl_) = handler.implementations.iter()
+                                    .find(|i| i.op_name == *op_name)
+                                {
+                                    mangle_handler_op_name(handler.name, impl_.op_name)
+                                } else {
+                                    warn!("[Effect] No implementation for operation {:?} in handler", op_name);
+                                    // Fall through to trap
+                                    if let Some(result_id) = result {
+                                        self.value_map.insert(*result_id, builder.ins().iconst(types::I64, 0));
+                                    }
+                                    continue;
+                                }
+                            } else {
+                                warn!("[Effect] No handler found for effect {:?}", effect_id);
+                                // Unhandled effect - trap at runtime
+                                builder.ins().trap(cranelift_codegen::ir::TrapCode::UnreachableCodeReached);
+                                if let Some(result_id) = result {
+                                    self.value_map.insert(*result_id, builder.ins().iconst(types::I64, 0));
+                                }
+                                continue;
+                            };
+
+                            // Try to call the handler function
+                            if let Some(&func_id) = self.function_map.values()
+                                .find(|_| {
+                                    // Check if function name matches (simplified lookup)
+                                    // In a full implementation, we'd have a name→func_id map
+                                    false // For now, fall through to external call
+                                })
+                            {
+                                // Direct call to compiled handler
+                                let local_callee = self.module.declare_func_in_func(func_id, builder.func);
+                                let arg_values: Vec<Value> = args.iter()
+                                    .filter_map(|a| self.value_map.get(a).copied())
+                                    .collect();
+                                let call = builder.ins().call(local_callee, &arg_values);
+                                if let Some(result_id) = result {
+                                    if let Some(&ret_val) = builder.inst_results(call).first() {
+                                        self.value_map.insert(*result_id, ret_val);
+                                    }
+                                }
+                            } else {
+                                // Handler not yet compiled - declare as external and call
+                                let return_cranelift_ty = match return_ty {
+                                    HirType::I8 | HirType::U8 | HirType::Bool => types::I8,
+                                    HirType::I16 | HirType::U16 => types::I16,
+                                    HirType::I32 | HirType::U32 => types::I32,
+                                    HirType::I64 | HirType::U64 | HirType::Ptr(_) => types::I64,
+                                    HirType::F32 => types::F32,
+                                    HirType::F64 => types::F64,
+                                    _ => types::I64, // Default for complex types
+                                };
+                                let mut sig = self.module.make_signature();
+                                for arg_id in args {
+                                    // Get arg type from value_map (simplified - assume i64)
+                                    sig.params.push(AbiParam::new(types::I64));
+                                }
+                                if !matches!(return_ty, HirType::Void) {
+                                    sig.returns.push(AbiParam::new(return_cranelift_ty));
+                                }
+
+                                match self.module.declare_function(&handler_func_name, Linkage::Import, &sig) {
+                                    Ok(extern_func_id) => {
+                                        let local_callee = self.module.declare_func_in_func(extern_func_id, builder.func);
+                                        let arg_values: Vec<Value> = args.iter()
+                                            .filter_map(|a| self.value_map.get(a).copied())
+                                            .collect();
+                                        let call = builder.ins().call(local_callee, &arg_values);
+                                        if let Some(result_id) = result {
+                                            if let Some(&ret_val) = builder.inst_results(call).first() {
+                                                self.value_map.insert(*result_id, ret_val);
+                                            } else if matches!(return_ty, HirType::Void) {
+                                                // Void return - create dummy value
+                                                self.value_map.insert(*result_id, builder.ins().iconst(types::I64, 0));
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("[Effect] Failed to declare handler function {}: {}", handler_func_name, e);
+                                        if let Some(result_id) = result {
+                                            self.value_map.insert(*result_id, builder.ins().iconst(types::I64, 0));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        HirInstruction::HandleEffect { result, handler_id, handler_state, body_block, continuation_block, return_ty } => {
+                            // Tier 1 implementation: Inline handler scope
+                            //
+                            // For simple effects, HandleEffect sets up a handler context and
+                            // the body block is compiled inline. Effect operations in the body
+                            // will call the handler directly.
+                            //
+                            // TODO: Push handler onto effect_context stack
+                            // TODO: Handle stateful handlers (allocate state)
+
+                            if let Some(handler) = hir_module.handlers.get(handler_id) {
+                                log::debug!("[Effect] HandleEffect: installing handler {} for effect {:?}",
+                                    handler.name.resolve_global().unwrap_or_default(), handler.effect_id);
+
+                                // For Tier 1, we simply note the handler is installed.
+                                // The body block will be compiled as part of normal block processing.
+                                // PerformEffect instructions will look up the handler.
+
+                                // Store handler state if needed
+                                if !handler_state.is_empty() {
+                                    log::debug!("[Effect] Handler has {} state values", handler_state.len());
+                                    // TODO: Allocate stack slot for handler state
+                                }
+
+                                // The body_block and continuation_block are handled by normal
+                                // control flow - no special codegen needed for Tier 1.
+
+                                // If result is expected, it comes from the body block's return
+                                // This will be set when we process the body block
+                            } else {
+                                warn!("[Effect] HandleEffect: handler {:?} not found", handler_id);
+                            }
+
+                            // Create dummy result value - actual value comes from body
+                            if let Some(result_id) = result {
+                                let return_cranelift_ty = match return_ty {
+                                    HirType::I8 | HirType::U8 | HirType::Bool => types::I8,
+                                    HirType::I16 | HirType::U16 => types::I16,
+                                    HirType::I32 | HirType::U32 => types::I32,
+                                    HirType::I64 | HirType::U64 | HirType::Ptr(_) => types::I64,
+                                    HirType::F32 => types::F32,
+                                    HirType::F64 => types::F64,
+                                    _ => types::I64,
+                                };
+                                if matches!(return_ty, HirType::Void) {
+                                    self.value_map.insert(*result_id, builder.ins().iconst(types::I64, 0));
+                                } else {
+                                    self.value_map.insert(*result_id, builder.ins().iconst(return_cranelift_ty, 0));
+                                }
+                            }
+                        }
+
+                        HirInstruction::Resume { value, continuation } => {
+                            // Tier 1 implementation: No-op for non-resumable handlers
+                            //
+                            // For simple (non-resumable) handlers, Resume is essentially
+                            // returning the value from the handler implementation.
+                            // Since we compile handlers as direct calls, this is handled
+                            // by the normal return mechanism.
+                            //
+                            // Tier 3 will need actual continuation invocation.
+
+                            log::debug!("[Effect] Resume instruction (Tier 1: no-op, value flows via return)");
+
+                            // The value should be returned from the handler
+                            // In Tier 1, this is handled by the handler function's return
+                            let _ = (value, continuation); // Suppress unused warnings
+                        }
+
+                        HirInstruction::AbortEffect { value, handler_scope } => {
+                            // Tier 1 implementation: Jump to handler exit
+                            //
+                            // AbortEffect terminates the handled computation early,
+                            // returning the value as the result of HandleEffect.
+                            //
+                            // For Tier 1, this can be implemented as a branch to the
+                            // continuation block of the handler.
+
+                            log::debug!("[Effect] AbortEffect: aborting handler scope {:?} with value {:?}",
+                                handler_scope, value);
+
+                            // TODO: Branch to the handler's continuation block
+                            // For now, we treat this as returning the value
+                            let _ = (value, handler_scope); // Suppress unused warnings
+                        }
+
+                        HirInstruction::CaptureContinuation { result, resume_ty } => {
+                            // Tier 3: Not yet implemented
+                            //
+                            // CaptureContinuation creates a reified continuation that can
+                            // be stored and resumed later. This requires:
+                            // - CPS transformation
+                            // - Stack frame capture
+                            // - Trampoline execution model
+                            //
+                            // For now, we create a null/dummy continuation.
+
+                            warn!("[Effect] CaptureContinuation: Tier 3 feature not yet implemented");
+
+                            // Create a dummy continuation value (null pointer)
+                            self.value_map.insert(*result, builder.ins().iconst(types::I64, 0));
+                        }
+
+                        // Lifetime instructions (no codegen needed - used for analysis only)
+                        HirInstruction::BeginLifetime { .. } |
+                        HirInstruction::EndLifetime { .. } |
+                        HirInstruction::LifetimeConstraint { .. } => {
+                            // These are analysis-only instructions, no runtime code needed
+                        }
+
+                        // Copy instruction (simple value copy)
+                        HirInstruction::Copy { result, source, ty: _ } => {
+                            if let Some(&val) = self.value_map.get(source) {
+                                self.value_map.insert(*result, val);
+                            } else {
+                                warn!("[Cranelift] Copy: source {:?} not in value_map", source);
+                            }
+                        }
+
                         _ => {
                             // Other instructions not yet implemented
                             // This will cause values to be unmapped, leading to verifier errors
-                            warn!(" Unimplemented instruction type");
+                            warn!(" Unimplemented instruction type: {:?}", inst);
                         }
                     }
                 }
