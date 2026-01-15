@@ -532,6 +532,7 @@ fn test_compilation_pipeline_all_features() {
         target_triple: "x86_64-unknown-linux-gnu".to_string(),
         import_resolver: None,
         enable_borrow_check: false,
+        enable_effect_check: true,
     };
 
     let result = compile_to_hir(&mut program, type_registry, config);
@@ -600,6 +601,7 @@ fn test_compilation_pipeline_with_memory_optimizations() {
         target_triple: "x86_64-unknown-linux-gnu".to_string(),
         import_resolver: None,
         enable_borrow_check: false,
+        enable_effect_check: true,
     };
 
     let result = compile_to_hir(&mut program, type_registry, config);

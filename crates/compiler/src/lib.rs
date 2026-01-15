@@ -29,6 +29,7 @@ pub mod trait_lowering;  // Trait/interface lowering to HIR
 pub mod vtable_registry;  // Vtable management and caching
 pub mod associated_type_resolver;  // Associated type resolution for trait dispatch
 pub mod analysis;
+pub mod effect_analysis;  // Effect inference and checking for algebraic effects
 pub mod borrow_check;  // HIR-level borrow checking pass
 pub mod optimization;
 pub mod memory_optimization;  // Memory-aware optimizations
@@ -83,6 +84,13 @@ pub use memory_optimization::MemoryOptimizationPass;
 pub use borrow_check::{
     HirBorrowChecker, BorrowCheckResult, BorrowError, BorrowWarning,
     run_borrow_check, validate_borrow_check,
+};
+pub use effect_analysis::{
+    EffectAnalyzer, ModuleEffectAnalysis, FunctionEffectAnalysis,
+    EffectOccurrence, EffectSite, HandlerScope, EffectCallGraph,
+    EffectError, EffectErrorKind, EffectWarning, EffectWarningKind,
+    analyze_effects, analyze_effects_with_call_graph, has_effect_errors,
+    get_function_effect_summary, EffectSummary,
 };
 pub use async_support::{
     AsyncCompiler, AsyncStateMachine, AsyncState, AsyncRuntime, AsyncRuntimeType,
@@ -143,6 +151,8 @@ pub struct CompilationConfig {
     pub import_resolver: Option<Arc<dyn ImportResolver>>,
     /// Enable HIR-level borrow checking (validates ownership/borrowing at HIR level)
     pub enable_borrow_check: bool,
+    /// Enable effect analysis and checking (validates algebraic effect usage)
+    pub enable_effect_check: bool,
 }
 
 impl std::fmt::Debug for CompilationConfig {
@@ -157,6 +167,7 @@ impl std::fmt::Debug for CompilationConfig {
             .field("async_runtime", &self.async_runtime)
             .field("import_resolver", &self.import_resolver.as_ref().map(|r| r.resolver_name()))
             .field("enable_borrow_check", &self.enable_borrow_check)
+            .field("enable_effect_check", &self.enable_effect_check)
             .finish()
     }
 }
@@ -173,6 +184,7 @@ impl Default for CompilationConfig {
             async_runtime: Some(async_support::AsyncRuntimeType::Tokio),
             import_resolver: None,
             enable_borrow_check: false, // Disabled by default for now
+            enable_effect_check: true,  // Enable effect checking by default
         }
     }
 }
@@ -1328,6 +1340,31 @@ pub fn compile_to_hir(
     if config.enable_borrow_check {
         let borrow_result = borrow_check::run_borrow_check(&hir_module, Some(&analysis))?;
         borrow_check::validate_borrow_check(&borrow_result)?;
+    }
+
+    // Step 3c: Effect analysis and checking (if enabled)
+    if config.enable_effect_check {
+        let effect_analysis = effect_analysis::analyze_effects_with_call_graph(
+            &hir_module,
+            &analysis.call_graph,
+        )?;
+
+        // Report errors if any effect constraints are violated
+        if effect_analysis::has_effect_errors(&effect_analysis) {
+            let error_messages: Vec<String> = effect_analysis.errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect();
+            return Err(CompilerError::Analysis(format!(
+                "Effect checking failed:\n  - {}",
+                error_messages.join("\n  - ")
+            )));
+        }
+
+        // Log warnings (but don't fail compilation)
+        for warning in &effect_analysis.warnings {
+            debug!("[EFFECT_CHECK] Warning: {}", warning.message);
+        }
     }
 
     // Step 4: Memory management pass (if strategy is configured)
