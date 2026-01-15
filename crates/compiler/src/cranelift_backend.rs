@@ -2068,26 +2068,37 @@ impl CraneliftBackend {
                                 continue;
                             };
 
-                            // Try to call the handler function
-                            if let Some(&func_id) = self.function_map.values()
-                                .find(|_| {
-                                    // Check if function name matches (simplified lookup)
-                                    // In a full implementation, we'd have a name→func_id map
-                                    false // For now, fall through to external call
+                            // Try to find the handler function in the module
+                            // Look up by name in hir_module.functions, then get FuncId from function_map
+                            let handler_hir_id = hir_module.functions.iter()
+                                .find(|(_, f)| {
+                                    f.name.resolve_global()
+                                        .map(|n| n == handler_func_name)
+                                        .unwrap_or(false)
                                 })
-                            {
-                                // Direct call to compiled handler
-                                let local_callee = self.module.declare_func_in_func(func_id, builder.func);
-                                let arg_values: Vec<Value> = args.iter()
-                                    .filter_map(|a| self.value_map.get(a).copied())
-                                    .collect();
-                                let call = builder.ins().call(local_callee, &arg_values);
-                                if let Some(result_id) = result {
-                                    if let Some(&ret_val) = builder.inst_results(call).first() {
-                                        self.value_map.insert(*result_id, ret_val);
+                                .map(|(id, _)| *id);
+
+                            if let Some(hir_id) = handler_hir_id {
+                                if let Some(&func_id) = self.function_map.get(&hir_id) {
+                                    // Direct call to compiled handler
+                                    let local_callee = self.module.declare_func_in_func(func_id, builder.func);
+                                    let arg_values: Vec<Value> = args.iter()
+                                        .filter_map(|a| self.value_map.get(a).copied())
+                                        .collect();
+                                    let call = builder.ins().call(local_callee, &arg_values);
+                                    if let Some(result_id) = result {
+                                        if let Some(&ret_val) = builder.inst_results(call).first() {
+                                            self.value_map.insert(*result_id, ret_val);
+                                        } else if matches!(return_ty, HirType::Void) {
+                                            // Void return - create dummy value
+                                            self.value_map.insert(*result_id, builder.ins().iconst(types::I64, 0));
+                                        }
                                     }
+                                    continue;
                                 }
-                            } else {
+                            }
+                            // Handler not yet compiled or not in module - declare as external and call
+                            {
                                 // Handler not yet compiled - declare as external and call
                                 let return_cranelift_ty = match return_ty {
                                     HirType::I8 | HirType::U8 | HirType::Bool => types::I8,
