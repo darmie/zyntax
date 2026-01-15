@@ -693,6 +693,7 @@ fn generate_binary_trait_impl(
 
     let standalone_func = TypedFunction {
         name: mangled_name_interned,
+        annotations: vec![],
         type_params: vec![],
         params: vec![
             TypedParameter {
@@ -912,6 +913,7 @@ fn generate_comparison_trait_impl(
 
         let standalone_func = TypedFunction {
             name: mangled_name_interned,
+            annotations: vec![],
             type_params: vec![],
             params: vec![
                 TypedParameter {
@@ -1143,6 +1145,7 @@ fn generate_unary_trait_impl(
 
     let standalone_func = TypedFunction {
         name: mangled_name_interned,
+        annotations: vec![],
         type_params: vec![],
         params: vec![
             TypedParameter {

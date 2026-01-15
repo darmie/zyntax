@@ -488,6 +488,7 @@ impl LanguageGrammar {
             // Create extern function declaration
             let extern_func = TypedFunction {
                 name: InternedString::new_global(target_symbol),
+                annotations: vec![],
                 type_params: vec![],
                 params,
                 return_type,

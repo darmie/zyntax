@@ -962,6 +962,7 @@ impl TypeChecker {
             // Create a function-like structure from the method to reuse function checking
             let func = TypedFunction {
                 name: method.name,
+                annotations: vec![],
                 type_params: vec![],
                 params,
                 return_type: resolved_return_type,

@@ -276,6 +276,7 @@ pub fn function_decl(
 ) -> TypedDeclaration {
     TypedDeclaration::Function(TypedFunction {
         name,
+        annotations: vec![],
         params,
         return_type,
         body,

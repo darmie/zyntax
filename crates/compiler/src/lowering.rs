@@ -2071,6 +2071,7 @@ impl LoweringContext {
             // Create a function from the method
             let func = TypedFunction {
                 name: mangled_name,  // Use mangled name for trait method
+                annotations: vec![],
                 type_params: vec![],
                 params,
                 return_type: resolved_return_type,
@@ -2722,6 +2723,7 @@ impl LoweringContext {
         // Create a function from the method
         let func = TypedFunction {
             name: mangled_name,
+            annotations: vec![],
             type_params: method.type_params.clone(),
             params,
             return_type: method.return_type.clone(),
@@ -2781,6 +2783,7 @@ impl LoweringContext {
 
         let func = TypedFunction {
             name: ctor_name,
+            annotations: vec![],
             type_params: vec![],
             params,
             return_type,

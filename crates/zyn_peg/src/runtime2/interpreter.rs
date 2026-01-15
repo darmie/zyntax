@@ -631,6 +631,7 @@ impl<'g> GrammarInterpreter<'g> {
 
                 TypedDeclaration::Function(TypedFunction {
                     name,
+                    annotations: vec![],
                     type_params: vec![],
                     params,
                     return_type,

@@ -187,11 +187,55 @@ pub struct TypedExternProperty {
     pub ty: Type,
 }
 
+/// Annotation/decorator on items: @deprecated("message"), @inline, @derive(Debug, Clone)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TypedAnnotation {
+    /// Annotation name (e.g., "deprecated", "inline", "derive")
+    pub name: InternedString,
+    /// Positional arguments (e.g., for @deprecated("message"))
+    #[serde(default)]
+    pub args: Vec<TypedAnnotationArg>,
+    /// Source span
+    #[serde(default)]
+    pub span: Span,
+}
+
+/// Annotation argument - can be positional or named
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TypedAnnotationArg {
+    /// Positional argument: @deprecated("message")
+    Positional(TypedAnnotationValue),
+    /// Named argument: @validate(min=1, max=100)
+    Named {
+        name: InternedString,
+        value: TypedAnnotationValue,
+    },
+}
+
+/// Values that can appear in annotations
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TypedAnnotationValue {
+    /// String literal: "message"
+    String(InternedString),
+    /// Integer literal: 100
+    Integer(i64),
+    /// Float literal: 0.5
+    Float(f64),
+    /// Boolean literal: true
+    Bool(bool),
+    /// Identifier (e.g., Debug, Clone in @derive(Debug, Clone))
+    Identifier(InternedString),
+    /// Nested annotation list (for @derive(Debug, Clone))
+    List(Vec<TypedAnnotationValue>),
+}
+
 /// Function declaration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct TypedFunction {
     #[serde(default)]
     pub name: InternedString,
+    #[serde(default)]
+    pub annotations: Vec<TypedAnnotation>,  // @deprecated, @inline, etc.
     #[serde(default)]
     pub type_params: Vec<TypedTypeParam>,  // Generic type parameters
     #[serde(default)]

@@ -217,6 +217,7 @@ impl Grammar2 {
             // This is what the grammar's generated AST calls
             let alias_func = TypedFunction {
                 name: InternedString::new_global(source_name),
+                annotations: vec![],
                 type_params: vec![],
                 params: params.clone(),
                 return_type: return_type.clone(),
@@ -238,6 +239,7 @@ impl Grammar2 {
             if source_name != target_symbol {
                 let symbol_func = TypedFunction {
                     name: InternedString::new_global(target_symbol),
+                    annotations: vec![],
                     type_params: vec![],
                     params,
                     return_type,

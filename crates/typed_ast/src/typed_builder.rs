@@ -935,6 +935,7 @@ impl TypedASTBuilder {
         typed_node(
             TypedDeclaration::Function(TypedFunction {
                 name: func_name,
+                annotations: vec![],
                 type_params: vec![],
                 params,
                 return_type: return_type.clone(),
@@ -963,6 +964,7 @@ impl TypedASTBuilder {
         typed_node(
             TypedDeclaration::Function(TypedFunction {
                 name: func_name,
+                annotations: vec![],
                 type_params: vec![],
                 params,
                 return_type: return_type.clone(),
@@ -1314,6 +1316,7 @@ impl FluentFunctionBuilder {
         typed_node(
             TypedDeclaration::Function(TypedFunction {
                 name: self.name,
+                annotations: vec![],
                 type_params: vec![],
                 params: self.params,
                 return_type: self.return_type.clone(),
@@ -1378,6 +1381,7 @@ impl FluentFunctionBuilder {
         let func = typed_node(
             TypedDeclaration::Function(TypedFunction {
                 name: self.name,
+                annotations: vec![],
                 type_params: vec![],
                 params: self.params,
                 return_type: self.return_type,
