@@ -604,13 +604,26 @@ associated_type = { "type" ~ name:identifier ~ (":" ~ type_bounds)? }
       name: intern(name),
   }
 
-trait_method = { "fn" ~ name:identifier ~ type_params? ~ "(" ~ trait_params? ~ ")" ~ ("->" ~ type_expr)? }
+// Trait method with def keyword and colon return type: def name(params): Type
+trait_method_def = { "def" ~ name:identifier ~ type_params? ~ "(" ~ trait_params? ~ ")" ~ (":" ~ type_expr)? }
   -> TypedDeclaration::Function {
       name: intern(name),
       params: [],
       return_type: Type::Unit,
       body: None,
   }
+
+// Legacy trait method with fn keyword and arrow return type: fn name(params) -> Type
+trait_method_fn = { "fn" ~ name:identifier ~ type_params? ~ "(" ~ trait_params? ~ ")" ~ ("->" ~ type_expr)? }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: None,
+  }
+
+trait_method = { item:trait_method_def | item:trait_method_fn }
+  -> item
 
 trait_params = { param:trait_param ~ ("," ~ param:trait_param)* }
   -> param
@@ -888,9 +901,17 @@ impl_abstract_inherent_simple = { "impl" ~ name:identifier ~ "(" ~ type_expr ~ "
   }
 
 // impl<T> Trait<Args> for Type<T> { ... }
-// Split into generic and non-generic variants
-impl_block_with_args = { decl:impl_block_with_args_generic | decl:impl_block_with_args_simple }
+// Split into generic and non-generic variants, with optional where clauses
+impl_block_with_args = { decl:impl_block_with_args_generic_where | decl:impl_block_with_args_generic | decl:impl_block_with_args_simple }
   -> decl
+
+// impl<T> IteratorExt<T> for I where I: Iterator<Item=T> { ... }
+impl_block_with_args_generic_where = { "impl" ~ type_params ~ trait_name:identifier ~ type_args_angle ~ "for" ~ for_type:type_expr_name ~ where_clause ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(trait_name),
+      for_type: intern(for_type),
+      items: items,
+  }
 
 // impl<T> Add<T> for Container<T> { ... }
 impl_block_with_args_generic = { "impl" ~ type_params ~ trait_name:identifier ~ type_args_angle ~ "for" ~ for_type:type_expr_name ~ "{" ~ items:impl_items ~ "}" }
@@ -909,9 +930,17 @@ impl_block_with_args_simple = { "impl" ~ trait_name:identifier ~ type_args_angle
   }
 
 // impl<T> Trait for Type<T> { ... } - trait implementation
-// Split into generic and non-generic variants
-impl_block_trait = { decl:impl_block_trait_generic | decl:impl_block_trait_simple }
+// Split into generic and non-generic variants, with optional where clauses
+impl_block_trait = { decl:impl_block_trait_generic_where | decl:impl_block_trait_generic | decl:impl_block_trait_simple }
   -> decl
+
+// impl<T> Iterator for ListIterator<T> where T: Clone { ... }
+impl_block_trait_generic_where = { "impl" ~ type_params ~ trait_name:identifier ~ "for" ~ for_type:type_expr_name ~ where_clause ~ "{" ~ items:impl_items ~ "}" }
+  -> TypedDeclaration::Impl {
+      trait_name: intern(trait_name),
+      for_type: intern(for_type),
+      items: items,
+  }
 
 // impl<T> Iterator for ListIterator<T> { ... }
 impl_block_trait_generic = { "impl" ~ type_params ~ trait_name:identifier ~ "for" ~ for_type:type_expr_name ~ "{" ~ items:impl_items ~ "}" }
@@ -970,6 +999,9 @@ impl_items = { item:impl_item* }
 // NOTE: indent-bodied must come after expression-bodied to prefer single-expression form when applicable
 impl_item = {
     decl:impl_assoc_type |
+    // New def-style methods (preferred)
+    decl:impl_method_def_return | decl:impl_method_def_params | decl:impl_method_def_simple |
+    // Legacy fn-style methods
     decl:impl_method_return_expr | decl:impl_method_return_indent | decl:impl_method_return |
     decl:impl_method_params_expr | decl:impl_method_params_indent | decl:impl_method_params |
     decl:impl_method_simple_indent | decl:impl_method_simple
@@ -1069,6 +1101,35 @@ impl_method_simple = { "fn" ~ name:identifier ~ "(" ~ ")" ~ body:block }
       body: Some(body),
   }
 
+// ========== New def-style methods (with colon return type) ==========
+
+// def name(params): Type { body }
+impl_method_def_return = { "def" ~ name:identifier ~ type_params? ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: Some(body),
+  }
+
+// def name(params) { body } - no return type
+impl_method_def_params = { "def" ~ name:identifier ~ type_params? ~ "(" ~ params:fn_params ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
+  }
+
+// def name() { body } - no params, no return type
+impl_method_def_simple = { "def" ~ name:identifier ~ "(" ~ ")" ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: Some(body),
+  }
+
 // Type arguments in angle brackets (for trait impl)
 type_args_angle = { "<" ~ args:type_args ~ ">" }
   -> args
@@ -1086,7 +1147,52 @@ type_args_angle = { "<" ~ args:type_args ~ ">" }
 //   List<int>      -> List<int>
 //   int            -> int
 //
-type_expr = { ty:optional_type | ty:generic_type | ty:array_type | ty:simple_type }
+type_expr = { ty:optional_type | ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:simple_type }
+  -> ty
+
+// Tuple type: (T1, T2) or (T1, T2, T3)
+// Must come after fn_type since both start with parens (fn_type has "def" keyword)
+tuple_type = { ty:tuple_type_2 | ty:tuple_type_3 | ty:tuple_type_4 }
+  -> ty
+
+// Two-element tuple: (T1, T2)
+tuple_type_2 = { "(" ~ t1:type_expr ~ "," ~ t2:type_expr ~ ")" }
+  -> Type::Tuple {
+      elements: [t1, t2],
+  }
+
+// Three-element tuple: (T1, T2, T3)
+tuple_type_3 = { "(" ~ t1:type_expr ~ "," ~ t2:type_expr ~ "," ~ t3:type_expr ~ ")" }
+  -> Type::Tuple {
+      elements: [t1, t2, t3],
+  }
+
+// Four-element tuple: (T1, T2, T3, T4)
+tuple_type_4 = { "(" ~ t1:type_expr ~ "," ~ t2:type_expr ~ "," ~ t3:type_expr ~ "," ~ t4:type_expr ~ ")" }
+  -> Type::Tuple {
+      elements: [t1, t2, t3, t4],
+  }
+
+// Function type: def(T, U): R
+fn_type = { ty:fn_type_with_return | ty:fn_type_unit }
+  -> ty
+
+// def(T, U): R - function type with return
+fn_type_with_return = { "def" ~ "(" ~ params:fn_type_params? ~ ")" ~ ":" ~ ret:type_expr }
+  -> Type::Function {
+      params: params,
+      return_type: ret,
+  }
+
+// def(T, U) - function type returning unit
+fn_type_unit = { "def" ~ "(" ~ params:fn_type_params? ~ ")" }
+  -> Type::Function {
+      params: params,
+      return_type: Type::Unit,
+  }
+
+// Function type parameter list
+fn_type_params = { ty:type_expr ~ ("," ~ ty:type_expr)* }
   -> ty
 
 // ?T shorthand for Option<T>
@@ -1097,7 +1203,7 @@ optional_type = { "?" ~ inner:type_expr_non_optional }
   }
 
 // Type expression without the optional prefix (to avoid infinite recursion)
-type_expr_non_optional = { ty:generic_type | ty:array_type | ty:simple_type }
+type_expr_non_optional = { ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:simple_type }
   -> ty
 
 simple_type = { name:identifier }
@@ -1115,8 +1221,75 @@ generic_type = { name:identifier ~ "<" ~ type_args ~ ">" }
       name: intern(name),
   }
 
-type_args = { ty:type_expr ~ ("," ~ ty:type_expr)* }
-  -> ty
+// Type arguments: can be regular types or associated type bindings (Item=T)
+type_args = { arg:type_arg ~ ("," ~ arg:type_arg)* }
+  -> arg
+
+// Single type argument: either associated binding or regular type
+// Associated binding must come first to match "Item=T" before "Item" is parsed as simple type
+type_arg = { arg:assoc_type_binding | arg:type_expr }
+  -> arg
+
+// Associated type binding: Item=T, Output=U
+// Used in trait bounds like Iterator<Item=T>
+assoc_type_binding = { name:identifier ~ "=" ~ ty:type_expr }
+  -> Type::AssocBinding {
+      name: intern(name),
+      ty: ty,
+  }
+
+// ============================================================================
+// Where Clauses
+// ============================================================================
+// Where clauses for complex trait bounds:
+//   impl<I, T> Iterator for MyIter<I, T>
+//       where I: Iterator<Item=T>,
+//             T: Clone
+//
+// Grammar accepts where clauses but they are primarily for documentation/parsing
+// The full semantic handling is done by the type checker
+
+// Optional where clause - may be empty
+where_clause = { "where" ~ bounds:where_bounds }
+  -> bounds
+
+// Multiple where bounds separated by commas
+where_bounds = { bound:where_bound ~ ("," ~ bound:where_bound)* }
+  -> bound
+
+// Single where bound: T: Trait or T: Trait<Args>
+// Also supports: T: Trait1 + Trait2 (multiple bounds on same type)
+where_bound = { name:identifier ~ ":" ~ bounds:where_trait_bounds }
+  -> Type::WhereBound {
+      name: intern(name),
+      bounds: bounds,
+  }
+
+// Multiple trait bounds separated by +: Clone + Debug + Iterator<Item=T>
+where_trait_bounds = { bound:where_trait_bound ~ ("+" ~ bound:where_trait_bound)* }
+  -> bound
+
+// Single trait bound: Clone, Debug, Iterator<Item=T>, def(T): U (function bounds)
+where_trait_bound = { bound:trait_bound_generic | bound:trait_bound_fn | bound:trait_bound_simple }
+  -> bound
+
+// Generic trait bound: Iterator<Item=T>
+trait_bound_generic = { name:identifier ~ "<" ~ args:type_args ~ ">" }
+  -> Type::TraitBound {
+      name: intern(name),
+      type_args: args,
+  }
+
+// Simple trait bound: Clone, Debug
+trait_bound_simple = { name:identifier }
+  -> Type::TraitBound {
+      name: intern(name),
+      type_args: [],
+  }
+
+// Function type as trait bound: def(T): U
+trait_bound_fn = { bound:fn_type }
+  -> bound
 
 // ============================================================================
 // Function Definition
@@ -1671,10 +1844,53 @@ match_arm = { "case" ~ pat:pattern ~ body:block }
       body: body,
   }
 
-// Pattern: literal, identifier (binding), or wildcard (_)
-pattern = { string_literal | int_literal | bool_literal | wildcard | identifier }
+// Pattern: literal, constructor, identifier (binding), or wildcard (_)
+pattern = {
+    pat:pattern_tuple_two |
+    pat:pattern_constructor_with_field |
+    pat:pattern_constructor_unit |
+    pat:pattern_literal |
+    pat:pattern_wildcard |
+    pat:pattern_binding
+}
+  -> pat
 
-// Wildcard pattern
+// Tuple pattern for destructuring: (a, b)
+pattern_tuple_two = { "(" ~ p1:pattern ~ "," ~ p2:pattern ~ ")" }
+  -> TypedPattern::Tuple {
+      elements: [p1, p2],
+  }
+
+// Constructor pattern with field: Some(x), Ok(v), Err(e)
+pattern_constructor_with_field = { name:identifier ~ "(" ~ inner:pattern ~ ")" }
+  -> TypedPattern::Constructor {
+      name: intern(name),
+      fields: [inner],
+  }
+
+// Unit constructor: None(), Nil() - requires parens to distinguish from binding
+pattern_constructor_unit = { name:identifier ~ "(" ~ ")" }
+  -> TypedPattern::Constructor {
+      name: intern(name),
+      fields: [],
+  }
+
+// Literal patterns
+pattern_literal = { pat:string_literal | pat:int_literal | pat:bool_literal }
+  -> pat
+
+// Wildcard pattern: _
+pattern_wildcard = { "_" }
+  -> TypedPattern::Wildcard {}
+
+// Binding pattern: just an identifier (catches any value)
+pattern_binding = { name:identifier }
+  -> TypedPattern::Identifier {
+      name: intern(name),
+      is_mutable: false,
+  }
+
+// Wildcard (legacy, also used in expressions)
 wildcard = { "_" }
   -> TypedExpression::Wildcard {}
 
@@ -1969,10 +2185,34 @@ primary_expr = {
     f_string_literal |
     string_literal |
     bool_literal |
+    tuple_expr |          // Must come before grouped_expr (both start with '(')
     grouped_expr |
     path_expr |
     var_expr
 }
+
+// Tuple expression: (a, b) or (a, b, c)
+// Must come before grouped_expr since both start with '('
+tuple_expr = { e:tuple_expr_2 | e:tuple_expr_3 | e:tuple_expr_4 }
+  -> e
+
+// Two-element tuple: (a, b)
+tuple_expr_2 = { "(" ~ e1:expr ~ "," ~ e2:expr ~ ")" }
+  -> TypedExpression::Tuple {
+      elements: [e1, e2],
+  }
+
+// Three-element tuple: (a, b, c)
+tuple_expr_3 = { "(" ~ e1:expr ~ "," ~ e2:expr ~ "," ~ e3:expr ~ ")" }
+  -> TypedExpression::Tuple {
+      elements: [e1, e2, e3],
+  }
+
+// Four-element tuple: (a, b, c, d)
+tuple_expr_4 = { "(" ~ e1:expr ~ "," ~ e2:expr ~ "," ~ e3:expr ~ "," ~ e4:expr ~ ")" }
+  -> TypedExpression::Tuple {
+      elements: [e1, e2, e3, e4],
+  }
 
 // ============================================================================
 // Load with Type Cast

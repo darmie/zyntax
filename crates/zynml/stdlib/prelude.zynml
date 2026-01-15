@@ -17,12 +17,12 @@
 // Display trait - types that can be converted to string representation
 // Types implementing Display can be used with println() and string interpolation
 trait Display {
-    fn to_string(self) -> String
+    def to_string(self): String
 }
 
 // Debug trait - types with debug representation (more verbose than Display)
 trait Debug {
-    fn debug_string(self) -> String
+    def debug_string(self): String
 }
 
 // ============================================================================
@@ -32,43 +32,43 @@ trait Debug {
 // Add trait - enables x + y
 trait Add<Rhs> {
     type Output
-    fn add(self, rhs: Rhs) -> Output
+    def add(self, rhs: Rhs): Output
 }
 
 // Sub trait - enables x - y
 trait Sub<Rhs> {
     type Output
-    fn sub(self, rhs: Rhs) -> Output
+    def sub(self, rhs: Rhs): Output
 }
 
 // Mul trait - enables x * y
 trait Mul<Rhs> {
     type Output
-    fn mul(self, rhs: Rhs) -> Output
+    def mul(self, rhs: Rhs): Output
 }
 
 // Div trait - enables x / y
 trait Div<Rhs> {
     type Output
-    fn div(self, rhs: Rhs) -> Output
+    def div(self, rhs: Rhs): Output
 }
 
 // Mod trait - enables x % y
 trait Mod<Rhs> {
     type Output
-    fn mod(self, rhs: Rhs) -> Output
+    def mod(self, rhs: Rhs): Output
 }
 
 // MatMul trait - enables x @ y (matrix multiplication)
 trait MatMul<Rhs> {
     type Output
-    fn matmul(self, rhs: Rhs) -> Output
+    def matmul(self, rhs: Rhs): Output
 }
 
 // Neg trait - enables -x (unary negation)
 trait Neg {
     type Output
-    fn neg(self) -> Output
+    def neg(self): Output
 }
 
 // ============================================================================
@@ -77,16 +77,16 @@ trait Neg {
 
 // Eq trait - enables x == y and x != y
 trait Eq<Rhs> {
-    fn eq(self, rhs: Rhs) -> bool
-    fn ne(self, rhs: Rhs) -> bool
+    def eq(self, rhs: Rhs): bool
+    def ne(self, rhs: Rhs): bool
 }
 
 // Ord trait - enables x < y, x > y, x <= y, x >= y
 trait Ord<Rhs> {
-    fn lt(self, rhs: Rhs) -> bool
-    fn gt(self, rhs: Rhs) -> bool
-    fn le(self, rhs: Rhs) -> bool
-    fn ge(self, rhs: Rhs) -> bool
+    def lt(self, rhs: Rhs): bool
+    def gt(self, rhs: Rhs): bool
+    def le(self, rhs: Rhs): bool
+    def ge(self, rhs: Rhs): bool
 }
 
 // ============================================================================
@@ -96,25 +96,25 @@ trait Ord<Rhs> {
 // BitAnd trait - enables x & y
 trait BitAnd<Rhs> {
     type Output
-    fn bitand(self, rhs: Rhs) -> Output
+    def bitand(self, rhs: Rhs): Output
 }
 
 // BitOr trait - enables x | y
 trait BitOr<Rhs> {
     type Output
-    fn bitor(self, rhs: Rhs) -> Output
+    def bitor(self, rhs: Rhs): Output
 }
 
 // BitXor trait - enables x ^ y
 trait BitXor<Rhs> {
     type Output
-    fn bitxor(self, rhs: Rhs) -> Output
+    def bitxor(self, rhs: Rhs): Output
 }
 
 // Not trait - enables !x (unary not)
 trait Not {
     type Output
-    fn not(self) -> Output
+    def not(self): Output
 }
 
 // ============================================================================
@@ -124,13 +124,13 @@ trait Not {
 // Index trait - enables x[i]
 trait Index<Idx> {
     type Output
-    fn index(self, idx: Idx) -> Output
+    def index(self, idx: Idx): Output
 }
 
 // IndexMut trait - enables x[i] = v
 trait IndexMut<Idx> {
     type Output
-    fn index_mut(self, idx: Idx) -> Output
+    def index_mut(self, idx: Idx): Output
 }
 
 // ============================================================================
@@ -139,12 +139,12 @@ trait IndexMut<Idx> {
 
 // Clone trait - types that can be deeply copied
 trait Clone {
-    fn clone(self) -> Self
+    def clone(self): Self
 }
 
 // Drop trait - types with custom cleanup logic
 trait Drop {
-    fn drop(self)
+    def drop(self)
 }
 
 // ============================================================================
@@ -154,14 +154,14 @@ trait Drop {
 // Iterator trait - enables for loops
 trait Iterator {
     type Item
-    fn next(self) -> Option<Item>
+    def next(self): Option<Item>
 }
 
 // IntoIterator trait - types that can be converted to iterators
 trait IntoIterator {
     type Item
     type IntoIter: Iterator<Item>
-    fn into_iter(self) -> IntoIter
+    def into_iter(self): IntoIter
 }
 
 // ============================================================================
@@ -171,14 +171,14 @@ trait IntoIterator {
 // From trait - value-to-value conversion that consumes the input
 // Used for type conversions, e.g., Duration::from(1000)
 trait From<T> {
-    fn from(value: T) -> Self
+    def from(value: T): Self
 }
 
 // Into trait - value-to-value conversion that consumes self
 // Used for type conversions, e.g., duration.into()
 // Note: Usually auto-implemented via blanket impl when From is implemented
 trait Into<T> {
-    fn into(self) -> T
+    def into(self): T
 }
 
 // ============================================================================
@@ -211,17 +211,17 @@ struct List<T> {
 
 impl<T> List<T> {
     // Create an empty list
-    fn new() -> List<T> {
+    def new(): List<T> {
         List { data: 0, len: 0, capacity: 0 }
     }
 
     // Get the length of the list
-    fn length(self) -> i64 {
+    def length(self): i64 {
         self.len
     }
 
     // Check if list is empty
-    fn is_empty(self) -> bool {
+    def is_empty(self): bool {
         self.len == 0
     }
 }
@@ -236,7 +236,7 @@ struct ListIterator<T> {
 impl<T> Iterator for ListIterator<T> {
     type Item = T
 
-    fn next(self) -> Option<T> {
+    def next(self): Option<T> {
         if self.index >= self.list_len {
             Option::None
         } else {
@@ -253,11 +253,684 @@ impl<T> IntoIterator for List<T> {
     type Item = T
     type IntoIter = ListIterator<T>
 
-    fn into_iter(self) -> ListIterator<T> {
+    def into_iter(self): ListIterator<T> {
         ListIterator {
             list_data: self.data,
             list_len: self.len,
             index: 0
         }
     }
+}
+
+// ============================================================================
+// HashMap and HashSet - Collection Types
+// ============================================================================
+//
+// Note: HashMap<K, V> and HashSet<T> are built-in generic types recognized
+// by the compiler. They are backed by ZRTL runtime implementations.
+// Factory functions are provided below for creating instances.
+//
+// Usage:
+//   let map = hashmap_new()
+//   hashmap_insert(map, "key", 42)
+//   let value = hashmap_get(map, "key")
+//
+// ============================================================================
+
+// HashMap factory and operations (wrapper functions for ZRTL externs)
+// These call through to ZRTL hashmap functions - mappings defined in grammar
+def hashmap_new(): i64 {
+    extern hashmap_new_impl()
+}
+
+def hashmap_with_capacity(capacity: i64): i64 {
+    extern hashmap_with_capacity_impl(capacity)
+}
+
+def hashmap_insert(map: i64, key: i64, value: i64): i64 {
+    extern hashmap_insert_impl(map, key, value)
+}
+
+def hashmap_get(map: i64, key: i64): i64 {
+    extern hashmap_get_impl(map, key)
+}
+
+def hashmap_remove(map: i64, key: i64): i64 {
+    extern hashmap_remove_impl(map, key)
+}
+
+def hashmap_contains_key(map: i64, key: i64): bool {
+    extern hashmap_contains_key_impl(map, key)
+}
+
+def hashmap_len(map: i64): i64 {
+    extern hashmap_len_impl(map)
+}
+
+def hashmap_clear(map: i64) {
+    extern hashmap_clear_impl(map)
+}
+
+// HashSet factory and operations (wrapper functions for ZRTL externs)
+def hashset_new(): i64 {
+    extern hashset_new_impl()
+}
+
+def hashset_insert(set: i64, value: i64): bool {
+    extern hashset_insert_impl(set, value)
+}
+
+def hashset_remove(set: i64, value: i64): bool {
+    extern hashset_remove_impl(set, value)
+}
+
+def hashset_contains(set: i64, value: i64): bool {
+    extern hashset_contains_impl(set, value)
+}
+
+def hashset_len(set: i64): i64 {
+    extern hashset_len_impl(set)
+}
+
+def hashset_clear(set: i64) {
+    extern hashset_clear_impl(set)
+}
+
+// ============================================================================
+// Option Methods
+// ============================================================================
+
+impl<T> Option<T> {
+    // Check if Some
+    def is_some(self): bool {
+        match self {
+            case Some(_) { true }
+            case None() { false }
+        }
+    }
+
+    // Check if None
+    def is_none(self): bool {
+        match self {
+            case Some(_) { false }
+            case None() { true }
+        }
+    }
+
+    // Get value or default
+    def unwrap_or(self, default: T): T {
+        match self {
+            case Some(v) { v }
+            case None() { default }
+        }
+    }
+
+    // Get value or compute default
+    def unwrap_or_else(self, f: def(): T): T {
+        match self {
+            case Some(v) { v }
+            case None() { f() }
+        }
+    }
+
+    // Map the contained value
+    def map<U>(self, f: def(T): U): ?U {
+        match self {
+            case Some(v) { Some(f(v)) }
+            case None() { None }
+        }
+    }
+
+    // Flat map (chain with another Option-returning function)
+    def and_then<U>(self, f: def(T): ?U): ?U {
+        match self {
+            case Some(v) { f(v) }
+            case None() { None }
+        }
+    }
+
+    // Return self if Some, otherwise call f
+    def or_else(self, f: def(): ?T): ?T {
+        match self {
+            case Some(_) { self }
+            case None() { f() }
+        }
+    }
+
+    // Filter with predicate
+    def filter(self, pred: def(T): bool): ?T {
+        match self {
+            case Some(v) { if pred(v) { Some(v) } else { None } }
+            case None() { None }
+        }
+    }
+
+    // Convert to Result with given error
+    def ok_or<E>(self, err: E): Result<T, E> {
+        match self {
+            case Some(v) { Ok(v) }
+            case None() { Err(err) }
+        }
+    }
+}
+
+// ============================================================================
+// Result Methods
+// ============================================================================
+
+impl<T, E> Result<T, E> {
+    // Check if Ok
+    def is_ok(self): bool {
+        match self {
+            case Ok(_) { true }
+            case Err(_) { false }
+        }
+    }
+
+    // Check if Err
+    def is_err(self): bool {
+        match self {
+            case Ok(_) { false }
+            case Err(_) { true }
+        }
+    }
+
+    // Get value or default
+    def unwrap_or(self, default: T): T {
+        match self {
+            case Ok(v) { v }
+            case Err(_) { default }
+        }
+    }
+
+    // Get value or compute from error
+    def unwrap_or_else(self, f: def(E): T): T {
+        match self {
+            case Ok(v) { v }
+            case Err(e) { f(e) }
+        }
+    }
+
+    // Map the Ok value
+    def map<U>(self, f: def(T): U): Result<U, E> {
+        match self {
+            case Ok(v) { Ok(f(v)) }
+            case Err(e) { Err(e) }
+        }
+    }
+
+    // Map the Err value
+    def map_err<F>(self, f: def(E): F): Result<T, F> {
+        match self {
+            case Ok(v) { Ok(v) }
+            case Err(e) { Err(f(e)) }
+        }
+    }
+
+    // Flat map (chain with another Result-returning function)
+    def and_then<U>(self, f: def(T): Result<U, E>): Result<U, E> {
+        match self {
+            case Ok(v) { f(v) }
+            case Err(e) { Err(e) }
+        }
+    }
+
+    // Return self if Ok, otherwise call f
+    def or_else<F>(self, f: def(E): Result<T, F>): Result<T, F> {
+        match self {
+            case Ok(v) { Ok(v) }
+            case Err(e) { f(e) }
+        }
+    }
+
+    // Convert to Option, discarding error
+    def ok(self): ?T {
+        match self {
+            case Ok(v) { Some(v) }
+            case Err(_) { None }
+        }
+    }
+
+    // Convert to Option with error
+    def err(self): ?E {
+        match self {
+            case Ok(_) { None }
+            case Err(e) { Some(e) }
+        }
+    }
+}
+
+// ============================================================================
+// Iterator Combinators (Full Implementation with Complex Trait Bounds)
+// ============================================================================
+
+// MapIterator - transforms elements using a function
+struct MapIterator<I, F, T, U> {
+    iter: I,
+    mapper: F
+}
+
+impl<I, F, T, U> Iterator for MapIterator<I, F, T, U>
+    where I: Iterator<Item=T>,
+          F: def(T): U
+{
+    type Item = U
+
+    def next(self): ?U {
+        match self.iter.next() {
+            case Some(item) { Some(self.mapper(item)) }
+            case None() { None }
+        }
+    }
+}
+
+// FilterIterator - filters elements based on predicate
+struct FilterIterator<I, P, T> {
+    iter: I,
+    predicate: P
+}
+
+impl<I, P, T> Iterator for FilterIterator<I, P, T>
+    where I: Iterator<Item=T>,
+          P: def(T): bool
+{
+    type Item = T
+
+    def next(self): ?T {
+        while true {
+            match self.iter.next() {
+                case Some(item) {
+                    if self.predicate(item) {
+                        return Some(item)
+                    }
+                }
+                case None() { return None }
+            }
+        }
+    }
+}
+
+// TakeIterator - takes first n elements
+struct TakeIterator<I, T> {
+    iter: I,
+    remaining: i64
+}
+
+impl<I, T> Iterator for TakeIterator<I, T>
+    where I: Iterator<Item=T>
+{
+    type Item = T
+
+    def next(self): ?T {
+        if self.remaining <= 0 {
+            None
+        } else {
+            self.remaining = self.remaining - 1
+            self.iter.next()
+        }
+    }
+}
+
+// SkipIterator - skips first n elements
+struct SkipIterator<I, T> {
+    iter: I,
+    remaining: i64
+}
+
+impl<I, T> Iterator for SkipIterator<I, T>
+    where I: Iterator<Item=T>
+{
+    type Item = T
+
+    def next(self): ?T {
+        while self.remaining > 0 {
+            self.remaining = self.remaining - 1
+            self.iter.next()
+        }
+        self.iter.next()
+    }
+}
+
+// EnumerateIterator - pairs each element with its index
+struct EnumerateIterator<I, T> {
+    iter: I,
+    index: i64
+}
+
+impl<I, T> Iterator for EnumerateIterator<I, T>
+    where I: Iterator<Item=T>
+{
+    type Item = (i64, T)
+
+    def next(self): ?(i64, T) {
+        match self.iter.next() {
+            case Some(item) {
+                let idx = self.index
+                self.index = self.index + 1
+                Some((idx, item))
+            }
+            case None() { None }
+        }
+    }
+}
+
+// ZipIterator - combines two iterators element-wise
+struct ZipIterator<I1, I2, T1, T2> {
+    iter1: I1,
+    iter2: I2
+}
+
+impl<I1, I2, T1, T2> Iterator for ZipIterator<I1, I2, T1, T2>
+    where I1: Iterator<Item=T1>,
+          I2: Iterator<Item=T2>
+{
+    type Item = (T1, T2)
+
+    def next(self): ?(T1, T2) {
+        match self.iter1.next() {
+            case Some(item1) {
+                match self.iter2.next() {
+                    case Some(item2) { Some((item1, item2)) }
+                    case None() { None }
+                }
+            }
+            case None() { None }
+        }
+    }
+}
+
+// ChainIterator - chains two iterators sequentially
+struct ChainIterator<I1, I2, T> {
+    iter1: I1,
+    iter2: I2,
+    first_exhausted: bool
+}
+
+impl<I1, I2, T> Iterator for ChainIterator<I1, I2, T>
+    where I1: Iterator<Item=T>,
+          I2: Iterator<Item=T>
+{
+    type Item = T
+
+    def next(self): ?T {
+        if !self.first_exhausted {
+            match self.iter1.next() {
+                case Some(item) { Some(item) }
+                case None() {
+                    self.first_exhausted = true
+                    self.iter2.next()
+                }
+            }
+        } else {
+            self.iter2.next()
+        }
+    }
+}
+
+// FlatMapIterator - maps and flattens
+struct FlatMapIterator<I, F, Inner, T, U> {
+    iter: I,
+    mapper: F,
+    current: ?Inner
+}
+
+impl<I, F, Inner, T, U> Iterator for FlatMapIterator<I, F, Inner, T, U>
+    where I: Iterator<Item=T>,
+          F: def(T): Inner,
+          Inner: Iterator<Item=U>
+{
+    type Item = U
+
+    def next(self): ?U {
+        while true {
+            // Try to get from current inner iterator
+            match self.current {
+                case Some(inner) {
+                    match inner.next() {
+                        case Some(item) { return Some(item) }
+                        case None() { self.current = None }
+                    }
+                }
+                case None() {
+                    // Get next inner iterator from outer
+                    match self.iter.next() {
+                        case Some(item) { self.current = Some(self.mapper(item)) }
+                        case None() { return None }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Iterator Combinator Methods (via Extension Trait)
+// ============================================================================
+
+// Extension methods for all iterators
+trait IteratorExt<T> {
+    // Transform each element
+    def map<U>(self, f: def(T): U): MapIterator<Self, def(T): U, T, U>
+
+    // Filter elements
+    def filter(self, pred: def(T): bool): FilterIterator<Self, def(T): bool, T>
+
+    // Take first n elements
+    def take(self, n: i64): TakeIterator<Self, T>
+
+    // Skip first n elements
+    def skip(self, n: i64): SkipIterator<Self, T>
+
+    // Enumerate with indices
+    def enumerate(self): EnumerateIterator<Self, T>
+
+    // Zip with another iterator
+    def zip<U, I2: Iterator<Item=U>>(self, other: I2): ZipIterator<Self, I2, T, U>
+
+    // Chain with another iterator
+    def chain<I2: Iterator<Item=T>>(self, other: I2): ChainIterator<Self, I2, T>
+
+    // Map and flatten
+    def flat_map<U, Inner: Iterator<Item=U>>(self, f: def(T): Inner): FlatMapIterator<Self, def(T): Inner, Inner, T, U>
+
+    // Fold/reduce to single value
+    def fold<A>(self, init: A, f: def(A, T): A): A
+
+    // Collect into a List
+    def collect(self): List<T>
+
+    // Find first matching element
+    def find(self, pred: def(T): bool): ?T
+
+    // Check if any element matches
+    def any(self, pred: def(T): bool): bool
+
+    // Check if all elements match
+    def all(self, pred: def(T): bool): bool
+
+    // Count elements
+    def count(self): i64
+
+    // Get first element
+    def first(self): ?T
+
+    // Get last element
+    def last(self): ?T
+
+    // For each - apply function for side effects
+    def for_each(self, f: def(T))
+}
+
+// Blanket implementation for all Iterator types
+impl<I, T> IteratorExt<T> for I
+    where I: Iterator<Item=T>
+{
+    def map<U>(self, f: def(T): U): MapIterator<I, def(T): U, T, U> {
+        MapIterator { iter: self, mapper: f }
+    }
+
+    def filter(self, pred: def(T): bool): FilterIterator<I, def(T): bool, T> {
+        FilterIterator { iter: self, predicate: pred }
+    }
+
+    def take(self, n: i64): TakeIterator<I, T> {
+        TakeIterator { iter: self, remaining: n }
+    }
+
+    def skip(self, n: i64): SkipIterator<I, T> {
+        SkipIterator { iter: self, remaining: n }
+    }
+
+    def enumerate(self): EnumerateIterator<I, T> {
+        EnumerateIterator { iter: self, index: 0 }
+    }
+
+    def zip<U, I2: Iterator<Item=U>>(self, other: I2): ZipIterator<I, I2, T, U> {
+        ZipIterator { iter1: self, iter2: other }
+    }
+
+    def chain<I2: Iterator<Item=T>>(self, other: I2): ChainIterator<I, I2, T> {
+        ChainIterator { iter1: self, iter2: other, first_exhausted: false }
+    }
+
+    def flat_map<U, Inner: Iterator<Item=U>>(self, f: def(T): Inner): FlatMapIterator<I, def(T): Inner, Inner, T, U> {
+        FlatMapIterator { iter: self, mapper: f, current: None }
+    }
+
+    def fold<A>(self, init: A, f: def(A, T): A): A {
+        mut acc = init
+        while true {
+            match self.next() {
+                case Some(item) { acc = f(acc, item) }
+                case None() { return acc }
+            }
+        }
+    }
+
+    def collect(self): List<T> {
+        mut result = List::new()
+        while true {
+            match self.next() {
+                case Some(item) { result.push(item) }
+                case None() { return result }
+            }
+        }
+    }
+
+    def find(self, pred: def(T): bool): ?T {
+        while true {
+            match self.next() {
+                case Some(item) {
+                    if pred(item) {
+                        return Some(item)
+                    }
+                }
+                case None() { return None }
+            }
+        }
+    }
+
+    def any(self, pred: def(T): bool): bool {
+        while true {
+            match self.next() {
+                case Some(item) {
+                    if pred(item) {
+                        return true
+                    }
+                }
+                case None() { return false }
+            }
+        }
+    }
+
+    def all(self, pred: def(T): bool): bool {
+        while true {
+            match self.next() {
+                case Some(item) {
+                    if !pred(item) {
+                        return false
+                    }
+                }
+                case None() { return true }
+            }
+        }
+    }
+
+    def count(self): i64 {
+        mut n = 0
+        while true {
+            match self.next() {
+                case Some(_) { n = n + 1 }
+                case None() { return n }
+            }
+        }
+    }
+
+    def first(self): ?T {
+        self.next()
+    }
+
+    def last(self): ?T {
+        mut last_item: ?T = None
+        while true {
+            match self.next() {
+                case Some(item) { last_item = Some(item) }
+                case None() { return last_item }
+            }
+        }
+    }
+
+    def for_each(self, f: def(T)) {
+        while true {
+            match self.next() {
+                case Some(item) { f(item) }
+                case None() { return }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Standalone Iterator Functions (for convenience)
+// ============================================================================
+// These provide a functional-style API that works with any iterable
+
+// Fold/reduce a collection to a single value
+def fold<T, A>(items: List<T>, init: A, f: def(A, T): A): A {
+    items.into_iter().fold(init, f)
+}
+
+// Find first matching element
+def find<T>(items: List<T>, pred: def(T): bool): ?T {
+    items.into_iter().find(pred)
+}
+
+// Check if any element matches
+def any<T>(items: List<T>, pred: def(T): bool): bool {
+    items.into_iter().any(pred)
+}
+
+// Check if all elements match
+def all<T>(items: List<T>, pred: def(T): bool): bool {
+    items.into_iter().all(pred)
+}
+
+// Count elements in a list
+def count<T>(items: List<T>): i64 {
+    items.into_iter().count()
+}
+
+// Get first element
+def first<T>(items: List<T>): ?T {
+    items.into_iter().first()
+}
+
+// Get last element
+def last<T>(items: List<T>): ?T {
+    items.into_iter().last()
+}
+
+// For each - apply function to each element (side effects only)
+def for_each<T>(items: List<T>, f: def(T)) {
+    items.into_iter().for_each(f)
 }
