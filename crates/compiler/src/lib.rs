@@ -31,6 +31,7 @@ pub mod associated_type_resolver;  // Associated type resolution for trait dispa
 pub mod analysis;
 pub mod effect_analysis;  // Effect inference and checking for algebraic effects
 pub mod effect_handler_resolution;  // Handler resolution for effect dispatch
+pub mod effect_codegen;  // Code generation support for algebraic effects
 pub mod borrow_check;  // HIR-level borrow checking pass
 pub mod optimization;
 pub mod memory_optimization;  // Memory-aware optimizations
@@ -99,6 +100,13 @@ pub use effect_handler_resolution::{
     HandlerScopeTree, HandlerScopeNode, ResolutionStats,
     resolve_handlers, resolve_handlers_with_analysis,
     can_inline_handler, get_optimization_level,
+};
+pub use effect_codegen::{
+    EffectCodegenContext, HandlerStackEntry, StateVarInfo, HandlerStateInfo,
+    PerformEffectCodegen, PerformStrategy, HandleEffectCodegen,
+    analyze_perform_effect, analyze_handle_effect,
+    mangle_handler_op_name, mangle_handler_state_name,
+    HandlerOpInfo, get_handler_ops_info,
 };
 pub use async_support::{
     AsyncCompiler, AsyncStateMachine, AsyncState, AsyncRuntime, AsyncRuntimeType,
