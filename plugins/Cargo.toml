@@ -29,6 +29,7 @@ members = [
     "zrtl_audio",
     "zrtl_text",
     "zrtl_model",
+    "zrtl_effects",
 ]
 
 [workspace.dependencies]

@@ -1,0 +1,13 @@
+[package]
+name = "zrtl_effects"
+version = "0.1.0"
+edition = "2021"
+description = "ZRTL Effects plugin - Algebraic effects runtime support"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+zrtl = { path = "../../sdk/zrtl" }
+libc = "0.2"
