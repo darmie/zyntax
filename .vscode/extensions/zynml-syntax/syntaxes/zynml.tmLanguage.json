@@ -208,48 +208,84 @@
     "operators": {
       "patterns": [
         {
+          "comment": "Pipe operator",
           "name": "keyword.operator.pipe.zynml",
           "match": "\\|>"
         },
         {
-          "name": "keyword.operator.arrow.zynml",
-          "match": "=>|->|:"
+          "comment": "Fat arrow (lambda)",
+          "name": "keyword.operator.arrow.fat.zynml",
+          "match": "=>"
         },
         {
-          "name": "keyword.operator.nullcoalesce.zynml",
-          "match": "\\?\\?"
+          "comment": "Thin arrow (return type - legacy)",
+          "name": "keyword.operator.arrow.thin.zynml",
+          "match": "->"
         },
         {
-          "name": "keyword.operator.optional.zynml",
-          "match": "\\?"
-        },
-        {
+          "comment": "Path separator",
           "name": "keyword.operator.path.zynml",
           "match": "::"
         },
         {
+          "comment": "Type annotation colon",
+          "name": "punctuation.separator.type.zynml",
+          "match": ":"
+        },
+        {
+          "comment": "Null coalescing",
+          "name": "keyword.operator.nullcoalesce.zynml",
+          "match": "\\?\\?"
+        },
+        {
+          "comment": "Optional/unwrap",
+          "name": "keyword.operator.optional.zynml",
+          "match": "\\?"
+        },
+        {
+          "comment": "Spread/range operators",
           "name": "keyword.operator.spread.zynml",
           "match": "\\.\\.\\.|\\.\\."
         },
         {
-          "name": "keyword.operator.comparison.zynml",
-          "match": "==|!=|<=|>=|<|>"
+          "comment": "Equality comparison (must come before assignment)",
+          "name": "keyword.operator.comparison.equality.zynml",
+          "match": "==|!="
         },
         {
+          "comment": "Relational comparison",
+          "name": "keyword.operator.comparison.relational.zynml",
+          "match": "<=|>=|<|>"
+        },
+        {
+          "comment": "Compound assignment (must come before simple assignment)",
+          "name": "keyword.operator.assignment.compound.zynml",
+          "match": "\\+=|-=|\\*=|/=|%=|&=|\\|=|\\^=|<<=|>>="
+        },
+        {
+          "comment": "Simple assignment",
+          "name": "keyword.operator.assignment.zynml",
+          "match": "="
+        },
+        {
+          "comment": "Logical operators",
           "name": "keyword.operator.logical.zynml",
           "match": "&&|\\|\\||!"
         },
         {
+          "comment": "Arithmetic operators",
           "name": "keyword.operator.arithmetic.zynml",
           "match": "\\+|-|\\*|/|%|@"
         },
         {
-          "name": "keyword.operator.bitwise.zynml",
-          "match": "&|\\||\\^|~|<<|>>"
+          "comment": "Bitwise shift (must come before < >)",
+          "name": "keyword.operator.bitwise.shift.zynml",
+          "match": "<<|>>"
         },
         {
-          "name": "keyword.operator.assignment.zynml",
-          "match": "=|\\+=|-=|\\*=|/="
+          "comment": "Bitwise operators",
+          "name": "keyword.operator.bitwise.zynml",
+          "match": "&|\\||\\^|~"
         }
       ]
     },
