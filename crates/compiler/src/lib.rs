@@ -215,14 +215,9 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
     use zyntax_typed_ast::type_registry::{ImplDef, MethodImpl, MethodSig, ParamDef};
     use zyntax_typed_ast::Type;
 
-    eprintln!("[REGISTER_IMPL] Checking {} declarations", program.declarations.len());
-
     // First pass: Register all traits
-    eprintln!("[REGISTER_IMPL] First pass: registering traits...");
-    let mut trait_count = 0;
     for decl in program.declarations.iter() {
         if let TypedDeclaration::Interface(trait_decl) = &decl.node {
-            trait_count += 1;
             let trait_def = zyntax_typed_ast::type_registry::TraitDef {
                 id: zyntax_typed_ast::type_registry::TypeId::next(),
                 name: trait_decl.name,
@@ -234,40 +229,53 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
                 span: trait_decl.span,
             };
             program.type_registry.register_trait(trait_def);
-            eprintln!("[REGISTER_IMPL] Registered trait {:?}", trait_decl.name);
         }
     }
-    eprintln!("[REGISTER_IMPL] Registered {} traits", trait_count);
 
     // Second pass: Register impl blocks
-    eprintln!("[REGISTER_IMPL] Second pass: registering impl blocks...");
     let mut impl_count = 0;
-    for (idx, decl) in program.declarations.iter().enumerate() {
-        // Log all declaration types to debug
-        if idx < 10 || idx >= program.declarations.len() - 10 {
-            eprintln!("[REGISTER_IMPL] Decl {}: {:?}", idx, std::mem::discriminant(&decl.node));
-        }
-
+    for decl in program.declarations.iter() {
         if let TypedDeclaration::Impl(impl_block) = &decl.node {
             impl_count += 1;
-            eprintln!("[REGISTER_IMPL] Found impl block #{} for trait {:?}", impl_count, impl_block.trait_name);
 
             // Check if this is an inherent impl (empty trait name)
             let trait_name_str = impl_block.trait_name.resolve_global().unwrap_or_else(|| String::new());
             let is_inherent = trait_name_str.is_empty();
 
             if is_inherent {
-                eprintln!("[REGISTER_IMPL] Found inherent impl block (no trait), registering methods on type");
 
                 // For inherent impls, register methods directly on the type
                 // Resolve the implementing type
                 let implementing_type_id = match &impl_block.for_type {
                     Type::Unresolved(name) => {
+                        // Try to look up by resolved name if InternedString doesn't match
+                        let name_str = name.resolve_global().unwrap_or_default();
+                        let by_name = program.type_registry.get_type_by_name(*name);
+                        if let Some(type_def) = by_name {
+                            Some(type_def.id)
+                        } else {
+                            // Try with a fresh InternedString from the name string
+                            let fresh_name = zyntax_typed_ast::InternedString::new_global(&name_str);
+                            if let Some(type_def) = program.type_registry.get_type_by_name(fresh_name) {
+                                Some(type_def.id)
+                            } else {
+                                None
+                            }
+                        }
+                    }
+                    Type::Extern { name, .. } => {
+                        // Look up extern type by name
+                        let name_str = name.resolve_global().unwrap_or_default();
                         if let Some(type_def) = program.type_registry.get_type_by_name(*name) {
                             Some(type_def.id)
                         } else {
-                            eprintln!("[REGISTER_IMPL] Could not resolve type {:?} for inherent impl", name);
-                            None
+                            // Try with a fresh InternedString
+                            let fresh_name = zyntax_typed_ast::InternedString::new_global(&name_str);
+                            if let Some(type_def) = program.type_registry.get_type_by_name(fresh_name) {
+                                Some(type_def.id)
+                            } else {
+                                None
+                            }
                         }
                     }
                     Type::Named { id, .. } => Some(*id),
@@ -312,8 +320,6 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
 
                         // Register the inherent method on the type
                         program.type_registry.add_method_to_type(type_id, method_sig.clone());
-                        eprintln!("[REGISTER_IMPL] Registered inherent method '{}' on type {:?}",
-                            method.name.resolve_global().unwrap_or_default(), type_id);
                     }
                 }
                 continue;
@@ -325,13 +331,11 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
                 None => {
                     // Try to resolve trait name for better warning message
                     let trait_name_str = impl_block.trait_name.resolve_global().unwrap_or_else(|| format!("{:?}", impl_block.trait_name));
-                    log::warn!("[REGISTER_IMPL] Trait '{}' not found in registry, skipping impl block", trait_name_str);
-                    eprintln!("[REGISTER_IMPL] WARNING: Trait '{}' not found, skipping impl block", trait_name_str);
+                    log::warn!("Trait '{}' not found in registry, skipping impl block", trait_name_str);
                     continue;
                 }
             };
             let trait_id = trait_def.id;
-            eprintln!("[REGISTER_IMPL] Trait ID: {:?}", trait_id);
 
             // Resolve the implementing type
             let implementing_type = match &impl_block.for_type {
@@ -404,11 +408,9 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
             };
 
             program.type_registry.register_implementation(impl_def.clone());
-            eprintln!("[REGISTER_IMPL] Registered impl for type {:?} trait {:?}", implementing_type, trait_id);
         }
     }
 
-    eprintln!("[REGISTER_IMPL] Registration complete - registered {} impl blocks", impl_count);
     Ok(())
 }
 
@@ -449,8 +451,6 @@ pub fn generate_abstract_trait_impls(program: &mut zyntax_typed_ast::TypedProgra
     use zyntax_typed_ast::arena::InternedString;
     use zyntax_typed_ast::source::Span;
     use std::collections::HashMap;
-
-    eprintln!("[AUTO_TRAITS] Generating automatic trait implementations for abstract types");
 
     // Binary operation traits that should be automatically implemented for numeric types
     let binary_traits = vec![
@@ -495,10 +495,6 @@ pub fn generate_abstract_trait_impls(program: &mut zyntax_typed_ast::TypedProgra
             );
 
             if is_numeric {
-                let type_name_str = type_name.resolve_global().unwrap_or_default();
-                eprintln!("[AUTO_TRAITS] Type '{}' wraps numeric type {:?}, generating trait impls",
-                    type_name_str, underlying_type);
-
                 let abstract_type = Type::Named {
                     id: type_id,
                     type_args: vec![],
@@ -558,7 +554,6 @@ pub fn generate_abstract_trait_impls(program: &mut zyntax_typed_ast::TypedProgra
     let count = generated_impls.len();
     program.declarations.extend(generated_impls);
 
-    eprintln!("[AUTO_TRAITS] Generated {} declarations (impl blocks + functions)", count);
 
     Ok(())
 }
@@ -582,7 +577,6 @@ fn generate_binary_trait_impl(
 
     // Check if trait exists
     if program.type_registry.get_trait_by_name(trait_name_interned).is_none() {
-        eprintln!("[AUTO_TRAITS] Trait '{}' not found in registry, skipping", trait_name);
         return Ok(None);
     }
 
@@ -821,7 +815,6 @@ fn generate_binary_trait_impl(
         Span::default(),
     );
 
-    eprintln!("[AUTO_TRAITS] Generated {} impl and function {} for {:?}", trait_name, mangled_name, abstract_type);
 
     Ok(Some((impl_decl, func_decl)))
 }
@@ -844,7 +837,6 @@ fn generate_comparison_trait_impl(
 
     // Check if trait exists
     if program.type_registry.get_trait_by_name(trait_name_interned).is_none() {
-        eprintln!("[AUTO_TRAITS] Trait '{}' not found in registry, skipping", trait_name);
         return Ok(None);
     }
 
@@ -1030,7 +1022,6 @@ fn generate_comparison_trait_impl(
             Span::default(),
         ));
 
-        eprintln!("[AUTO_TRAITS] Generated standalone function '{}' for {} trait", mangled_name, trait_name);
     }
 
     // Create impl block
@@ -1049,7 +1040,6 @@ fn generate_comparison_trait_impl(
         Span::default(),
     );
 
-    eprintln!("[AUTO_TRAITS] Generated {} impl for {:?}", trait_name, abstract_type);
 
     Ok(Some((impl_decl, standalone_functions)))
 }
@@ -1073,7 +1063,6 @@ fn generate_unary_trait_impl(
 
     // Check if trait exists
     if program.type_registry.get_trait_by_name(trait_name_interned).is_none() {
-        eprintln!("[AUTO_TRAITS] Trait '{}' not found in registry, skipping", trait_name);
         return Ok(None);
     }
 

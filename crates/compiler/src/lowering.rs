@@ -445,7 +445,6 @@ impl LoweringContext {
         }
 
         // TODO: Also check for types with Copy annotation/attribute
-        eprintln!("[OWNERSHIP] Initialized {} Copy types", self.copy_types.len());
     }
 
     /// Create a borrow of a value, returning the borrow's HirId
@@ -612,8 +611,6 @@ impl LoweringContext {
         use zyntax_typed_ast::Type;
         use std::collections::HashMap;
 
-        eprintln!("[RESOLVE_TYPES] Resolving method call return types...");
-
         // Iterate through all declarations and resolve method calls
         for decl in &mut program.declarations {
             match &mut decl.node {
@@ -626,8 +623,6 @@ impl LoweringContext {
                 _ => {}
             }
         }
-
-        eprintln!("[RESOLVE_TYPES] Method call type resolution complete");
         Ok(())
     }
 
@@ -659,10 +654,11 @@ impl LoweringContext {
             TypedStatement::Let(let_stmt) => {
                 if let Some(init) = &mut let_stmt.initializer {
                     self.resolve_method_calls_in_expression(init, var_types)?;
-                    // If the let statement has type Any and the initializer has a resolved type, update it
-                    if matches!(let_stmt.ty, Type::Any) && !matches!(init.ty, Type::Any) {
+                    // If the let statement has type Any/Unknown and the initializer has a resolved type, update it
+                    let needs_update = matches!(let_stmt.ty, Type::Any | Type::Unknown);
+                    let has_resolved = !matches!(init.ty, Type::Any | Type::Unknown);
+                    if needs_update && has_resolved {
                         let_stmt.ty = init.ty.clone();
-                        eprintln!("[RESOLVE_TYPES] Updated let statement type to: {:?}", let_stmt.ty);
                     }
                     // Register the variable's type for later lookups
                     var_types.insert(let_stmt.name, let_stmt.ty.clone());
@@ -694,12 +690,51 @@ impl LoweringContext {
                     self.resolve_method_calls_in_expression(arg, var_types)?;
                 }
 
-                // If the method call has Type::Any, resolve it
+                // If the method call has Type::Any or Type::Unknown, resolve it
                 // First, get the actual receiver type (may need to look up from var_types)
-                if matches!(expr.ty, Type::Any) {
+                if matches!(expr.ty, Type::Any | Type::Unknown) {
                     let receiver_type = if let TypedExpression::Variable(var_name) = &method_call.receiver.node {
-                        // Look up variable type from our symbol table
-                        var_types.get(var_name).cloned().unwrap_or_else(|| method_call.receiver.ty.clone())
+                        // First check if this is a type name (static method call like Tensor::arange)
+                        if let Some(type_def) = self.type_registry.get_type_by_name(*var_name) {
+                            // This is a static method call - look for the method in the type's methods
+                            for method in &type_def.methods {
+                                if method.name == method_call.method {
+                                    expr.ty = method.return_type.clone();
+                                    return Ok(());
+                                }
+                            }
+                            // Also check impl blocks for this type
+                            for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                                for impl_def in impls {
+                                    // Check if this impl is for our type (by name comparison for extern types)
+                                    let impl_for_this_type = match &impl_def.for_type {
+                                        Type::Named { id, .. } => *id == type_def.id,
+                                        Type::Extern { name, .. } => *name == *var_name,
+                                        Type::Unresolved(name) => *name == *var_name,
+                                        _ => false,
+                                    };
+                                    if impl_for_this_type {
+                                        for method in &impl_def.methods {
+                                            if method.signature.name == method_call.method {
+                                                expr.ty = method.signature.return_type.clone();
+                                                return Ok(());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Type found but method not found - return type as Named
+                            Type::Named {
+                                id: type_def.id,
+                                type_args: vec![],
+                                const_args: vec![],
+                                variance: vec![],
+                                nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                            }
+                        } else {
+                            // Not a type name, try looking up as variable
+                            var_types.get(var_name).cloned().unwrap_or_else(|| method_call.receiver.ty.clone())
+                        }
                     } else {
                         method_call.receiver.ty.clone()
                     };
@@ -715,7 +750,6 @@ impl LoweringContext {
                                             if method.signature.name == method_call.method {
                                                 // Update the expression type
                                                 expr.ty = method.signature.return_type.clone();
-                                                eprintln!("[RESOLVE_TYPES] Resolved method call return type: {:?}", expr.ty);
                                                 break;
                                             }
                                         }
@@ -728,7 +762,61 @@ impl LoweringContext {
             }
             TypedExpression::Call(call) => {
                 // Check if this is an associated function call (Type::method syntax)
-                if let TypedExpression::Variable(func_name) = &call.callee.node {
+                // First check for Path expressions (Tensor::arange parsed as Path)
+                if let TypedExpression::Path(path) = &call.callee.node {
+                    if path.segments.len() == 2 {
+                        let type_name_interned = path.segments[0];
+                        let method_name_interned = path.segments[1];
+                        let type_name = type_name_interned.resolve_global().unwrap_or_default();
+                        let method_name = method_name_interned.resolve_global().unwrap_or_default();
+
+                        // Look up the type and find the method return type
+                        if let Some(type_def) = self.type_registry.get_type_by_name(type_name_interned) {
+                            // First check inherent methods on the type
+                            for method in &type_def.methods {
+                                if method.name == method_name_interned {
+                                    // Found it! Set the Call expression's return type
+                                    expr.ty = method.return_type.clone();
+                                    break;
+                                }
+                            }
+
+                            // If not found in inherent methods, check impl blocks
+                            if matches!(expr.ty, Type::Any | Type::Unknown) {
+                                for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                                    for impl_def in impls {
+                                        let impl_for_this_type = match &impl_def.for_type {
+                                            Type::Named { id, .. } => *id == type_def.id,
+                                            Type::Extern { name, .. } => *name == type_name_interned,
+                                            Type::Unresolved(name) => *name == type_name_interned,
+                                            _ => false,
+                                        };
+                                        if impl_for_this_type {
+                                            for method in &impl_def.methods {
+                                                if method.signature.name == method_name_interned {
+                                                    expr.ty = method.signature.return_type.clone();
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Also try to resolve the mangled name
+                        if let Some(mangled_name) = self.resolve_associated_function_to_mangled(
+                            &type_name,
+                            &method_name
+                        ) {
+                            // Replace the Path with the mangled Variable name
+                            let mangled_interned = InternedString::new_global(&mangled_name);
+                            call.callee.node = TypedExpression::Variable(mangled_interned);
+                        }
+                    }
+                }
+                // Also check for Variable with "::" in name (fallback for other parsing)
+                else if let TypedExpression::Variable(func_name) = &call.callee.node {
                     let func_name_str = func_name.resolve_global()
                         .or_else(|| {
                             let arena = self.arena.lock().unwrap();
@@ -752,7 +840,6 @@ impl LoweringContext {
                                     // Replace the Variable with the mangled name
                                     let mangled_interned = InternedString::new_global(&mangled_name);
                                     call.callee.node = TypedExpression::Variable(mangled_interned);
-                                    eprintln!("[RESOLVE] Associated function {}::{} -> {}", type_name, method_name, mangled_name);
                                 }
                             }
                         }
@@ -884,6 +971,21 @@ impl LoweringContext {
                                 continue; // Can't resolve type, skip
                             }
                         }
+                        zyntax_typed_ast::Type::Extern { name, .. } => {
+                            // Handle extern types (e.g., Tensor, Vector)
+                            if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
+                                type_def.name
+                            } else {
+                                // Try with fresh InternedString in case of arena mismatch
+                                let name_str = name.resolve_global().unwrap_or_default();
+                                let fresh_name = InternedString::new_global(&name_str);
+                                if let Some(type_def) = self.type_registry.get_type_by_name(fresh_name) {
+                                    type_def.name
+                                } else {
+                                    continue; // Can't resolve type, skip
+                                }
+                            }
+                        }
                         _ => continue, // Non-named types, skip
                     };
 
@@ -932,10 +1034,16 @@ impl LoweringContext {
     
     /// Lower a declaration
     fn lower_declaration(&mut self, decl: &TypedNode<TypedDeclaration>) -> CompilerResult<()> {
-        eprintln!("[LOWER_DECL] Processing: {:?}", std::mem::discriminant(&decl.node));
         match &decl.node {
             TypedDeclaration::Function(func) => {
-                self.lower_function(func)?;
+                // Catch and warn about function failures - complex generic functions may fail
+                // but we shouldn't fail the entire compilation for unused code
+                if let Err(e) = self.lower_function(func) {
+                    let func_name = func.name.resolve_global().unwrap_or_default();
+                    eprintln!("[LOWERING WARN] Skipping function '{}': {:?}", func_name, e);
+                    // Remove from symbol table if it was registered
+                    self.symbols.functions.remove(&func.name);
+                }
             }
             
             TypedDeclaration::Variable(var) => {
@@ -955,7 +1063,20 @@ impl LoweringContext {
             }
 
             TypedDeclaration::Impl(impl_block) => {
-                self.lower_impl_block(impl_block)?;
+                // Catch and warn about impl block failures - complex generics may fail
+                // but we shouldn't fail the entire compilation for unused code
+                if let Err(e) = self.lower_impl_block(impl_block) {
+                    let trait_name = impl_block.trait_name.resolve_global().unwrap_or_default();
+                    let type_name = match &impl_block.for_type {
+                        zyntax_typed_ast::Type::Named { id, .. } => {
+                            self.type_registry.get_type_by_id(*id)
+                                .map(|t| t.name.resolve_global().unwrap_or_default())
+                                .unwrap_or_else(|| format!("{:?}", id))
+                        }
+                        _ => format!("{:?}", impl_block.for_type)
+                    };
+                    eprintln!("[LOWERING WARN] Skipping impl {} for {}: {:?}", trait_name, type_name, e);
+                }
             }
 
             TypedDeclaration::Effect(effect) => {
@@ -1146,21 +1267,11 @@ impl LoweringContext {
 
     /// Convert function signature
     fn convert_function_signature(&self, func: &TypedFunction) -> CompilerResult<HirFunctionSignature> {
-        eprintln!("[CONVERT_SIG] Converting function '{}' signature",
-            func.name.resolve_global().unwrap_or_default());
-
         let mut params = Vec::new();
 
         for param in &func.params {
-            eprintln!("[CONVERT_SIG] Param '{}': TypedAST type = {:?}",
-                param.name.resolve_global().unwrap_or_default(), param.ty);
-
             // Keep abstract types as nominal for method dispatch
             let hir_type = self.convert_type(&param.ty);
-
-            eprintln!("[CONVERT_SIG] Param '{}': HIR type = {:?}",
-                param.name.resolve_global().unwrap_or_default(), hir_type);
-
             let attributes = self.compute_param_attributes(&param.ty, param.mutability);
 
             params.push(HirParam {
@@ -1171,7 +1282,6 @@ impl LoweringContext {
             });
         }
 
-        eprintln!("[CONVERT_SIG] Return type: TypedAST = {:?}", func.return_type);
         // Keep abstract types as nominal for method dispatch
         // For void/unit functions, use empty returns vec (not vec![Void])
         let hir_return_type = self.convert_type(&func.return_type);
@@ -1180,7 +1290,6 @@ impl LoweringContext {
         } else {
             vec![hir_return_type]
         };
-        eprintln!("[CONVERT_SIG] Return type: HIR = {:?}", returns);
         
         // Convert type params from TypedFunction to HirTypeParam
         let hir_type_params: Vec<crate::hir::HirTypeParam> = func.type_params.iter().map(|tp| {
@@ -1384,20 +1493,16 @@ impl LoweringContext {
             Type::Extern { name, .. } => {
                 // External/opaque types from ZRTL plugins
                 // These are represented as opaque pointers at the HIR level
-                eprintln!("[DEBUG convert_type] Converting Type::Extern with name='{}'", name.resolve_global().unwrap_or_default());
                 HirType::Opaque(*name)
             }
 
             Type::Unresolved(name) => {
                 // Look up the type in TypeRegistry - first try aliases, then try named types
-                eprintln!("[DEBUG convert_type] Resolving unresolved type '{}'", name.resolve_global().unwrap_or_default());
                 if let Some(resolved_type) = self.type_registry.resolve_alias(*name) {
-                    eprintln!("[DEBUG convert_type] Found alias for '{}': {:?}", name.resolve_global().unwrap_or_default(), resolved_type);
                     // Recursively convert the resolved type
                     self.convert_type(resolved_type)
                 } else if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
                     // Found a named type (struct, enum, etc.) - convert it as Named type
-                    eprintln!("[DEBUG convert_type] Found named type for '{}': {:?}", name.resolve_global().unwrap_or_default(), type_def.kind);
                     let named_type = Type::Named {
                         id: type_def.id,
                         type_args: vec![],
@@ -1407,7 +1512,7 @@ impl LoweringContext {
                     };
                     self.convert_type(&named_type)
                 } else {
-                    eprintln!("[WARN] Could not resolve type '{}', defaulting to I64", name.resolve_global().unwrap_or_default());
+                    log::warn!("Could not resolve type '{}', defaulting to I64", name.resolve_global().unwrap_or_default());
                     HirType::I64 // Fallback
                 }
             }
@@ -1992,6 +2097,23 @@ impl LoweringContext {
                 (TypedExpression::Struct(retyped_struct), expr_node.ty.clone())
             }
 
+            // Method call - retype the receiver and arguments
+            TypedExpression::MethodCall(method_call) => {
+                use zyntax_typed_ast::TypedMethodCall;
+                let retyped_receiver = self.retype_expression_node_with_self(&method_call.receiver, self_params);
+                let retyped_positional_args = method_call.positional_args.iter().map(|arg| {
+                    self.retype_expression_node_with_self(arg, self_params)
+                }).collect();
+                let retyped_method_call = TypedMethodCall {
+                    receiver: Box::new(retyped_receiver),
+                    method: method_call.method,
+                    type_args: method_call.type_args.clone(),
+                    positional_args: retyped_positional_args,
+                    named_args: method_call.named_args.clone(),
+                };
+                (TypedExpression::MethodCall(retyped_method_call), expr_node.ty.clone())
+            }
+
             // All other expression types - just clone
             _ => (expr_node.node.clone(), expr_node.ty.clone()),
         };
@@ -2277,7 +2399,15 @@ impl LoweringContext {
             };
 
             // Lower the method as a regular function
-            self.lower_function(&func)?;
+            // Catch errors for individual methods - complex generic methods may fail
+            // but we don't want to fail the entire impl block
+            if let Err(e) = self.lower_function(&func) {
+                let method_name_str = mangled_name.resolve_global().unwrap_or_default();
+                eprintln!("[LOWERING WARN] Skipping method '{}': {:?}", method_name_str, e);
+                // Remove the function from the symbols table so SSA doesn't try to process it
+                self.symbols.functions.remove(&mangled_name);
+                continue;
+            }
         }
 
         Ok(())
@@ -3251,7 +3381,21 @@ impl LoweringContext {
         // Lower each implementation
         for (trait_id, impl_defs) in implementations {
             for impl_def in &impl_defs {
-                self.lower_impl(trait_id, impl_def)?;
+                // Skip impls that fail - methods may not have been lowered
+                if let Err(e) = self.lower_impl(trait_id, impl_def) {
+                    let type_name = match &impl_def.for_type {
+                        zyntax_typed_ast::Type::Named { id, .. } => {
+                            self.type_registry.get_type_by_id(*id)
+                                .map(|t| t.name.resolve_global().unwrap_or_default().to_string())
+                                .unwrap_or_else(|| format!("{:?}", id))
+                        }
+                        zyntax_typed_ast::Type::Extern { name, .. } => {
+                            name.resolve_global().unwrap_or_default().to_string()
+                        }
+                        other => format!("{:?}", other),
+                    };
+                    eprintln!("[LOWERING WARN] Skipping trait impl for '{}': {:?}", type_name, e);
+                }
             }
         }
 
@@ -3287,6 +3431,20 @@ impl LoweringContext {
         // Step 2: Extract type_id from for_type (nominal types only)
         let type_id = match &impl_def.for_type {
             zyntax_typed_ast::Type::Named { id, .. } => *id,
+            zyntax_typed_ast::Type::Extern { name, .. } => {
+                // Extern types (like $Tensor) don't have TypeIds - they're handled by ZRTL
+                // Skip trait impl lowering for extern types as they use runtime dispatch
+                eprintln!("[LOWERING WARN] Skipping trait impl for extern type '{}' - ZRTL handles these",
+                    name.resolve_global().unwrap_or_default());
+                return Ok(());
+            }
+            zyntax_typed_ast::Type::Unresolved(name) => {
+                // Unresolved types are generic type parameters (like I, T, etc.)
+                // Skip trait impl lowering for these as they require monomorphization
+                eprintln!("[LOWERING WARN] Skipping trait impl for unresolved type '{}' - requires monomorphization",
+                    name.resolve_global().unwrap_or_default());
+                return Ok(());
+            }
             _ => {
                 return Err(crate::CompilerError::Analysis(
                     "Impl for_type must be a named type (nominal typing only)".to_string()

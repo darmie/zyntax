@@ -471,8 +471,6 @@ impl TypeChecker {
     fn emit_inference_error(&mut self, error: InferenceError, span: Span) {
         match error {
             InferenceError::TypeMismatch { expected, found } => {
-                eprintln!("[EMIT_ERROR] TypeMismatch at span ({}, {}): expected={:?}, found={:?}",
-                    span.start, span.end, expected, found);
                 let expected_str = self.format_type(&expected);
                 let found_str = self.format_type(&found);
                 self.diagnostics

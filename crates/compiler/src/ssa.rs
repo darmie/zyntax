@@ -449,10 +449,19 @@ impl SsaBuilder {
         }
 
         // Keep processing until worklist is empty
+        // Use a shared error cell to capture errors from the closure
+        use std::cell::RefCell;
+        let first_error: RefCell<Option<crate::CompilerError>> = RefCell::new(None);
+
         while !worklist.is_empty() {
             let mut made_progress = false;
 
             worklist.retain(|&node_idx| {
+                // If we already have an error, just remove remaining items
+                if first_error.borrow().is_some() {
+                    return false;
+                }
+
                 let typed_block = &cfg.graph[node_idx];
                 let block_id = typed_block.id;
 
@@ -484,7 +493,10 @@ impl SsaBuilder {
                 // Extract pattern bindings if this is a match arm body
                 if let Some(pattern_info) = &typed_block.pattern_check {
                     if let Some(variant_index) = pattern_info.variant_index {
-                        self.extract_pattern_bindings(block_id, &pattern_info.pattern, variant_index).unwrap();
+                        if let Err(e) = self.extract_pattern_bindings(block_id, &pattern_info.pattern, variant_index) {
+                            *first_error.borrow_mut() = Some(e);
+                            return false;
+                        }
                     }
                 }
 
@@ -492,11 +504,20 @@ impl SsaBuilder {
                 // Track current block - try expressions may create continuation blocks
                 let mut current_block = block_id;
                 for stmt in &typed_block.statements {
-                    current_block = self.process_statement(current_block, stmt).unwrap();
+                    match self.process_statement(current_block, stmt) {
+                        Ok(next_block) => current_block = next_block,
+                        Err(e) => {
+                            *first_error.borrow_mut() = Some(e);
+                            return false;
+                        }
+                    }
                 }
 
                 // Process the terminator
-                self.process_typed_terminator(current_block, &typed_block.terminator, &typed_block.pattern_check).unwrap();
+                if let Err(e) = self.process_typed_terminator(current_block, &typed_block.terminator, &typed_block.pattern_check) {
+                    *first_error.borrow_mut() = Some(e);
+                    return false;
+                }
 
                 // Mark block as filled
                 self.filled_blocks.insert(block_id);
@@ -510,6 +531,11 @@ impl SsaBuilder {
                 made_progress = true;
                 false // Remove from worklist
             });
+
+            // Check if there was an error during the retain
+            if let Some(err) = first_error.borrow_mut().take() {
+                return Err(err);
+            }
 
             if !made_progress && !worklist.is_empty() {
                 // No progress made but worklist not empty - force process remaining blocks
@@ -1124,34 +1150,14 @@ impl SsaBuilder {
                     let write_block = self.continuation_block.unwrap_or(block_id);
 
                     // Record variable type (both HIR and TypedAST versions)
-                    eprintln!("[VAR_TYPE DEBUG] Variable '{}' CONVERTING: let_stmt.ty={:?}",
-                        let_stmt.name.resolve_global().unwrap_or_default(),
-                        let_stmt.ty);
-
                     let hir_type = self.convert_type(&let_stmt.ty);
-
-                    eprintln!("[VAR_TYPE DEBUG] Variable '{}' BEFORE insert: let_stmt.ty={:?}, hir_type={:?}, initializer.ty={:?}",
-                        let_stmt.name.resolve_global().unwrap_or_default(),
-                        let_stmt.ty,
-                        hir_type,
-                        value.ty);
-
                     self.var_types.insert(let_stmt.name, hir_type.clone());
-
-                    eprintln!("[VAR_TYPE DEBUG] Variable '{}' AFTER insert, var_types[{}] = {:?}",
-                        let_stmt.name.resolve_global().unwrap_or_default(),
-                        let_stmt.name.resolve_global().unwrap_or_default(),
-                        self.var_types.get(&let_stmt.name));
 
                     // For TypedAST type, use initializer's type if variable type is Any
                     // This works around the issue where type inference doesn't update the AST
                     let typed_ast_type = if matches!(let_stmt.ty, Type::Any) {
-                        eprintln!("[VAR_TYPE] Variable '{}' has Any type, using initializer type: {:?}",
-                            let_stmt.name.resolve_global().unwrap_or_default(), value.ty);
                         value.ty.clone()
                     } else {
-                        eprintln!("[VAR_TYPE] Variable '{}' has explicit type: {:?}",
-                            let_stmt.name.resolve_global().unwrap_or_default(), let_stmt.ty);
                         let_stmt.ty.clone()
                     };
                     self.var_typed_ast_types.insert(let_stmt.name, typed_ast_type);
@@ -1514,6 +1520,7 @@ impl SsaBuilder {
                         (crate::hir::HirCallable::Function(func_id), None)
                     } else {
                         // Variable lookup (function pointer)
+                        log::debug!("[SSA] Function '{}' not in function_symbols, falling back to indirect call", name_str);
                         let callee_val = self.translate_expression(block_id, callee)?;
                         (crate::hir::HirCallable::Indirect(callee_val), Some(callee_val))
                     }
@@ -3048,6 +3055,13 @@ impl SsaBuilder {
                 let mangled = format!("{}${}", type_name_str, method_name_str);
                 drop(arena);
                 return Ok(InternedString::new_global(&mangled));
+            }
+            Type::Unknown | Type::Any => {
+                let method_name_str = self.arena.lock().unwrap().resolve_string(method_name)
+                    .unwrap_or_default().to_string();
+                return Err(crate::CompilerError::Analysis(
+                    format!("Cannot resolve method '{}' on unknown type - add a type annotation to the variable", method_name_str)
+                ))
             }
             _ => {
                 return Err(crate::CompilerError::Analysis(

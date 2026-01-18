@@ -642,35 +642,51 @@ unsafe fn format_dynamic_box(value: &zrtl::DynamicBox, output: &mut String) {
 /// Supports ALL known ZRTL runtime types including Array, Tuple, Optional, etc.
 ///
 /// # Safety
-/// The DynamicBox must be valid
+/// The pointer must point to a valid DynamicBox
 #[no_mangle]
-pub unsafe extern "C" fn io_print_dynamic(value: zrtl::DynamicBox) {
+pub unsafe extern "C" fn io_print_dynamic(value_ptr: *const zrtl::DynamicBox) {
+    if value_ptr.is_null() {
+        print!("null");
+        return;
+    }
     let mut output = String::new();
-    format_dynamic_box(&value, &mut output);
+    format_dynamic_box(&*value_ptr, &mut output);
     print!("{}", output);
 }
 
 /// Print any DynamicBox value with newline
 #[no_mangle]
-pub unsafe extern "C" fn io_println_dynamic(value: zrtl::DynamicBox) {
+pub unsafe extern "C" fn io_println_dynamic(value_ptr: *const zrtl::DynamicBox) {
+    if value_ptr.is_null() {
+        println!("null");
+        return;
+    }
     let mut output = String::new();
-    format_dynamic_box(&value, &mut output);
+    format_dynamic_box(&*value_ptr, &mut output);
     println!("{}", output);
 }
 
 /// Print any DynamicBox value to stderr
 #[no_mangle]
-pub unsafe extern "C" fn io_eprint_dynamic(value: zrtl::DynamicBox) {
+pub unsafe extern "C" fn io_eprint_dynamic(value_ptr: *const zrtl::DynamicBox) {
+    if value_ptr.is_null() {
+        eprint!("null");
+        return;
+    }
     let mut output = String::new();
-    format_dynamic_box(&value, &mut output);
+    format_dynamic_box(&*value_ptr, &mut output);
     eprint!("{}", output);
 }
 
 /// Print any DynamicBox value to stderr with newline
 #[no_mangle]
-pub unsafe extern "C" fn io_eprintln_dynamic(value: zrtl::DynamicBox) {
+pub unsafe extern "C" fn io_eprintln_dynamic(value_ptr: *const zrtl::DynamicBox) {
+    if value_ptr.is_null() {
+        eprintln!("null");
+        return;
+    }
     let mut output = String::new();
-    format_dynamic_box(&value, &mut output);
+    format_dynamic_box(&*value_ptr, &mut output);
     eprintln!("{}", output);
 }
 
@@ -678,9 +694,12 @@ pub unsafe extern "C" fn io_eprintln_dynamic(value: zrtl::DynamicBox) {
 ///
 /// Returns a new ZRTL string that must be freed with string_free.
 #[no_mangle]
-pub unsafe extern "C" fn io_format_dynamic(value: zrtl::DynamicBox) -> StringPtr {
+pub unsafe extern "C" fn io_format_dynamic(value_ptr: *const zrtl::DynamicBox) -> StringPtr {
+    if value_ptr.is_null() {
+        return string_new("null");
+    }
     let mut output = String::new();
-    format_dynamic_box(&value, &mut output);
+    format_dynamic_box(&*value_ptr, &mut output);
     string_new(&output)
 }
 

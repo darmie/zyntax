@@ -502,6 +502,13 @@ pub extern "C" fn tensor_arange_f32(start: f32, end: f32, step: f32) -> TensorPt
     tensor
 }
 
+/// Create a tensor with values in range (f64 wrapper for f32 version)
+/// Accepts f64 parameters but creates f32 tensors (common ML use case)
+#[no_mangle]
+pub extern "C" fn tensor_arange(start: f64, end: f64, step: f64) -> TensorPtr {
+    tensor_arange_f32(start as f32, end as f32, step as f32)
+}
+
 /// Create a tensor with n evenly spaced values between start and end
 #[no_mangle]
 pub extern "C" fn tensor_linspace_f32(start: f32, end: f32, n: usize) -> TensorPtr {
@@ -1604,12 +1611,14 @@ pub extern "C" fn tensor_to_string(tensor: TensorPtr) -> *mut u8 {
         }
     };
 
-    // Convert to ZRTL string (null-terminated, heap-allocated)
+    // Convert to ZRTL string (heap-allocated)
+    // ZRTL string format: [i32 length][utf8 bytes...]
+    // Header size is 4 bytes (one i32 for length)
     let bytes = result.as_bytes();
     let len = bytes.len();
 
-    // Allocate: [i32 cap][i32 len][bytes...][null]
-    let total_size = 8 + len + 1;
+    // Allocate: [i32 len][bytes...]
+    let total_size = 4 + len;
     let layout = std::alloc::Layout::from_size_align(total_size, 4).unwrap();
     let ptr = unsafe { std::alloc::alloc(layout) };
 
@@ -1618,14 +1627,10 @@ pub extern "C" fn tensor_to_string(tensor: TensorPtr) -> *mut u8 {
     }
 
     unsafe {
-        // Write capacity
-        *(ptr as *mut i32) = (len + 1) as i32;
-        // Write length
-        *(ptr.add(4) as *mut i32) = len as i32;
-        // Copy string data
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(8), len);
-        // Null terminate
-        *ptr.add(8 + len) = 0;
+        // Write length at offset 0
+        *(ptr as *mut i32) = len as i32;
+        // Copy string data at offset 4
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(4), len);
     }
 
     ptr
@@ -1873,6 +1878,7 @@ zrtl_plugin! {
         ("$Tensor$from_array_f32", tensor_from_array_f32, (i64) -> opaque),  // array ptr
         ("$Tensor$from_raw_f32", tensor_from_raw_f32, (i64, u64) -> opaque),  // ptr + count (usize)
         ("$Tensor$arange_f32", tensor_arange_f32, (f32, f32, f32) -> opaque),
+        ("$Tensor$arange", tensor_arange, (f64, f64, f64) -> opaque),  // f64 wrapper for convenience
         ("$Tensor$linspace_f32", tensor_linspace_f32, (f32, f32, u64) -> opaque),  // start, end, n (usize)
         ("$Tensor$rand_f32", tensor_rand_f32, (i64, u32) -> opaque),  // shape_ptr, ndim
         ("$Tensor$randn_f32", tensor_randn_f32, (i64, u32) -> opaque),  // shape_ptr, ndim

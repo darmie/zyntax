@@ -166,7 +166,6 @@ impl Grammar2 {
         // Iterate over all builtins from @builtin directive
         for (source_name, target_symbol) in &self.grammar.builtins.functions {
             log::debug!("[Grammar2] Processing builtin: {} -> {}", source_name, target_symbol);
-            eprintln!("[DEBUG inject_builtin] Creating alias: {} -> {}", source_name, target_symbol);
 
             // Get return type from @types.function_returns if available
             let return_type = if let Some(type_str) = self.grammar.type_decls.function_returns.get(source_name) {
@@ -177,12 +176,9 @@ impl Grammar2 {
                 }
             } else if let Some(sigs) = signatures {
                 if let Some(sig) = sigs.get(target_symbol.as_str()) {
-                    log::debug!("[Grammar2] Found ZRTL signature for {}: params={}, return={:?}",
-                        target_symbol, sig.param_count, sig.return_type);
-                    Self::type_tag_to_type(&sig.return_type)
+                    // Use type_tag_to_type_with_symbol to infer opaque type from symbol name
+                    Self::type_tag_to_type_with_symbol(&sig.return_type, target_symbol)
                 } else {
-                    log::warn!("[Grammar2] No ZRTL signature found for {}, using Type::Any. Available keys: {:?}",
-                        target_symbol, sigs.keys().collect::<Vec<_>>());
                     Type::Any
                 }
             } else {
@@ -304,6 +300,30 @@ impl Grammar2 {
             TypeCategory::String => Type::Primitive(PrimitiveType::String),
             TypeCategory::Opaque => Type::Any,
             _ => Type::Any,
+        }
+    }
+
+    /// Convert a ZRTL TypeTag to a Type, using the symbol name for opaque type inference
+    fn type_tag_to_type_with_symbol(tag: &zyntax_compiler::zrtl::TypeTag, symbol: &str) -> Type {
+        use zyntax_compiler::zrtl::TypeCategory;
+
+        // For opaque types, infer the type name from the symbol
+        // e.g., "$Tensor$add" -> type is "$Tensor"
+        if tag.category() == TypeCategory::Opaque {
+            // Extract type name from symbol: "$Type$method" -> "$Type"
+            if symbol.starts_with('$') {
+                if let Some(second_dollar) = symbol[1..].find('$') {
+                    let type_name = &symbol[..second_dollar + 1]; // Include the leading $
+                    return Type::Extern {
+                        name: InternedString::new_global(type_name),
+                        layout: None,
+                    };
+                }
+            }
+            // Couldn't parse symbol, fall back to Any
+            Type::Any
+        } else {
+            Self::type_tag_to_type(tag)
         }
     }
 }

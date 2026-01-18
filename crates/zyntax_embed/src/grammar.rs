@@ -485,12 +485,6 @@ impl LanguageGrammar {
         use zyntax_typed_ast::type_registry::{Type, PrimitiveType};
         use zyntax_typed_ast::{typed_node, Span, Visibility, CallingConvention, Mutability, InternedString};
 
-        eprintln!("[DEBUG inject_builtin_externs] Called with {} existing declarations", program.declarations.len());
-        eprintln!("[DEBUG inject_builtin_externs] Builtins.functions has {} entries", self.module.metadata.builtins.functions.len());
-        if let Some(sigs) = signatures {
-            eprintln!("[DEBUG inject_builtin_externs] Plugin signatures available: {} entries", sigs.len());
-        }
-
         let span = Span::new(0, 0); // Synthetic span for injected declarations
 
         // Iterate over all builtins from @builtin directive
@@ -504,8 +498,9 @@ impl LanguageGrammar {
                 }
             } else if let Some(sigs) = signatures {
                 // Try to get return type from plugin signature
+                // Use type_tag_to_type_with_symbol to infer opaque type from symbol name
                 sigs.get(target_symbol.as_str())
-                    .map(|sig| Self::type_tag_to_type(&sig.return_type))
+                    .map(|sig| Self::type_tag_to_type_with_symbol(&sig.return_type, target_symbol))
                     .unwrap_or(Type::Any)
             } else {
                 Type::Any
@@ -586,10 +581,6 @@ impl LanguageGrammar {
             }
         }
 
-        eprintln!("[DEBUG inject_builtin_externs] Added {} extern declarations, total now: {}",
-            self.module.metadata.builtins.functions.len(),
-            program.declarations.len());
-
         Ok(())
     }
 
@@ -634,11 +625,37 @@ impl LanguageGrammar {
             }
             TypeCategory::String => Type::Primitive(PrimitiveType::String),
             TypeCategory::Opaque => {
-                // For opaque types, use Any for now
-                // TODO: Could use Type::Extern with proper name if we had type registry
+                // For opaque types, we need the symbol name to infer the type
+                // Use placeholder that will be replaced by the calling code
                 Type::Any
             }
             _ => Type::Any,  // Fallback for complex types
+        }
+    }
+
+    /// Convert a ZRTL TypeTag to a Type, using the symbol name for opaque type inference
+    fn type_tag_to_type_with_symbol(tag: &zyntax_compiler::zrtl::TypeTag, symbol: &str) -> zyntax_typed_ast::type_registry::Type {
+        use zyntax_compiler::zrtl::TypeCategory;
+        use zyntax_typed_ast::type_registry::Type;
+        use zyntax_typed_ast::InternedString;
+
+        // For opaque types, infer the type name from the symbol
+        // e.g., "$Tensor$add" -> type is "$Tensor"
+        if tag.category() == TypeCategory::Opaque {
+            // Extract type name from symbol: "$Type$method" -> "$Type"
+            if symbol.starts_with('$') {
+                if let Some(second_dollar) = symbol[1..].find('$') {
+                    let type_name = &symbol[..second_dollar + 1]; // Include the leading $
+                    return Type::Extern {
+                        name: InternedString::new_global(type_name),
+                        layout: None,
+                    };
+                }
+            }
+            // Couldn't parse symbol, fall back to Any
+            Type::Any
+        } else {
+            Self::type_tag_to_type(tag)
         }
     }
 }
