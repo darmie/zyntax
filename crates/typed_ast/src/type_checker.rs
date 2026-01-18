@@ -1175,7 +1175,15 @@ impl TypeChecker {
                 if let Some((ty, _mutability)) = self.lookup_local(*name) {
                     Ok(ty.clone())
                 } else {
-                    Err(TypeError::UndefinedVariable(*name))
+                    // In lenient mode, unknown variables (likely external functions)
+                    // get a fresh type variable instead of an error.
+                    // This supports gradual typing where external symbols may not be
+                    // fully typed. The actual resolution happens at codegen time.
+                    if !self.options.no_implicit_any {
+                        Ok(self.inference.fresh_type_var())
+                    } else {
+                        Err(TypeError::UndefinedVariable(*name))
+                    }
                 }
             }
 
@@ -1212,6 +1220,10 @@ impl TypeChecker {
             TypedExpression::ImportModifier(import) => {
                 // The type is resolved to the target_type (e.g., Image, AudioBuffer)
                 Ok(Type::Unresolved(import.target_type))
+            }
+            TypedExpression::Path(_) => {
+                // Path expressions need type resolution at a later stage
+                Ok(self.inference.fresh_type_var())
             }
         }
     }
@@ -1357,13 +1369,36 @@ impl TypeChecker {
                 has_named_params,
                 has_default_params,
                 ..
-            } => (
+            } => Some((
                 params.clone(),
                 return_type.as_ref().clone(),
                 *has_named_params,
                 *has_default_params,
-            ),
+            )),
+            // In lenient mode, unknown types (type variables, Any, Unknown) are allowed
+            // for function calls. We just check argument expressions and return a fresh type var.
+            Type::TypeVar(_) | Type::Any | Type::Unknown => {
+                // Check argument expressions for side effects and type consistency
+                for arg in &call.positional_args {
+                    self.check_expression(&arg.node)?;
+                }
+                for arg in &call.named_args {
+                    self.check_expression(&arg.value.node)?;
+                }
+                // Return fresh type variable since we don't know the return type
+                return Ok(self.inference.fresh_type_var());
+            }
             _ => {
+                if !self.options.no_implicit_any {
+                    // Lenient mode: allow unknown call types
+                    for arg in &call.positional_args {
+                        self.check_expression(&arg.node)?;
+                    }
+                    for arg in &call.named_args {
+                        self.check_expression(&arg.value.node)?;
+                    }
+                    return Ok(self.inference.fresh_type_var());
+                }
                 return Err(TypeError::TypeMismatch {
                     expected: Type::Function {
                         params: vec![],
@@ -1378,6 +1413,12 @@ impl TypeChecker {
                     found: callee_type,
                 })
             }
+        };
+
+        // If we don't have function type info, early return already happened above
+        let func_type = match func_type {
+            Some(ft) => ft,
+            None => return Ok(self.inference.fresh_type_var()),
         };
 
         let (expected_params, return_type, has_named_params, has_default_params) = func_type;

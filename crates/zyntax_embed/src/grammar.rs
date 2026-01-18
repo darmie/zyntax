@@ -36,6 +36,7 @@ use pest_vm::Vm;
 use zyn_peg::runtime::{
     AstHostFunctions, CommandInterpreter, RuntimeValue, TypedAstBuilder, ZpegModule,
 };
+use zyn_peg::grammar::{parse_grammar, GrammarIR};
 use zyntax_typed_ast::TypedProgram;
 
 /// Errors that can occur during grammar operations
@@ -73,9 +74,13 @@ pub type GrammarResult<T> = Result<T, GrammarError>;
 /// a precompiled `.zpeg` file or compiled from `.zyn` source.
 #[derive(Clone)]
 pub struct LanguageGrammar {
-    /// The compiled zpeg module
+    /// The compiled zpeg module (for metadata and legacy support)
     module: Arc<ZpegModule>,
+    /// Grammar2 parser (GrammarIR) for actually parsing source code
+    /// This is the preferred path as it correctly handles the new action format
+    grammar2: Option<Arc<GrammarIR>>,
     /// Cached pest VM for parsing (wrapped in Option for lazy initialization)
+    /// Only used as fallback when grammar2 is None
     vm: Arc<Mutex<Option<PestVmCache>>>,
 }
 
@@ -100,6 +105,7 @@ impl LanguageGrammar {
             .map_err(|e| GrammarError::LoadError(e.to_string()))?;
         Ok(Self {
             module: Arc::new(module),
+            grammar2: None, // No Grammar2 for pre-compiled modules
             vm: Arc::new(Mutex::new(None)),
         })
     }
@@ -113,6 +119,7 @@ impl LanguageGrammar {
             .map_err(|e| GrammarError::LoadError(format!("Invalid zpeg JSON: {}", e)))?;
         Ok(Self {
             module: Arc::new(module),
+            grammar2: None, // No Grammar2 for pre-compiled modules
             vm: Arc::new(Mutex::new(None)),
         })
     }
@@ -139,7 +146,7 @@ impl LanguageGrammar {
         use zyn_peg::runtime::ZpegCompiler;
         use zyn_peg::{Rule as ZynRule, ZynGrammarParser};
 
-        // Parse the .zyn grammar file
+        // Parse the .zyn grammar file using the old parser (for ZpegModule metadata)
         let pairs = ZynGrammarParser::parse(ZynRule::program, zyn_source)
             .map_err(|e| GrammarError::ParseError(format!("Failed to parse .zyn grammar: {}", e)))?;
 
@@ -147,12 +154,18 @@ impl LanguageGrammar {
         let grammar = build_grammar(pairs)
             .map_err(|e| GrammarError::ParseError(format!("Failed to build grammar: {}", e)))?;
 
-        // Compile to zpeg module
+        // Compile to zpeg module (for metadata)
         let module = ZpegCompiler::compile(&grammar)
             .map_err(|e| GrammarError::CompileError(e.to_string()))?;
 
+        // Also create a Grammar2 parser (GrammarIR) for actual parsing
+        // Grammar2 correctly handles the new action format
+        let grammar2 = parse_grammar(zyn_source)
+            .map_err(|e| GrammarError::CompileError(format!("Failed to compile Grammar2: {}", e)))?;
+
         Ok(Self {
             module: Arc::new(module),
+            grammar2: Some(Arc::new(grammar2)),
             vm: Arc::new(Mutex::new(None)),
         })
     }
@@ -170,6 +183,7 @@ impl LanguageGrammar {
     pub fn from_module(module: ZpegModule) -> Self {
         Self {
             module: Arc::new(module),
+            grammar2: None, // No Grammar2 for pre-compiled modules
             vm: Arc::new(Mutex::new(None)),
         }
     }
@@ -318,6 +332,44 @@ impl LanguageGrammar {
         source: &str,
         filename: &str,
     ) -> GrammarResult<TypedProgram> {
+        use zyntax_typed_ast::source::SourceFile;
+        use zyntax_typed_ast::type_registry::TypeRegistry;
+        use zyntax_typed_ast::TypedASTBuilder;
+        use zyn_peg::runtime2::{GrammarInterpreter, ParserState, ParseResult, ParsedValue};
+
+        // Use Grammar2 if available (preferred path - handles new action format correctly)
+        if let Some(grammar2) = &self.grammar2 {
+            log::debug!("[parse_to_typed_program] Using Grammar2 for parsing");
+
+            let interpreter = GrammarInterpreter::new(grammar2);
+            let mut builder = TypedASTBuilder::new();
+            let mut registry = TypeRegistry::new();
+            let mut state = ParserState::new(source, &mut builder, &mut registry);
+
+            let result = interpreter.parse(&mut state);
+
+            match result {
+                ParseResult::Success(ParsedValue::Program(mut program), _) => {
+                    program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
+                    return Ok(*program);
+                }
+                ParseResult::Success(other, _) => {
+                    log::warn!("[parse_to_typed_program] Grammar2 returned {:?}, expected Program",
+                        std::mem::discriminant(&other));
+                    return Err(GrammarError::AstBuildError("Grammar2 returned unexpected result type".into()));
+                }
+                ParseResult::Failure(e) => {
+                    return Err(GrammarError::SourceParseError(format!(
+                        "Parse error at {}:{}: expected {:?}",
+                        e.line, e.column, e.expected
+                    )));
+                }
+            }
+        }
+
+        // Fallback to old ZpegModule path (for pre-compiled grammars)
+        log::debug!("[parse_to_typed_program] Using legacy ZpegModule path");
+
         // Initialize or get the cached VM
         let rules = {
             let mut cache = self.vm.lock().unwrap();
@@ -342,7 +394,7 @@ impl LanguageGrammar {
         let mut interpreter = CommandInterpreter::new(&self.module, builder);
 
         // Walk the parse tree and execute commands
-        let result = walk_parse_tree(&mut interpreter, parse_result)?;
+        let _result = walk_parse_tree(&mut interpreter, parse_result)?;
 
         // Get the TypedProgram directly from the builder
         // We don't need the program_handle - just call build_program() which
@@ -485,29 +537,53 @@ impl LanguageGrammar {
                 vec![]  // No signatures provided - accept anything
             };
 
-            // Create extern function declaration
-            let extern_func = TypedFunction {
-                name: InternedString::new_global(target_symbol),
+            // 1. Create alias extern (e.g., println -> links to $IO$println_dynamic)
+            // This is what user code calls
+            let alias_func = TypedFunction {
+                name: InternedString::new_global(source_name),
                 annotations: vec![],
                 effects: vec![],
                 type_params: vec![],
-                params,
-                return_type,
+                params: params.clone(),
+                return_type: return_type.clone(),
                 body: None,  // Extern functions have no body
                 visibility: Visibility::Public,
                 is_async: false,
                 is_pure: false,
                 is_external: true,  // Mark as external
-                calling_convention: CallingConvention::Default, // Placeholder - backend resolves to platform convention
+                calling_convention: CallingConvention::Default,
                 link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
             };
-
-            // Add to program declarations
             program.declarations.push(typed_node(
-                TypedDeclaration::Function(extern_func),
+                TypedDeclaration::Function(alias_func),
                 Type::Primitive(PrimitiveType::Unit),
                 span,
             ));
+
+            // 2. Create symbol extern (e.g., $IO$println_dynamic) for direct calls
+            // Skip if source_name == target_symbol (avoid duplicates)
+            if source_name != target_symbol {
+                let extern_func = TypedFunction {
+                    name: InternedString::new_global(target_symbol),
+                    annotations: vec![],
+                    effects: vec![],
+                    type_params: vec![],
+                    params,
+                    return_type,
+                    body: None,  // Extern functions have no body
+                    visibility: Visibility::Public,
+                    is_async: false,
+                    is_pure: false,
+                    is_external: true,  // Mark as external
+                    calling_convention: CallingConvention::Default,
+                    link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
+                };
+                program.declarations.push(typed_node(
+                    TypedDeclaration::Function(extern_func),
+                    Type::Primitive(PrimitiveType::Unit),
+                    span,
+                ));
+            }
         }
 
         eprintln!("[DEBUG inject_builtin_externs] Added {} extern declarations, total now: {}",

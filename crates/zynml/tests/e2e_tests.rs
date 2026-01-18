@@ -1617,6 +1617,15 @@ mod grammar2_parsing {
     }
 
     #[test]
+    fn test_grammar2_parse_def_with_tuple_return_type() {
+        let grammar = get_grammar2();
+        let result = grammar.parse("def foo(): (int, int) { (1, 2) }");
+        assert!(result.is_ok(), "Should parse def with tuple return type: {:?}", result.err());
+        let program = result.unwrap();
+        assert_eq!(program.declarations.len(), 1, "Should have 1 declaration");
+    }
+
+    #[test]
     fn test_grammar2_parse_def_with_params() {
         let grammar = get_grammar2();
         let result = grammar.parse("def add(a: int, b: int): int { a + b }");
@@ -1685,6 +1694,14 @@ mod grammar2_parsing {
         let grammar = get_grammar2();
         let result = grammar.parse("fn test() { mut x: int = 0 }");
         assert!(result.is_ok(), "Should parse mut let: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_grammar2_parse_if_statement() {
+        let grammar = get_grammar2();
+        // If statement (not expression)
+        let result = grammar.parse("def test() { if true { 1 } }");
+        assert!(result.is_ok(), "Should parse if statement: {:?}", result.err());
     }
 
     #[test]

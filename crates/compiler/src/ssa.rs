@@ -634,19 +634,33 @@ impl SsaBuilder {
                         }
                     }
 
+                    // Check if the function returns void - if so, ignore the expression value
+                    let is_void_return = matches!(
+                        &self.original_return_type,
+                        Some(Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit)) | None
+                    );
+
                     // Check if the expression set a continuation block (for control flow expressions)
                     if let Some(continuation) = self.continuation_block.take() {
                         // Control flow expression - set Return on continuation block, not entry block
                         let cont_block = self.function.blocks.get_mut(&continuation)
                             .ok_or_else(|| crate::CompilerError::Analysis("Continuation block not found".into()))?;
-                        cont_block.terminator = HirTerminator::Return { values: vec![value_id] };
+                        cont_block.terminator = if is_void_return {
+                            HirTerminator::Return { values: vec![] }
+                        } else {
+                            HirTerminator::Return { values: vec![value_id] }
+                        };
 
                         // Entry block already has correct terminator (Branch/CondBranch), so return None
                         // to signal that we shouldn't overwrite it
                         return Ok(());
                     } else {
                         // Regular expression - return normally from entry block
-                        HirTerminator::Return { values: vec![value_id] }
+                        if is_void_return {
+                            HirTerminator::Return { values: vec![] }
+                        } else {
+                            HirTerminator::Return { values: vec![value_id] }
+                        }
                     }
                 } else {
                     HirTerminator::Return { values: vec![] }

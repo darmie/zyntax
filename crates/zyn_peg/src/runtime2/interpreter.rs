@@ -16,12 +16,12 @@ use log::{debug, trace};
 use zyntax_typed_ast::{
     TypedNode, TypedStatement, TypedExpression, TypedLiteral, TypedBlock,
     TypedDeclaration, TypedFunction, TypedLet, TypedLetPattern, TypedCall, TypedMethodCall, TypedProgram,
-    TypedIf, TypedWhile, TypedFor, TypedUnary, TypedFieldAccess, TypedIndex,
+    TypedIf, TypedWhile, TypedFor, TypedMatch, TypedMatchArm, TypedUnary, TypedFieldAccess, TypedIndex,
     TypedRange, TypedStructLiteral, TypedFieldInit, TypedPattern,
     TypedParameter, TypedVariant, TypedVariantFields, TypedTypeAlias, ParameterKind,
     TypedInterface, TypedExtern, TypedExternStruct, TypedTypeParam,
     TypedAnnotation, TypedAnnotationArg, TypedAnnotationValue,
-    TypedLambda, TypedLambdaBody, TypedLambdaParam, TypedImportModifier,
+    TypedLambda, TypedLambdaBody, TypedLambdaParam, TypedImportModifier, TypedPath,
     UnaryOp,
     typed_node, Span,
     type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention, NullabilityKind, ConstValue},
@@ -255,6 +255,9 @@ impl<'g> GrammarInterpreter<'g> {
             ["TypedFieldInit"] => {
                 self.construct_field_init(fields, state, span)
             }
+            ["TypedMatchArm"] => {
+                self.construct_match_arm(fields, state, span)
+            }
             ["TypedPattern", variant] => {
                 self.construct_pattern(variant, fields, state, span)
             }
@@ -436,6 +439,15 @@ impl<'g> GrammarInterpreter<'g> {
                     pattern: Box::new(pattern),
                     initializer: Box::new(initializer),
                     span,
+                })
+            }
+            "Match" => {
+                let scrutinee = self.get_field_as_expr("scrutinee", fields, state)?;
+                let arms = self.get_field_as_match_arm_list("arms", fields, state)?;
+
+                TypedStatement::Match(TypedMatch {
+                    scrutinee: Box::new(scrutinee),
+                    arms,
                 })
             }
             _ => return Err(format!("unknown TypedStatement variant: {}", variant)),
@@ -637,13 +649,33 @@ impl<'g> GrammarInterpreter<'g> {
                     target_type,
                 })
             }
+            "Path" => {
+                // Path expression: Type::method or module::function
+                let segments = self.get_field_as_interned_list("segments", fields, state)?;
+
+                TypedExpression::Path(TypedPath {
+                    segments,
+                })
+            }
+            "Array" => {
+                // Array literal: [1, 2, 3]
+                let elements = self.get_field_as_expr_list("elements", fields, state)?;
+
+                TypedExpression::Array(elements)
+            }
+            "Tuple" => {
+                // Tuple expression: (a, b, c)
+                let elements = self.get_field_as_expr_list("elements", fields, state)?;
+                TypedExpression::Tuple(elements)
+            }
             _ => return Err(format!("unknown TypedExpression variant: {}", variant)),
         };
 
         // Determine the type based on the expression variant
+        // Default to I64 for integers (64-bit system) and F64 for floats
         let ty = match &expr {
-            TypedExpression::Literal(TypedLiteral::Integer(_)) => Type::Primitive(PrimitiveType::I32),
-            TypedExpression::Literal(TypedLiteral::Float(_)) => Type::Primitive(PrimitiveType::F32),
+            TypedExpression::Literal(TypedLiteral::Integer(_)) => Type::Primitive(PrimitiveType::I64),
+            TypedExpression::Literal(TypedLiteral::Float(_)) => Type::Primitive(PrimitiveType::F64),
             TypedExpression::Literal(TypedLiteral::String(_)) => Type::Primitive(PrimitiveType::String),
             TypedExpression::Literal(TypedLiteral::Bool(_)) => Type::Primitive(PrimitiveType::Bool),
             // Call and Variable expressions need type inference from callee/declaration
@@ -1015,6 +1047,43 @@ impl<'g> GrammarInterpreter<'g> {
                     err_type: Box::new(Type::Any), // Error type is inferred
                 }
             }
+            "Tuple" => {
+                let elements = self.get_field_as_type_list("elements", fields, state)?;
+                Type::Tuple(elements)
+            }
+            "Function" => {
+                // Function type: (params) => return_type
+                let param_types = self.get_field_as_type_list_optional("params", fields, state)?
+                    .unwrap_or_default();
+                let return_type = self.get_field_as_type("return_type", fields, state)?;
+
+                // Convert plain types to ParamInfo
+                use zyntax_typed_ast::type_registry::ParamInfo;
+                let params: Vec<ParamInfo> = param_types.into_iter().map(|ty| {
+                    ParamInfo {
+                        name: None,
+                        ty,
+                        is_optional: false,
+                        is_varargs: false,
+                        is_keyword_only: false,
+                        is_positional_only: false,
+                        is_out: false,
+                        is_ref: false,
+                        is_inout: false,
+                    }
+                }).collect();
+
+                Type::Function {
+                    params,
+                    return_type: Box::new(return_type),
+                    is_varargs: false,
+                    has_named_params: false,
+                    has_default_params: false,
+                    async_kind: zyntax_typed_ast::type_registry::AsyncKind::Sync,
+                    calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+                    nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
+                }
+            }
             _ => return Err(format!("unknown Type variant: {}", variant)),
         };
 
@@ -1135,6 +1204,30 @@ impl<'g> GrammarInterpreter<'g> {
         })
     }
 
+    /// Construct a TypedMatchArm (match arm with pattern and body)
+    fn construct_match_arm<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let pattern = self.get_field_as_pattern("pattern", fields, state)?;
+        let body = self.get_field_as_block("body", fields, state)?;
+
+        // Convert block to expression (Block expression)
+        let body_expr = typed_node(
+            TypedExpression::Block(body),
+            Type::Any,
+            span,
+        );
+
+        Ok(ParsedValue::MatchArm(TypedMatchArm {
+            pattern: Box::new(pattern),
+            guard: None,
+            body: Box::new(body_expr),
+        }))
+    }
+
     /// Construct a TypedPattern variant (for destructuring)
     fn construct_pattern<'a>(
         &self,
@@ -1156,6 +1249,23 @@ impl<'g> GrammarInterpreter<'g> {
             "Tuple" => {
                 let elements = self.get_field_as_pattern_list("elements", fields, state)?;
                 TypedPattern::Tuple(elements)
+            }
+            "Constructor" => {
+                let name = self.get_field_as_interned("name", fields, state)?;
+                let fields_list = self.get_field_as_pattern_list("fields", fields, state)?;
+
+                // For patterns like Some(x) or None(), convert to Constructor type
+                let constructor_type = Type::Unresolved(name);
+                let inner_pattern = if fields_list.is_empty() {
+                    typed_node(TypedPattern::Wildcard, Type::Any, span)
+                } else {
+                    fields_list.into_iter().next().unwrap()
+                };
+
+                TypedPattern::Constructor {
+                    constructor: constructor_type,
+                    pattern: Box::new(inner_pattern),
+                }
             }
             _ => return Err(format!("unknown TypedPattern variant: {}", variant)),
         };
@@ -1356,6 +1466,88 @@ impl<'g> GrammarInterpreter<'g> {
             }
         } else {
             Err(format!("missing required type field: {}", name))
+        }
+    }
+
+    fn get_field_as_type_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<Type>, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+
+        match val {
+            ParsedValue::List(items) => {
+                items.into_iter()
+                    .map(|item| match item {
+                        ParsedValue::Type(ty) => Ok(ty),
+                        other => Err(format!("expected Type, got {:?}", other)),
+                    })
+                    .collect()
+            }
+            ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
+            ParsedValue::Optional(Some(inner)) => {
+                match *inner {
+                    ParsedValue::List(items) => {
+                        items.into_iter()
+                            .map(|item| match item {
+                                ParsedValue::Type(ty) => Ok(ty),
+                                other => Err(format!("expected Type, got {:?}", other)),
+                            })
+                            .collect()
+                    }
+                    ParsedValue::Type(ty) => Ok(vec![ty]),
+                    other => Err(format!("expected Type list, got {:?}", other)),
+                }
+            }
+            ParsedValue::Type(ty) => Ok(vec![ty]),
+            other => Err(format!("field '{}' is not a type list: {:?}", name, other)),
+        }
+    }
+
+    /// Get an optional field as a list of types
+    fn get_field_as_type_list_optional<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Option<Vec<Type>>, String> {
+        let Some(expr) = self.get_field(name, fields) else {
+            return Ok(None);
+        };
+        let val = self.eval_expr(expr, state)?;
+
+        match val {
+            ParsedValue::List(items) => {
+                let types: Result<Vec<Type>, String> = items.into_iter()
+                    .map(|item| match item {
+                        ParsedValue::Type(ty) => Ok(ty),
+                        other => Err(format!("expected Type, got {:?}", other)),
+                    })
+                    .collect();
+                Ok(Some(types?))
+            }
+            ParsedValue::Optional(None) | ParsedValue::None => Ok(None),
+            ParsedValue::Optional(Some(inner)) => {
+                match *inner {
+                    ParsedValue::List(items) => {
+                        let types: Result<Vec<Type>, String> = items.into_iter()
+                            .map(|item| match item {
+                                ParsedValue::Type(ty) => Ok(ty),
+                                other => Err(format!("expected Type, got {:?}", other)),
+                            })
+                            .collect();
+                        Ok(Some(types?))
+                    }
+                    ParsedValue::Type(ty) => Ok(Some(vec![ty])),
+                    other => Err(format!("expected Type list, got {:?}", other)),
+                }
+            }
+            ParsedValue::Type(ty) => Ok(Some(vec![ty])),
+            other => Err(format!("field '{}' is not a type list: {:?}", name, other)),
         }
     }
 
@@ -2250,6 +2442,34 @@ impl<'g> GrammarInterpreter<'g> {
                 })
             }
             _ => Err("cannot convert value to field init".to_string()),
+        }
+    }
+
+    fn get_field_as_match_arm_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedMatchArm>, String> {
+        let expr = self.get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+
+        match val {
+            ParsedValue::List(items) => {
+                items.into_iter()
+                    .map(|item| self.parsed_value_to_match_arm(item))
+                    .collect()
+            }
+            ParsedValue::MatchArm(arm) => Ok(vec![arm]),
+            _ => Err("cannot convert value to match arm list".to_string()),
+        }
+    }
+
+    fn parsed_value_to_match_arm(&self, val: ParsedValue) -> Result<TypedMatchArm, String> {
+        match val {
+            ParsedValue::MatchArm(arm) => Ok(arm),
+            _ => Err("cannot convert value to match arm".to_string()),
         }
     }
 

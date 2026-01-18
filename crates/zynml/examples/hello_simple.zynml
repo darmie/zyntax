@@ -1,0 +1,44 @@
+// ============================================================================
+// ZynML Example: Simple Hello World (no imports)
+// ============================================================================
+// Run with: zynml run examples/hello_simple.zynml
+//
+// Demonstrates basic ZynML without module imports
+// ============================================================================
+
+def main() {
+    println("Hello from ZynML!")
+    println("Testing basic ZynML...")
+
+    // Local function call test
+    greet("World")
+
+    // Test arithmetic inside main
+    let a: i64 = 10
+    let b: i64 = 20
+    let result: i64 = a + b
+    println("10 + 20 = 30 (computed)")
+
+    // Test conditionals
+    if result > 0 {
+        println("Result is positive!")
+    }
+
+    // Test multi-arg function calls
+    let product: i64 = multiply(3, 7)
+    if product > 0 {
+        println("3 * 7 = 21 (computed)")
+    }
+
+    println("Done!")
+}
+
+def greet(name: String) {
+    print("Hello, ")
+    print(name)
+    println("!")
+}
+
+def multiply(x: i64, y: i64): i64 {
+    x * y
+}

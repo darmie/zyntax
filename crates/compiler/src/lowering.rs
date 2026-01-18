@@ -1173,8 +1173,14 @@ impl LoweringContext {
 
         eprintln!("[CONVERT_SIG] Return type: TypedAST = {:?}", func.return_type);
         // Keep abstract types as nominal for method dispatch
-        let returns = vec![self.convert_type(&func.return_type)];
-        eprintln!("[CONVERT_SIG] Return type: HIR = {:?}", returns[0]);
+        // For void/unit functions, use empty returns vec (not vec![Void])
+        let hir_return_type = self.convert_type(&func.return_type);
+        let returns = if matches!(hir_return_type, HirType::Void) {
+            vec![] // Empty for void functions
+        } else {
+            vec![hir_return_type]
+        };
+        eprintln!("[CONVERT_SIG] Return type: HIR = {:?}", returns);
         
         // Convert type params from TypedFunction to HirTypeParam
         let hir_type_params: Vec<crate::hir::HirTypeParam> = func.type_params.iter().map(|tp| {

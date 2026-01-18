@@ -1877,8 +1877,33 @@ impl ZyntaxRuntime {
                 .map_err(|e| RuntimeError::Execution(e.to_string()))?
         };
 
+        // Debug: print parsed declarations
+        eprintln!("[DEBUG] Parsed {} declarations:", typed_program.declarations.len());
+        for decl in &typed_program.declarations {
+            use zyntax_typed_ast::TypedDeclaration;
+            match &decl.node {
+                TypedDeclaration::Function(f) => {
+                    let name = f.name.resolve_global().unwrap_or_else(|| f.name.to_string());
+                    eprintln!("[DEBUG]   Function: {} (external: {})", name, f.is_external);
+                }
+                TypedDeclaration::Import(import) => {
+                    eprintln!("[DEBUG]   Import: {:?}", import.module_path);
+                }
+                other => {
+                    eprintln!("[DEBUG]   {:?}", std::mem::discriminant(other));
+                }
+            }
+        }
+
         // Lower to HIR
         let hir_module = self.lower_typed_program(typed_program)?;
+
+        // Debug: print hir_module functions
+        eprintln!("[DEBUG] HIR module has {} functions:", hir_module.functions.len());
+        for (id, f) in &hir_module.functions {
+            let name = f.name.resolve_global().unwrap_or_else(|| f.name.to_string());
+            eprintln!("[DEBUG]   {:?} -> {} (external: {})", id, name, f.is_external);
+        }
 
         // Collect function names before compilation
         // Use resolve_global() to get the actual string from InternedString

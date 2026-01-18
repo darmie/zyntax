@@ -128,8 +128,8 @@ pub use typed_ast::{
     TypedMethodCall, TypedMethod, TypedMethodParam,
     // Range type
     TypedRange,
-    // List comprehension, slice, and import modifier types
-    TypedListComprehension, TypedSlice, TypedImportModifier,
+    // List comprehension, slice, import modifier, and path types
+    TypedListComprehension, TypedSlice, TypedImportModifier, TypedPath,
     // Struct type
     TypedStructLiteral, TypedFieldInit,
     // Pattern types

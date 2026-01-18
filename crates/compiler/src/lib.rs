@@ -319,11 +319,17 @@ pub fn register_impl_blocks(program: &mut zyntax_typed_ast::TypedProgram) -> Res
                 continue;
             }
 
-            // Find the trait by name
-            let trait_def = program.type_registry.get_trait_by_name(impl_block.trait_name)
-                .ok_or_else(|| {
-                    CompilerError::Analysis(format!("Trait {:?} not found in registry", impl_block.trait_name))
-                })?;
+            // Find the trait by name - be lenient if trait not found
+            let trait_def = match program.type_registry.get_trait_by_name(impl_block.trait_name) {
+                Some(t) => t,
+                None => {
+                    // Try to resolve trait name for better warning message
+                    let trait_name_str = impl_block.trait_name.resolve_global().unwrap_or_else(|| format!("{:?}", impl_block.trait_name));
+                    log::warn!("[REGISTER_IMPL] Trait '{}' not found in registry, skipping impl block", trait_name_str);
+                    eprintln!("[REGISTER_IMPL] WARNING: Trait '{}' not found, skipping impl block", trait_name_str);
+                    continue;
+                }
+            };
             let trait_id = trait_def.id;
             eprintln!("[REGISTER_IMPL] Trait ID: {:?}", trait_id);
 

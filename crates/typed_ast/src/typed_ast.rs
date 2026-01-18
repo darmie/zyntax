@@ -524,6 +524,8 @@ pub enum TypedExpression {
     Slice(TypedSlice),
     /// Import modifier expression: import loader("path") as Type
     ImportModifier(TypedImportModifier),
+    /// Path expression: Type::method or module::function
+    Path(TypedPath),
 }
 
 impl Default for TypedExpression {
@@ -933,6 +935,17 @@ pub struct TypedImportModifier {
     pub path: InternedString,
     /// Expected return type name
     pub target_type: InternedString,
+}
+
+/// Path expression: Type::method or module::function
+///
+/// Used for associated functions (static methods) and qualified paths.
+///
+/// Example: `Tensor::zeros`, `std::Option::Some`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedPath {
+    /// Path segments (e.g., ["Tensor", "zeros"] for Tensor::zeros)
+    pub segments: Vec<InternedString>,
 }
 
 /// Method call with enhanced argument support

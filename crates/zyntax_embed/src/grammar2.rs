@@ -166,6 +166,7 @@ impl Grammar2 {
         // Iterate over all builtins from @builtin directive
         for (source_name, target_symbol) in &self.grammar.builtins.functions {
             log::debug!("[Grammar2] Processing builtin: {} -> {}", source_name, target_symbol);
+            eprintln!("[DEBUG inject_builtin] Creating alias: {} -> {}", source_name, target_symbol);
 
             // Get return type from @types.function_returns if available
             let return_type = if let Some(type_str) = self.grammar.type_decls.function_returns.get(source_name) {

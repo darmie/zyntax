@@ -99,12 +99,12 @@
     simd_layer_norm: "$SIMD$layer_norm_f32",
 
     // === I/O Operations (zrtl_io) ===
-    // Universal print - uses DynamicBox for auto-formatting any type
-    // This is the default for ZynML - prints tensors, floats, ints, strings, etc.
-    print: "$IO$print_dynamic",
-    println: "$IO$println_dynamic",
-    eprint: "$IO$eprint_dynamic",
-    eprintln: "$IO$eprintln_dynamic",
+    // For now, use simple string-only print to avoid DynamicBox complexity
+    // TODO: Switch to println_dynamic once DynamicBox argument boxing is implemented
+    print: "$IO$print",
+    println: "$IO$println",
+    eprint: "$IO$eprint",
+    eprintln: "$IO$eprintln",
 
     // String-only output (for when you know it's a string)
     print_str: "$IO$print",
@@ -626,8 +626,8 @@ trait_method_fn = { "fn" ~ name:identifier ~ type_params? ~ "(" ~ trait_params? 
 trait_method = { item:trait_method_def | item:trait_method_fn }
   -> item
 
-trait_params = { param:trait_param ~ ("," ~ param:trait_param)* }
-  -> param
+trait_params = { first:trait_param ~ ("," ~ rest:trait_param)* }
+  -> prepend_list(first, rest)
 
 trait_param = { name:identifier ~ (":" ~ ty:type_expr)? }
   -> TypedParameter {
@@ -638,8 +638,8 @@ trait_param = { name:identifier ~ (":" ~ ty:type_expr)? }
 // Type parameters: <T, U>
 // With bounds: <T: Display, U: Clone + Debug>
 // For now, we just consume type params and produce text values
-type_params = { "<" ~ param:type_param ~ ("," ~ param:type_param)* ~ ">" }
-  -> param
+type_params = { "<" ~ first:type_param ~ ("," ~ rest:type_param)* ~ ">" }
+  -> prepend_list(first, rest)
 
 type_param = { name:identifier ~ (":" ~ type_bounds)? }
   -> intern(name)
@@ -1209,27 +1209,22 @@ tuple_type_4 = { "(" ~ t1:type_expr ~ "," ~ t2:type_expr ~ "," ~ t3:type_expr ~ 
       elements: [t1, t2, t3, t4],
   }
 
-// Function type: def(T, U): R
-fn_type = { ty:fn_type_with_return | ty:fn_type_unit }
-  -> ty
-
-// def(T, U): R - function type with return
-fn_type_with_return = { "def" ~ "(" ~ params:fn_type_params? ~ ")" ~ ":" ~ ret:type_expr }
+// Function type: (T, U) => R  (fat arrow syntax for lambda/callback types)
+// Examples:
+//   () => i32           - nullary function returning i32
+//   (i32) => i32        - function taking i32, returning i32
+//   (i32, str) => bool  - function taking i32 and str, returning bool
+//   (i32) => void       - function taking i32, returning unit
+// Note: Uses => (fat arrow) to distinguish from -> used in function definitions
+fn_type = { "(" ~ params:fn_type_params? ~ ")" ~ "=>" ~ ret:type_expr }
   -> Type::Function {
       params: params,
       return_type: ret,
   }
 
-// def(T, U) - function type returning unit
-fn_type_unit = { "def" ~ "(" ~ params:fn_type_params? ~ ")" }
-  -> Type::Function {
-      params: params,
-      return_type: Type::Unit,
-  }
-
 // Function type parameter list
-fn_type_params = { ty:type_expr ~ ("," ~ ty:type_expr)* }
-  -> ty
+fn_type_params = { first:type_expr ~ ("," ~ rest:type_expr)* }
+  -> prepend_list(first, rest)
 
 // ?T shorthand for Option<T>
 optional_type = { "?" ~ inner:type_expr_non_optional }
@@ -1268,11 +1263,9 @@ type_arg = { arg:assoc_type_binding | arg:type_expr }
 
 // Associated type binding: Item=T, Output=U
 // Used in trait bounds like Iterator<Item=T>
+// For now, just return the bound type since impl blocks discard where clause details
 assoc_type_binding = { name:identifier ~ "=" ~ ty:type_expr }
-  -> Type::AssocBinding {
-      name: intern(name),
-      ty: ty,
-  }
+  -> ty
 
 // ============================================================================
 // Where Clauses
@@ -1295,35 +1288,33 @@ where_bounds = { bound:where_bound ~ ("," ~ bound:where_bound)* }
 
 // Single where bound: T: Trait or T: Trait<Args>
 // Also supports: T: Trait1 + Trait2 (multiple bounds on same type)
+// Note: where bounds are parsed but not stored (impl blocks discard this info for now)
 where_bound = { name:identifier ~ ":" ~ bounds:where_trait_bounds }
-  -> Type::WhereBound {
+  -> Type::Named {
       name: intern(name),
-      bounds: bounds,
   }
 
 // Multiple trait bounds separated by +: Clone + Debug + Iterator<Item=T>
 where_trait_bounds = { bound:where_trait_bound ~ ("+" ~ bound:where_trait_bound)* }
   -> bound
 
-// Single trait bound: Clone, Debug, Iterator<Item=T>, def(T): U (function bounds)
+// Single trait bound: Clone, Debug, Iterator<Item=T>, (T) => U (function bounds)
 where_trait_bound = { bound:trait_bound_generic | bound:trait_bound_fn | bound:trait_bound_simple }
   -> bound
 
 // Generic trait bound: Iterator<Item=T>
 trait_bound_generic = { name:identifier ~ "<" ~ args:type_args ~ ">" }
-  -> Type::TraitBound {
+  -> Type::Named {
       name: intern(name),
-      type_args: args,
   }
 
 // Simple trait bound: Clone, Debug
 trait_bound_simple = { name:identifier }
-  -> Type::TraitBound {
+  -> Type::Named {
       name: intern(name),
-      type_args: [],
   }
 
-// Function type as trait bound: def(T): U
+// Function type as trait bound: (T) => U
 trait_bound_fn = { bound:fn_type }
   -> bound
 
@@ -1621,8 +1612,8 @@ fn_def_simple_colon = { "fn" ~ name:identifier ~ "(" ~ ")" ~ ":" ~ body:indent_b
       body: Some(body),
   }
 
-fn_params = { param:fn_param ~ ("," ~ param:fn_param)* }
-  -> param
+fn_params = { first:fn_param ~ ("," ~ rest:fn_param)* }
+  -> prepend_list(first, rest)
 
 // Parameter with optional type annotation and optional default value
 // Supports:
@@ -1676,7 +1667,6 @@ param_simple = { name:identifier }
 
 statement = {
     let_stmt |
-    assign_stmt |
     if_stmt |
     while_stmt |
     for_stmt |
@@ -1685,6 +1675,7 @@ statement = {
     return_stmt |
     break_stmt |
     continue_stmt |
+    assign_stmt |
     expr_stmt
 }
 
@@ -1802,11 +1793,20 @@ simple_assign_stmt = { target:identifier ~ "=" ~ value:expr }
   }
 
 // if condition { ... } else { ... }
-if_stmt = { "if" ~ cond:expr ~ then_body:block ~ ("else" ~ else_body:block)? }
+if_stmt = { if_else_stmt | if_simple_stmt }
+
+if_else_stmt = { "if" ~ cond:expr ~ then_body:block ~ "else" ~ else_body:block }
   -> TypedStatement::If {
       condition: cond,
       then_branch: then_body,
       else_branch: else_body,
+  }
+
+if_simple_stmt = { "if" ~ cond:expr ~ then_body:block }
+  -> TypedStatement::If {
+      condition: cond,
+      then_branch: then_body,
+      else_branch: None,
   }
 
 // while condition { ... }
@@ -2276,8 +2276,8 @@ lambda_no_params = { "def" ~ "(" ~ ")" ~ ":" ~ body:expr }
   }
 
 // Lambda parameters (simple identifiers)
-lambda_params = { p:lambda_param ~ ("," ~ p:lambda_param)* }
-  -> p
+lambda_params = { first:lambda_param ~ ("," ~ rest:lambda_param)* }
+  -> prepend_list(first, rest)
 
 lambda_param = { name:identifier }
   -> TypedLambdaParam {
@@ -2399,29 +2399,19 @@ tensor_literal = { "tensor" ~ "(" ~ array_literal ~ ")" }
 
 // Struct literal: Point { x: 1.0, y: 2.0 }
 // Used to construct struct instances
-struct_literal = { identifier ~ "{" ~ struct_literal_fields? ~ "}" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "struct_literal", "args": {
-              "type_name": "$1",
-              "fields": "$2"
-          }}
-      ]
+struct_literal = { type_name:identifier ~ "{" ~ fields:struct_literal_fields? ~ "}" }
+  -> TypedExpression::Struct {
+      type_name: intern(type_name),
+      fields: fields,
   }
 
-struct_literal_fields = { struct_literal_field ~ ("," ~ struct_literal_field)* }
-  -> List {
-      "get_all_children": true
-  }
+struct_literal_fields = { f:struct_literal_field ~ ("," ~ f:struct_literal_field)* }
+  -> f
 
-struct_literal_field = { identifier ~ ":" ~ expr }
-  -> TypedExpression {
-      "commands": [
-          { "define": "field_init", "args": {
-              "name": "$1",
-              "value": "$2"
-          }}
-      ]
+struct_literal_field = { name:identifier ~ ":" ~ value:expr }
+  -> TypedFieldInit {
+      name: intern(name),
+      value: value,
   }
 
 // ============================================================================
@@ -2448,17 +2438,16 @@ comprehension_filter = { "if" ~ cond:expr }
   -> cond
 
 // Array literal: [1, 2, 3] or [[1, 2], [3, 4]]
-array_literal = { "[" ~ (array_element ~ ("," ~ array_element)*)? ~ "]" }
-  -> TypedExpression {
-      "get_all_children": true,
-      "define": "array_literal",
-      "args": { "elements": "$result" }
+array_literal = { "[" ~ elements:array_elements? ~ "]" }
+  -> TypedExpression::Array {
+      elements: elements,
   }
 
-array_element = { array_literal | expr }
-  -> TypedExpression {
-      "get_child": { "index": 0 }
-  }
+array_elements = { e:array_element ~ ("," ~ e:array_element)* }
+  -> e
+
+array_element = { e:array_literal | e:expr }
+  -> e
 
 // ============================================================================
 // Literals
@@ -2498,34 +2487,36 @@ duration_unit = { "ms" | "s" | "m" | "h" | "d" }
 //   """
 //
 // Format specifiers (after colon) are supported:
-//   {value:.2f}   - Float with 2 decimal places
-//   {num:x}       - Hexadecimal
-//   {text:>10}    - Right-aligned in 10 chars
+// F-strings desugar to concat(parts...) where each interpolation is wrapped in to_string()
+// Example: f"Hello {name}!" -> concat("Hello ", to_string(name), "!")
 //
 f_string_literal = { f_string_triple | f_string_regular }
-  -> TypedExpression::FString {
-      parts: parts,
-  }
 
 // f"""multiline {expr} string"""
 f_string_triple = { "f\"\"\"" ~ parts:f_string_part* ~ "\"\"\"" }
-  -> parts
+  -> TypedExpression::Call {
+      callee: TypedExpression::Variable { name: intern("concat") },
+      args: parts,
+  }
 
 // f"single line {expr} string"
 f_string_regular = { "f\"" ~ parts:f_string_part* ~ "\"" }
-  -> parts
+  -> TypedExpression::Call {
+      callee: TypedExpression::Variable { name: intern("concat") },
+      args: parts,
+  }
 
 // Parts of an f-string: either text or interpolated expression
 f_string_part = { f_string_interp | f_string_text }
 
-// {expr} or {expr:format_spec}
-f_string_interp = { "{" ~ expr:expr ~ format_spec? ~ "}" }
-  -> TypedExpression::FStringInterp {
-      expr: expr,
-      format_spec: format_spec,
+// {expr} or {expr:format_spec} - wrap in to_string call
+f_string_interp = { "{" ~ e:expr ~ format_spec? ~ "}" }
+  -> TypedExpression::Call {
+      callee: TypedExpression::Variable { name: intern("to_string") },
+      args: [e],
   }
 
-// Optional format specifier: :format
+// Optional format specifier: :format (TODO: pass to to_string or format function)
 format_spec = { ":" ~ spec:format_spec_inner }
   -> spec
 

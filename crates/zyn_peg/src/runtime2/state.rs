@@ -167,6 +167,8 @@ pub enum ParsedValue {
     EffectHandlerImpl(zyntax_typed_ast::TypedEffectHandlerImpl),
     /// A lambda parameter
     LambdaParam(zyntax_typed_ast::TypedLambdaParam),
+    /// A match arm (pattern -> body)
+    MatchArm(zyntax_typed_ast::TypedMatchArm),
 }
 
 /// Handle to an AST node (opaque, managed by builder)
