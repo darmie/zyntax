@@ -1460,8 +1460,19 @@ impl SsaBuilder {
 
                 // Check if this is a non-primitive type that might use operator overloading
                 // For opaque/named types, try to dispatch to trait method
-                eprintln!("[DEBUG SSA] Binary op {:?}, left.ty={:?}, right.ty={:?}", op, left.ty, right.ty);
-                if let Some(trait_call) = self.try_operator_trait_dispatch(block_id, op, left, right, &expr.ty)? {
+                // First, resolve the actual type from the variable if the expression is a Variable
+                let left_actual_ty = self.resolve_actual_type(&left.node, &left.ty);
+                let right_actual_ty = self.resolve_actual_type(&right.node, &right.ty);
+                eprintln!("[DEBUG SSA] Binary op {:?}, left.ty={:?} (actual: {:?}), right.ty={:?} (actual: {:?})",
+                    op, left.ty, left_actual_ty, right.ty, right_actual_ty);
+
+                // Create a modified left/right with resolved types for trait dispatch
+                let mut left_with_type = left.clone();
+                let mut right_with_type = right.clone();
+                left_with_type.ty = left_actual_ty;
+                right_with_type.ty = right_actual_ty;
+
+                if let Some(trait_call) = self.try_operator_trait_dispatch(block_id, op, &left_with_type, &right_with_type, &expr.ty)? {
                     eprintln!("[DEBUG SSA] Using trait dispatch for binary op");
                     return Ok(trait_call);
                 }
@@ -1541,8 +1552,17 @@ impl SsaBuilder {
                         (crate::hir::HirCallable::Function(func_id), None)
                     } else if let Some(link_name) = self.extern_link_names.get(func_name) {
                         // External function with link_name (e.g., tensor_add -> $Tensor$add)
+                        log::debug!("[SSA] Resolved extern call '{}' -> '{}'", name_str, link_name);
                         (crate::hir::HirCallable::Symbol(link_name.clone()), None)
                     } else {
+                        // Debug: Log what we're looking for and what's available
+                        if !self.extern_link_names.is_empty() {
+                            let available: Vec<_> = self.extern_link_names.keys()
+                                .filter_map(|k| k.resolve_global())
+                                .collect();
+                            log::debug!("[SSA] Function '{}' not in extern_link_names ({} entries). Sample: {:?}",
+                                name_str, self.extern_link_names.len(), &available[..available.len().min(10)]);
+                        }
                         // Variable lookup (function pointer)
                         let callee_val = self.translate_expression(block_id, callee)?;
                         (crate::hir::HirCallable::Indirect(callee_val), Some(callee_val))
@@ -2056,44 +2076,57 @@ impl SsaBuilder {
                     ));
                 };
 
-                // Determine result type: if the method call has type Any, look up the trait method's return type
-                let result_type = if matches!(expr.ty, Type::Any) {
-                    // Look up the trait method's return type from the type registry
-                    let receiver_type_id = match &receiver_type {
-                        Type::Named { id, .. } => *id,
-                        _ => return Err(crate::CompilerError::Analysis(
-                            format!("Method receiver is not a named type: {:?}", receiver_type)
-                        )),
-                    };
+                // Determine result type based on the mangled function name
+                // For extern methods like $Tensor$sum_f32, parse the return type from the suffix
+                let result_type = if matches!(expr.ty, Type::Any | Type::Unknown) {
+                    let mangled_str = mangled_name.resolve_global().unwrap_or_default();
 
-                    // Find the trait implementation for this type
-                    let mut method_return_type = None;
-                    for (_trait_id, impls) in self.type_registry.iter_implementations() {
-                        for impl_def in impls {
-                            if let Type::Named { id: impl_type_id, .. } = &impl_def.for_type {
-                                if *impl_type_id == receiver_type_id {
-                                    // Find the method in this impl
-                                    for method in &impl_def.methods {
-                                        if method.signature.name == method_call.method {
-                                            method_return_type = Some(method.signature.return_type.clone());
-                                            break;
+                    // Check common return type suffixes for Tensor methods
+                    // Methods like sum_f32, mean_f32 return f32
+                    // Methods like zeros, ones, arange return Tensor (opaque ptr)
+                    let hir_type = if mangled_str.ends_with("_f32") || mangled_str.contains("$sum") || mangled_str.contains("$mean")
+                        || mangled_str.contains("$max") || mangled_str.contains("$min") || mangled_str.contains("$std") || mangled_str.contains("$var") {
+                        // Reduction methods that return f32
+                        log::debug!("[METHOD_CALL] Inferred F32 return type for '{}'", mangled_str);
+                        HirType::F32
+                    } else if mangled_str.contains("$ndim") || mangled_str.contains("$numel") {
+                        // Methods that return i64
+                        log::debug!("[METHOD_CALL] Inferred I64 return type for '{}'", mangled_str);
+                        HirType::I64
+                    } else if let Type::Named { id, .. } = &receiver_type {
+                        // Fall back to looking up in trait implementations for named types
+                        let receiver_type_id = *id;
+                        let mut method_return_type = None;
+                        for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                            for impl_def in impls {
+                                if let Type::Named { id: impl_type_id, .. } = &impl_def.for_type {
+                                    if *impl_type_id == receiver_type_id {
+                                        for method in &impl_def.methods {
+                                            if method.signature.name == method_call.method {
+                                                method_return_type = Some(method.signature.return_type.clone());
+                                                break;
+                                            }
                                         }
                                     }
+                                }
+                                if method_return_type.is_some() {
+                                    break;
                                 }
                             }
                             if method_return_type.is_some() {
                                 break;
                             }
                         }
-                        if method_return_type.is_some() {
-                            break;
-                        }
-                    }
-
-                    let typed_return_type = method_return_type.unwrap_or(Type::Primitive(zyntax_typed_ast::PrimitiveType::I32));
-                    self.convert_type(&typed_return_type)
+                        let typed_return_type = method_return_type.unwrap_or(Type::Primitive(zyntax_typed_ast::PrimitiveType::I64));
+                        self.convert_type(&typed_return_type)
+                    } else {
+                        // For extern types, assume opaque return (returns same type as receiver)
+                        log::debug!("[METHOD_CALL] Assuming opaque return type for extern method '{}'", mangled_str);
+                        self.convert_type(&receiver_type)
+                    };
+                    hir_type
                 } else {
-                    // Otherwise use the annotated type
+                    // Use the annotated type from the expression
                     self.convert_type(&expr.ty)
                 };
 
@@ -3555,7 +3588,15 @@ impl SsaBuilder {
         let type_name = type_name.unwrap();
 
         // Construct the method function name: TypeName$method
-        let method_symbol = format!("{}${}", type_name, method_name);
+        // For extern types, the type_name already starts with '$' (e.g., "$Tensor")
+        // so we just append $method to get "$Tensor$add"
+        let method_symbol = if type_name.starts_with('$') {
+            // Already has $ prefix (extern type)
+            format!("{}${}", type_name, method_name)
+        } else {
+            // Regular type, add $ prefix for ZRTL compatibility
+            format!("${}${}", type_name, method_name)
+        };
         let method_name_interned = InternedString::new_global(&method_symbol);
         log::debug!("[SSA] Operator trait dispatch: {} for type {}", method_symbol, type_name);
 
@@ -3573,7 +3614,11 @@ impl SsaBuilder {
         // Translate arguments
         let left_val = self.translate_expression(block_id, left)?;
         let right_val = self.translate_expression(block_id, right)?;
-        let hir_result_type = self.convert_type(result_type);
+
+        // For binary operations, the result type should be the same as the operand type
+        // (e.g., Tensor + Tensor = Tensor). Use left operand's type instead of expression type.
+        let hir_result_type = self.convert_type(left_type);
+        log::debug!("[SSA] Operator trait dispatch result type: {:?} (from left type: {:?})", hir_result_type, left_type);
 
         // Create call instruction to the trait method
         let result = if hir_result_type != HirType::Void {
@@ -3596,6 +3641,29 @@ impl SsaBuilder {
         self.add_use(right_val, result.unwrap_or(right_val));
 
         Ok(Some(result.unwrap_or_else(|| self.create_undef(HirType::Void))))
+    }
+
+    /// Resolve the actual type for an expression, looking up variable types if needed.
+    /// This is needed because expression nodes may have type `Any` even when the
+    /// variable has a more specific type recorded in var_typed_ast_types.
+    fn resolve_actual_type(&self, expr: &zyntax_typed_ast::typed_ast::TypedExpression, fallback: &Type) -> Type {
+        use zyntax_typed_ast::typed_ast::TypedExpression;
+
+        match expr {
+            TypedExpression::Variable(name) => {
+                // Look up the variable's actual type from our tracking
+                if let Some(var_ty) = self.var_typed_ast_types.get(name) {
+                    if !matches!(var_ty, Type::Any | Type::Unknown) {
+                        log::debug!("[resolve_actual_type] Variable '{}' has type {:?}",
+                            name.resolve_global().unwrap_or_default(), var_ty);
+                        return var_ty.clone();
+                    }
+                }
+                // Fall back to the expression's type
+                fallback.clone()
+            }
+            _ => fallback.clone(),
+        }
     }
 
     /// Check if a type should use trait dispatch for operators

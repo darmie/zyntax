@@ -300,6 +300,9 @@ pub struct LoweringConfig {
     pub strict_mode: bool,
     /// Optional import resolver for resolving import statements
     pub import_resolver: Option<Arc<dyn ImportResolver>>,
+    /// Builtin function mappings (e.g., "tensor_sum_f32" -> "$Tensor$sum_f32")
+    /// These are added to extern_link_names for resolving extern calls
+    pub builtins: indexmap::IndexMap<String, String>,
 }
 
 impl std::fmt::Debug for LoweringConfig {
@@ -324,6 +327,7 @@ impl Default for LoweringConfig {
             hot_reload: false,
             strict_mode: false,
             import_resolver: None,
+            builtins: indexmap::IndexMap::new(),
         }
     }
 }
@@ -373,11 +377,22 @@ impl LoweringContext {
         arena: Arc<Mutex<AstArena>>,
         config: LoweringConfig,
     ) -> Self {
+        // Initialize symbol table with builtins from config
+        let mut symbols = SymbolTable::default();
+        if !config.builtins.is_empty() {
+            log::debug!("[LOWERING] Populating extern_link_names with {} builtins", config.builtins.len());
+        }
+        for (alias, target) in &config.builtins {
+            let alias_interned = InternedString::new_global(alias);
+            symbols.extern_link_names.insert(alias_interned, target.clone());
+            log::trace!("[LOWERING] Added builtin: '{}' -> '{}'", alias, target);
+        }
+
         Self {
             module: HirModule::new(module_name),
             type_registry,
             arena,
-            symbols: SymbolTable::default(),
+            symbols,
             diagnostics: Vec::new(),
             config,
             vtable_registry: crate::vtable_registry::VtableRegistry::new(),

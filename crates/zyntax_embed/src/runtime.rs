@@ -797,8 +797,14 @@ impl ZyntaxRuntime {
         let typed_program = grammar.parse_with_signatures(source, "source.zynml", &self.plugin_signatures)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
-        // Lower to HIR
-        let hir_module = self.lower_typed_program(typed_program)?;
+        // Lower to HIR with grammar builtins
+        let builtins: indexmap::IndexMap<String, String> = grammar
+            .builtins()
+            .functions
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let hir_module = self.lower_typed_program(typed_program, builtins)?;
 
         // Compile the module
         self.compile_module(&hir_module)
@@ -808,7 +814,11 @@ impl ZyntaxRuntime {
     ///
     /// This performs the lowering pass to convert the TypedAST to HIR,
     /// which can then be compiled to machine code.
-    fn lower_typed_program(&self, mut program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
+    fn lower_typed_program(
+        &self,
+        mut program: zyntax_typed_ast::TypedProgram,
+        builtins: indexmap::IndexMap<String, String>,
+    ) -> RuntimeResult<HirModule> {
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
         use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry, TypedDeclaration, type_registry::*};
 
@@ -903,11 +913,17 @@ impl ZyntaxRuntime {
         // Wrap program's type registry in Arc for sharing (it now includes registered traits and impls)
         let type_registry_arc = std::sync::Arc::new(program.type_registry.clone());
 
+        // Create LoweringConfig with builtins for extern call resolution
+        let lowering_config = LoweringConfig {
+            builtins,
+            ..LoweringConfig::default()
+        };
+
         let mut lowering_ctx = LoweringContext::new(
             module_name,
             type_registry_arc.clone(),
             std::sync::Arc::new(std::sync::Mutex::new(arena)),
-            LoweringConfig::default(),
+            lowering_config,
         );
 
         // Don't skip type checking - enable type inference for trait resolution
@@ -2145,8 +2161,14 @@ impl ZyntaxRuntime {
                 .map_err(|e| RuntimeError::Execution(e.to_string()))?
         };
 
-        // Lower to HIR
-        let hir_module = self.lower_typed_program(typed_program)?;
+        // Lower to HIR with grammar builtins
+        let builtins: indexmap::IndexMap<String, String> = grammar
+            .builtins()
+            .functions
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let hir_module = self.lower_typed_program(typed_program, builtins)?;
 
         // Collect function names before compilation
         // Use resolve_global() to get the actual string from InternedString
@@ -2281,8 +2303,8 @@ impl ZyntaxRuntime {
     ///
     /// The names of functions defined in the module.
     pub fn compile_typed_program(&mut self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<Vec<String>> {
-        // Lower to HIR
-        let hir_module = self.lower_typed_program(program)?;
+        // Lower to HIR (no builtins available when compiling directly)
+        let hir_module = self.lower_typed_program(program, indexmap::IndexMap::new())?;
 
         // Collect function names before compilation
         let function_names: Vec<String> = hir_module
@@ -2734,8 +2756,14 @@ impl TieredRuntime {
             .parse_with_signatures(source, "module.zynml", &self.plugin_signatures)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
-        // Lower to HIR
-        let hir_module = self.lower_typed_program(typed_program)?;
+        // Lower to HIR with grammar builtins
+        let builtins: indexmap::IndexMap<String, String> = grammar
+            .builtins()
+            .functions
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let hir_module = self.lower_typed_program(typed_program, builtins)?;
 
         // Collect function names before compilation
         let function_names: Vec<String> = hir_module
@@ -2781,7 +2809,11 @@ impl TieredRuntime {
     }
 
     /// Lower a TypedProgram to HirModule
-    fn lower_typed_program(&self, mut program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<HirModule> {
+    fn lower_typed_program(
+        &self,
+        mut program: zyntax_typed_ast::TypedProgram,
+        builtins: indexmap::IndexMap<String, String>,
+    ) -> RuntimeResult<HirModule> {
         use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
         use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry, TypedDeclaration, type_registry::*};
 
@@ -2841,11 +2873,17 @@ impl TieredRuntime {
         // Use the type registry from the parsed program (now contains registered structs)
         let type_registry = std::sync::Arc::new(program.type_registry.clone());
 
+        // Create LoweringConfig with builtins for extern call resolution
+        let lowering_config = LoweringConfig {
+            builtins,
+            ..LoweringConfig::default()
+        };
+
         let mut lowering_ctx = LoweringContext::new(
             module_name,
             type_registry.clone(),
             std::sync::Arc::new(std::sync::Mutex::new(arena)),
-            LoweringConfig::default(),
+            lowering_config,
         );
 
         let mut hir_module = lowering_ctx

@@ -928,9 +928,13 @@ impl<'g> GrammarInterpreter<'g> {
                 let name = self.get_field_as_interned("name", fields, state)?;
                 let type_params = self.get_field_as_type_param_list("type_params", fields, state)?;
 
+                // Runtime prefix is $TypeName to match ZRTL symbol convention
+                let name_str = name.resolve_global().unwrap_or_default();
+                let runtime_prefix = zyntax_typed_ast::InternedString::new_global(&format!("${}", name_str));
+
                 TypedDeclaration::Extern(TypedExtern::Struct(TypedExternStruct {
                     name,
-                    runtime_prefix: name, // Use name as default runtime prefix
+                    runtime_prefix,
                     type_params,
                 }))
             }
@@ -1425,12 +1429,16 @@ impl<'g> GrammarInterpreter<'g> {
             ParameterKind::Regular
         };
 
+        // Parse default_value if present
+        let default_value = self.get_field_optional_expr("default_value", fields, state)?
+            .map(|expr| Box::new(expr));
+
         Ok(ParsedValue::Parameter(TypedParameter {
             name,
             ty,
             mutability: Mutability::Immutable,
             kind,
-            default_value: None,
+            default_value,
             attributes: vec![],
             span,
         }))
@@ -1660,6 +1668,98 @@ impl<'g> GrammarInterpreter<'g> {
                     other => result.push(other),
                 }
                 Ok(ParsedValue::List(result))
+            }
+            "make_pair" => {
+                // make_pair(a, b) - create a two-element list [a, b]
+                // Useful for building operator-operand pairs in binary expression parsing
+                if args.len() != 2 {
+                    return Err("make_pair() requires exactly 2 arguments".to_string());
+                }
+                let first = self.eval_expr(&args[0], state)?;
+                let second = self.eval_expr(&args[1], state)?;
+                Ok(ParsedValue::List(vec![first, second]))
+            }
+            "fold_left_ops" => {
+                // fold_left_ops(first, rest) - fold binary operations with left associativity
+                // first: the first operand expression
+                // rest: list of [op, operand, op, operand, ...] pairs or [[op, operand], [op, operand], ...]
+                // Returns nested Binary expressions folded left-to-right
+                // e.g., fold_left_ops(a, [["+", b], ["-", c]]) -> Binary(Binary(a, +, b), -, c)
+                if args.len() != 2 {
+                    return Err("fold_left_ops() requires exactly 2 arguments (first, rest)".to_string());
+                }
+                let first = self.eval_expr(&args[0], state)?;
+                let rest = self.eval_expr(&args[1], state)?;
+
+                // Get the rest as a list
+                let rest_list = match rest {
+                    ParsedValue::List(items) => items,
+                    ParsedValue::Optional(None) | ParsedValue::None => vec![],
+                    ParsedValue::Optional(Some(inner)) => {
+                        match *inner {
+                            ParsedValue::List(items) => items,
+                            other => vec![other],
+                        }
+                    }
+                    other => vec![other],
+                };
+
+                // If no rest, return first as-is
+                if rest_list.is_empty() {
+                    return Ok(first);
+                }
+
+                // Flatten nested lists from the repeat pattern
+                let mut flat_items: Vec<ParsedValue> = Vec::new();
+                for item in rest_list {
+                    match item {
+                        ParsedValue::List(inner) => {
+                            flat_items.extend(inner);
+                        }
+                        other => flat_items.push(other),
+                    }
+                }
+
+                // Now we have [op, operand, op, operand, ...]
+                // Fold left: accumulator op operand -> new accumulator
+                let mut acc = first;
+                let mut i = 0;
+                while i + 1 < flat_items.len() {
+                    let op_val = &flat_items[i];
+                    let operand_val = flat_items[i + 1].clone();
+
+                    // Get operator string
+                    let op_str = match op_val {
+                        ParsedValue::Text(s) => s.clone(),
+                        ParsedValue::Interned(s) => s.resolve_global().unwrap_or_else(|| "+".to_string()),
+                        other => {
+                            log::warn!("[fold_left_ops] Unexpected operator value: {:?}", other);
+                            "+".to_string()
+                        }
+                    };
+
+                    // Convert accumulator to expression
+                    let left_expr = self.parsed_value_to_expr(acc, state)?;
+
+                    // Convert operand to expression
+                    let right_expr = self.parsed_value_to_expr(operand_val, state)?;
+
+                    // Create Binary expression
+                    let binary_op = self.string_to_binary_op(&op_str)?;
+                    acc = ParsedValue::Expression(Box::new(typed_node(
+                        TypedExpression::Binary(zyntax_typed_ast::TypedBinary {
+                            op: binary_op,
+                            left: Box::new(left_expr),
+                            right: Box::new(right_expr),
+                        }),
+                        Type::Unknown,
+                        span,
+                    )));
+
+                    i += 2;
+                }
+
+                Ok(acc)
             }
             "fold_postfix" => {
                 // fold_postfix(base, suffixes) - fold postfix operations into nested expressions

@@ -2223,15 +2223,23 @@ range_inclusive = { start:additive_expr ~ "..=" ~ end:additive_expr }
       inclusive: true,
   }
 
-// Addition and subtraction - simplified (just pass through for now)
-additive_expr = { inner:multiplicative_expr ~ (additive_op ~ multiplicative_expr)* }
-  -> inner
+// Addition and subtraction - binary left-associative using fold_left_ops
+// e.g., a + b - c becomes Binary(Binary(a, +, b), -, c)
+additive_expr = { first:multiplicative_expr ~ rest:additive_rest* }
+  -> fold_left_ops(first, rest)
+
+additive_rest = { op:additive_op ~ operand:multiplicative_expr }
+  -> make_pair(op, operand)
 
 additive_op = @{ "+" | "-" }
 
-// Multiplication, division, modulo - simplified (just pass through for now)
-multiplicative_expr = { inner:unary_expr ~ (multiplicative_op ~ unary_expr)* }
-  -> inner
+// Multiplication, division, modulo - binary left-associative using fold_left_ops
+// @ is matrix multiplication in ZynML (like Python/NumPy)
+multiplicative_expr = { first:unary_expr ~ rest:multiplicative_rest* }
+  -> fold_left_ops(first, rest)
+
+multiplicative_rest = { op:multiplicative_op ~ operand:unary_expr }
+  -> make_pair(op, operand)
 
 // Note: "@" in quotes is a literal character, not the pest atomic rule marker
 multiplicative_op = @{ "@" | "*" | "/" | "%" }
