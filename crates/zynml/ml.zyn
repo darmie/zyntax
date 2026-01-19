@@ -35,21 +35,79 @@
     tensor_zeros: "$Tensor$zeros",
     tensor_ones: "$Tensor$ones",
     tensor_full: "$Tensor$full_f32",
-    arange: "$Tensor$arange_f32",             // arange(1.0, 10.0, 1.0) shorthand
-    tensor_arange: "$Tensor$arange_f32",
+    arange: "$Tensor$arange",             // arange(1.0, 10.0, 1.0) shorthand - f64 version
+    tensor_arange: "$Tensor$arange",      // f64 version for convenience
     tensor_linspace: "$Tensor$linspace_f32",
     tensor_rand: "$Tensor$rand_f32",
     tensor_randn: "$Tensor$randn_f32",
     tensor_reshape: "$Tensor$reshape",
     tensor_transpose: "$Tensor$transpose",
     tensor_sum: "$Tensor$sum_f32",
+    tensor_sum_f32: "$Tensor$sum_f32",
     tensor_mean: "$Tensor$mean_f32",
+    tensor_mean_f32: "$Tensor$mean_f32",
     tensor_max: "$Tensor$max_f32",
+    tensor_max_f32: "$Tensor$max_f32",
     tensor_min: "$Tensor$min_f32",
+    tensor_min_f32: "$Tensor$min_f32",
     tensor_free: "$Tensor$free",
     tensor_print: "$Tensor$print",
     tensor_println: "$Tensor$println",
     tensor_to_string: "$Tensor$to_string",
+
+    // Tensor operations used in operator trait impls and methods
+    // NOTE: Only include mappings for functions that EXIST in ZRTL
+    tensor_clone: "$Tensor$clone",
+    tensor_add: "$Tensor$add",
+    tensor_sub: "$Tensor$sub",
+    tensor_mul: "$Tensor$mul",
+    tensor_div: "$Tensor$div",
+    tensor_neg: "$Tensor$neg",
+    tensor_ndim: "$Tensor$ndim",
+    tensor_numel: "$Tensor$numel",
+    tensor_shape: "$Tensor$shape",
+    tensor_squeeze: "$Tensor$squeeze",
+    tensor_unsqueeze: "$Tensor$unsqueeze",
+    tensor_slice: "$Tensor$slice",
+    tensor_get: "$Tensor$get_f32",
+    tensor_get_f32: "$Tensor$get_f32",
+    tensor_set: "$Tensor$set_f32",
+    tensor_set_f32: "$Tensor$set_f32",
+    tensor_dot: "$Tensor$dot",
+    // tensor_matmul disabled - ZRTL has wrong signature (maps to dot product, not matmul)
+    // Additional tensor methods used in stdlib
+    tensor_std: "$Tensor$std_f32",
+    tensor_var: "$Tensor$var_f32",
+    tensor_sum_axis: "$Tensor$sum_axis",
+    tensor_mean_axis: "$Tensor$mean_axis",
+    tensor_max_axis: "$Tensor$max_axis",
+    tensor_min_axis: "$Tensor$min_axis",
+    tensor_abs: "$Tensor$abs",
+    tensor_sqrt: "$Tensor$sqrt",
+    tensor_exp: "$Tensor$exp",
+    tensor_log: "$Tensor$log",
+    tensor_sin: "$Tensor$sin",
+    tensor_cos: "$Tensor$cos",
+    tensor_tanh: "$Tensor$tanh",
+    tensor_pow: "$Tensor$pow",
+    tensor_clamp: "$Tensor$clamp",
+    tensor_transpose_axes: "$Tensor$transpose_axes",
+    tensor_flatten: "$Tensor$flatten",
+    tensor_eq: "$Tensor$eq",
+    tensor_ne: "$Tensor$ne",
+    tensor_lt: "$Tensor$lt",
+    tensor_le: "$Tensor$le",
+    tensor_gt: "$Tensor$gt",
+    tensor_ge: "$Tensor$ge",
+    tensor_to_list: "$Tensor$to_list",
+    tensor_item: "$Tensor$item",
+    tensor_concat: "$Tensor$concat",
+    tensor_stack: "$Tensor$stack",
+    tensor_split: "$Tensor$split",
+    tensor_softmax: "$Tensor$softmax",
+    tensor_cross_entropy: "$Tensor$cross_entropy",
+    tensor_relu: "$Tensor$relu",
+    tensor_sigmoid: "$Tensor$sigmoid",
 
     // === Audio Operations (zrtl_audio) ===
     audio_load: "$Audio$load",
@@ -99,12 +157,12 @@
     simd_layer_norm: "$SIMD$layer_norm_f32",
 
     // === I/O Operations (zrtl_io) ===
-    // For now, use simple string-only print to avoid DynamicBox complexity
-    // TODO: Switch to println_dynamic once DynamicBox argument boxing is implemented
-    print: "$IO$print",
-    println: "$IO$println",
-    eprint: "$IO$eprint",
-    eprintln: "$IO$eprintln",
+    // Dynamic print functions that handle ALL types via DynamicBox dispatch
+    // Uses display_fn field to call type's to_string() for opaque types like Tensor
+    print: "$IO$print_dynamic",
+    println: "$IO$println_dynamic",
+    eprint: "$IO$eprint_dynamic",
+    eprintln: "$IO$eprintln_dynamic",
 
     // String-only output (for when you know it's a string)
     print_str: "$IO$print",
@@ -159,6 +217,7 @@
     println_array_f64: "$IO$println_array_f64",
 
     // String operations
+    concat: "$IO$string_concat",         // Used by f-string desugaring
     string_concat: "$IO$string_concat",
     string_free: "$IO$string_free",
 
@@ -166,6 +225,13 @@
     file_read: "$FS$read_string",
     file_write: "$FS$write_string",
     file_exists: "$FS$exists",
+
+    // === Collections (zrtl_collections) ===
+    // NOTE: List, HashMap, HashSet operations require zrtl_collections plugin
+    // Currently not available - these mappings are placeholders
+    // list_get_at: "$List$get_at",
+    // hashmap_new: "$HashMap$new",
+    // hashset_new: "$HashSet$new",
 
     // === Method Mappings ===
     // Syntax: x.method(args) -> builtin(x, args)
@@ -629,10 +695,19 @@ trait_method = { item:trait_method_def | item:trait_method_fn }
 trait_params = { first:trait_param ~ ("," ~ rest:trait_param)* }
   -> prepend_list(first, rest)
 
-trait_param = { name:identifier ~ (":" ~ ty:type_expr)? }
+// Trait parameter: can be typed or untyped (like "self")
+// Using separate alternatives like fn_param to avoid undefined bindings
+trait_param = { trait_param_typed | trait_param_simple }
+
+trait_param_typed = { name:identifier ~ ":" ~ ty:type_expr }
   -> TypedParameter {
       name: intern(name),
-      type_annotation: ty,
+      ty: ty,
+  }
+
+trait_param_simple = { name:identifier }
+  -> TypedParameter {
+      name: intern(name),
   }
 
 // Type parameters: <T, U>
@@ -679,8 +754,12 @@ type_struct = { "type" ~ name:identifier ~ "=" ~ "{" ~ fields:struct_fields ~ "}
       fields: fields,
   }
 
-struct_fields = { field:struct_field ~ ("," ~ field:struct_field)* ~ ","? }
+// Helper rule for comma-separated struct fields (needed for binding accumulation)
+struct_field_comma = { "," ~ field:struct_field }
   -> field
+
+struct_fields = { first:struct_field ~ rest:struct_field_comma* ~ ","? }
+  -> prepend_list(first, rest)
 
 struct_field = { name:identifier ~ ":" ~ ty:type_expr }
   -> TypedField {
@@ -754,8 +833,9 @@ abstract_simple = { "abstract" ~ name:identifier ~ "(" ~ type_expr ~ ")" }
   }
 
 // Field list for brace-style definitions: field: type, field: type
-struct_field_list = { field:struct_field ~ ("," ~ field:struct_field)* }
-  -> field
+// Uses struct_field_comma helper rule for proper binding accumulation
+struct_field_list = { first:struct_field ~ rest:struct_field_comma* }
+  -> prepend_list(first, rest)
 
 struct_field = { name:identifier ~ ":" ~ ty:type_expr }
   -> TypedField {
@@ -1002,7 +1082,7 @@ impl_block_inherent = { decl:impl_block_inherent_generic | decl:impl_block_inher
 // impl<T> List<T> { ... }
 impl_block_inherent_generic = { "impl" ~ type_params ~ for_type:impl_type_name_generic ~ "{" ~ items:impl_items ~ "}" }
   -> TypedDeclaration::Impl {
-      trait_name: intern(for_type),
+      trait_name: intern(""),
       for_type: intern(for_type),
       items: items,
   }
@@ -1010,7 +1090,7 @@ impl_block_inherent_generic = { "impl" ~ type_params ~ for_type:impl_type_name_g
 // impl List { ... }
 impl_block_inherent_simple = { "impl" ~ for_type:identifier ~ "{" ~ items:impl_items ~ "}" }
   -> TypedDeclaration::Impl {
-      trait_name: intern(for_type),
+      trait_name: intern(""),
       for_type: intern(for_type),
       items: items,
   }
@@ -1040,7 +1120,10 @@ impl_item = {
     // Legacy fn-style methods
     decl:impl_method_return_expr | decl:impl_method_return_indent | decl:impl_method_return |
     decl:impl_method_params_expr | decl:impl_method_params_indent | decl:impl_method_params |
-    decl:impl_method_simple_indent | decl:impl_method_simple
+    decl:impl_method_simple_indent | decl:impl_method_simple |
+    // Extern/bodyless methods (MUST come last - fallback when no body)
+    // For extern struct impls, these auto-map to ZRTL symbols
+    decl:impl_method_extern_return | decl:impl_method_extern_params | decl:impl_method_extern_simple
 }
   -> decl
 
@@ -1166,6 +1249,37 @@ impl_method_def_simple = { "def" ~ name:identifier ~ "(" ~ ")" ~ body:block }
       body: Some(body),
   }
 
+// ========== Extern methods (for extern struct implementations) ==========
+// Use "extern def" to mark methods that auto-map to ZRTL symbols
+// These methods have no body - the compiler generates external function calls
+
+// extern def name(params): ReturnType
+impl_method_extern_return = { "extern" ~ "def" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ":" ~ ret:type_expr }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: ret,
+      body: None,
+  }
+
+// extern def name(params)  (no return type, defaults to Unit)
+impl_method_extern_params = { "extern" ~ "def" ~ name:identifier ~ "(" ~ params:fn_params ~ ")" }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: None,
+  }
+
+// extern def name()  (no params, no return type)
+impl_method_extern_simple = { "extern" ~ "def" ~ name:identifier ~ "(" ~ ")" }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: [],
+      return_type: Type::Unit,
+      body: None,
+  }
+
 // Type arguments in angle brackets (for trait impl)
 type_args_angle = { "<" ~ args:type_args ~ ">" }
   -> args
@@ -1183,7 +1297,7 @@ type_args_angle = { "<" ~ args:type_args ~ ">" }
 //   List<int>      -> List<int>
 //   int            -> int
 //
-type_expr = { ty:optional_type | ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:simple_type }
+type_expr = { ty:optional_type | ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:primitive_type | ty:simple_type }
   -> ty
 
 // Tuple type: (T1, T2) or (T1, T2, T3)
@@ -1234,8 +1348,66 @@ optional_type = { "?" ~ inner:type_expr_non_optional }
   }
 
 // Type expression without the optional prefix (to avoid infinite recursion)
-type_expr_non_optional = { ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:simple_type }
+type_expr_non_optional = { ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:primitive_type | ty:simple_type }
   -> ty
+
+// Primitive types must be matched BEFORE simple_type to avoid treating them as named types
+primitive_type = { ty:prim_i8 | ty:prim_i16 | ty:prim_i32 | ty:prim_i64 | ty:prim_i128
+                 | ty:prim_u8 | ty:prim_u16 | ty:prim_u32 | ty:prim_u64 | ty:prim_u128
+                 | ty:prim_f32 | ty:prim_f64 | ty:prim_bool | ty:prim_str | ty:prim_char
+                 | ty:prim_void | ty:prim_unit }
+  -> ty
+
+prim_i8 = { "i8" }
+  -> Type::Primitive { name: intern("i8") }
+
+prim_i16 = { "i16" }
+  -> Type::Primitive { name: intern("i16") }
+
+prim_i32 = { "i32" }
+  -> Type::Primitive { name: intern("i32") }
+
+prim_i64 = { "i64" }
+  -> Type::Primitive { name: intern("i64") }
+
+prim_i128 = { "i128" }
+  -> Type::Primitive { name: intern("i128") }
+
+prim_u8 = { "u8" }
+  -> Type::Primitive { name: intern("u8") }
+
+prim_u16 = { "u16" }
+  -> Type::Primitive { name: intern("u16") }
+
+prim_u32 = { "u32" }
+  -> Type::Primitive { name: intern("u32") }
+
+prim_u64 = { "u64" }
+  -> Type::Primitive { name: intern("u64") }
+
+prim_u128 = { "u128" }
+  -> Type::Primitive { name: intern("u128") }
+
+prim_f32 = { "f32" }
+  -> Type::Primitive { name: intern("f32") }
+
+prim_f64 = { "f64" }
+  -> Type::Primitive { name: intern("f64") }
+
+prim_bool = { "bool" }
+  -> Type::Primitive { name: intern("bool") }
+
+prim_str = { "String" }
+  -> Type::Primitive { name: intern("String") }
+
+prim_char = { "char" }
+  -> Type::Primitive { name: intern("char") }
+
+prim_void = { "void" }
+  -> Type::Primitive { name: intern("void") }
+
+prim_unit = { "()" }
+  -> Type::Primitive { name: intern("void") }
 
 simple_type = { name:identifier }
   -> Type::Named {
@@ -1612,8 +1784,12 @@ fn_def_simple_colon = { "fn" ~ name:identifier ~ "(" ~ ")" ~ ":" ~ body:indent_b
       body: Some(body),
   }
 
-fn_params = { first:fn_param ~ ("," ~ rest:fn_param)* }
+// Fixed: use helper rule to properly collect rest params into a list
+fn_params = { first:fn_param ~ rest:fn_param_comma* }
   -> prepend_list(first, rest)
+
+fn_param_comma = { "," ~ param:fn_param }
+  -> param
 
 // Parameter with optional type annotation and optional default value
 // Supports:
@@ -1633,7 +1809,7 @@ fn_param = { param_typed_default | param_default | param_typed | param_simple }
 param_typed_default = { name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ default:expr }
   -> TypedParameter {
       name: intern(name),
-      type_annotation: Some(ty),
+      ty: ty,
       default_value: Some(default),
   }
 
@@ -1641,7 +1817,6 @@ param_typed_default = { name:identifier ~ ":" ~ ty:type_expr ~ "=" ~ default:exp
 param_default = { name:identifier ~ "=" ~ default:expr }
   -> TypedParameter {
       name: intern(name),
-      type_annotation: None,
       default_value: Some(default),
   }
 
@@ -1649,16 +1824,13 @@ param_default = { name:identifier ~ "=" ~ default:expr }
 param_typed = { name:identifier ~ ":" ~ ty:type_expr }
   -> TypedParameter {
       name: intern(name),
-      type_annotation: Some(ty),
-      default_value: None,
+      ty: ty,
   }
 
 // x (untyped, no default)
 param_simple = { name:identifier }
   -> TypedParameter {
       name: intern(name),
-      type_annotation: None,
-      default_value: None,
   }
 
 // ============================================================================
@@ -2173,8 +2345,13 @@ call_op = { "(" ~ args:call_args? ~ ")" }
 //   search(query="ML", top_k=5)               - Keyword only
 //   search("ML", top_k=5, threshold=0.5)      - Mixed
 //
-call_args = { first:call_arg ~ ("," ~ rest:call_arg)* }
-  -> first
+// Helper rule for comma-separated call args (needed for binding accumulation)
+call_arg_comma = { "," ~ arg:call_arg }
+  -> arg
+
+// Call arguments collecting into a list
+call_args = { first:call_arg ~ rest:call_arg_comma* }
+  -> prepend_list(first, rest)
 
 // Individual call argument - can be positional or keyword
 call_arg = { keyword_arg | positional_arg }
@@ -2192,8 +2369,8 @@ positional_arg = { value:expr }
 
 // Call args as a proper list - returns list of expressions
 // Pattern matches: expr ("," expr)*
-// rest binding on the repetition collects all values into a List
-call_args_list = { first:call_arg ~ ("," ~ rest:call_arg)* }
+// rest binding on the whole repetition to collect all values into a List
+call_args_list = { first:call_arg ~ rest:call_arg_comma* }
   -> prepend_list(first, rest)
 
 // Indexing: x[i] - not used in simplified version

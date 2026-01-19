@@ -249,6 +249,9 @@ pub struct SymbolTable {
     pub effects: indexmap::IndexMap<InternedString, crate::hir::HirId>,
     /// Effect handlers by name
     pub handlers: indexmap::IndexMap<InternedString, crate::hir::HirId>,
+    /// External function link names (alias -> ZRTL symbol)
+    /// e.g., "tensor_add" -> "$Tensor$add"
+    pub extern_link_names: indexmap::IndexMap<InternedString, String>,
 }
 
 /// Import metadata for debugging and error messages
@@ -955,6 +958,9 @@ impl LoweringContext {
                     // Pre-register impl block methods in symbol table WITH MANGLED NAMES
                     // This must match the mangling done in lower_impl_block
 
+                    // Check if implementing type is extern struct
+                    let is_extern_struct = matches!(&impl_block.for_type, zyntax_typed_ast::Type::Extern { .. });
+
                     // Get the implementing type name
                     let type_name = match &impl_block.for_type {
                         zyntax_typed_ast::Type::Named { id, .. } => {
@@ -982,7 +988,8 @@ impl LoweringContext {
                                 if let Some(type_def) = self.type_registry.get_type_by_name(fresh_name) {
                                     type_def.name
                                 } else {
-                                    continue; // Can't resolve type, skip
+                                    // For extern struct, use the name directly
+                                    *name
                                 }
                             }
                         }
@@ -998,12 +1005,16 @@ impl LoweringContext {
 
                         // Generate mangled name matching lower_impl_block
                         let mangled_name = if is_inherent {
-                            // Inherent method: {TypeName}${method_name}
                             let type_name_str = type_name.resolve_global()
                                 .unwrap_or_else(|| "UnknownType".to_string());
+                            // Strip $ prefix if present (extern struct names have runtime_prefix)
+                            let base_type_name = type_name_str.strip_prefix('$').unwrap_or(&type_name_str);
                             let method_name_str = method.name.resolve_global()
                                 .unwrap_or_else(|| "unknown_method".to_string());
-                            InternedString::new_global(&format!("{}${}", type_name_str, method_name_str))
+
+                            // Use consistent TypeName$method naming for all extern struct methods
+                            // ZRTL symbols start with $ (e.g., $Tensor$sum_f32), so no collision
+                            InternedString::new_global(&format!("{}${}", base_type_name, method_name_str))
                         } else {
                             // Trait method: {TypeName}${TraitName}${method_name}
                             self.mangle_trait_method_name(type_name, impl_block.trait_name, method.name)
@@ -1126,7 +1137,10 @@ impl LoweringContext {
             if let Some(ref link_name) = func.link_name {
                 let link_name_str = link_name.resolve_global()
                     .unwrap_or_else(|| link_name.to_string());
-                hir_func.link_name = Some(link_name_str);
+                hir_func.link_name = Some(link_name_str.clone());
+
+                // Register the alias -> link_name mapping for SSA call resolution
+                self.symbols.extern_link_names.insert(func.name, link_name_str);
             }
 
             // Extern functions have no body - clear the default entry block
@@ -1160,7 +1174,9 @@ impl LoweringContext {
             self.type_registry.clone(),
             self.arena.clone(),
             self.symbols.functions.clone()
-        ).with_return_type(func.return_type.clone());
+        )
+        .with_return_type(func.return_type.clone())
+        .with_extern_link_names(self.symbols.extern_link_names.clone());
         let ssa = ssa_builder.build_from_typed_cfg(&typed_cfg)?;
 
         // Debug: check SSA result
@@ -2169,6 +2185,20 @@ impl LoweringContext {
         let is_inherent = trait_name_str.is_empty();
         eprintln!("[LOWERING] Impl block is_inherent: {}, trait_name: '{}'", is_inherent, trait_name_str);
 
+        // Check if the implementing type is an extern struct
+        // For extern structs, methods should automatically map to ZRTL symbols
+        let is_extern_struct = matches!(&implementing_type, Type::Extern { .. });
+        let extern_type_name = if let Type::Extern { name, .. } = &implementing_type {
+            let name_str = name.resolve_global().unwrap_or_default();
+            // The extern type name may have a leading $ (runtime_prefix) - strip it for the base name
+            // e.g., "$Tensor" -> "Tensor"
+            let base_name = name_str.strip_prefix('$').unwrap_or(&name_str);
+            Some(base_name.to_string())
+        } else {
+            None
+        };
+        eprintln!("[LOWERING] is_extern_struct: {}, extern_type_name: {:?}", is_extern_struct, extern_type_name);
+
         // For trait impls, register the implementation in the type registry
         let trait_id = if !is_inherent {
             let trait_def = self.type_registry.get_trait_by_name(impl_block.trait_name)
@@ -2337,8 +2367,9 @@ impl LoweringContext {
             };
 
             // Mangle the method name to include trait and type info
-            // Format for inherent: {TypeName}${method_name}
-            // Format for trait: {TypeName}${TraitName}${method_name}
+            // For extern struct methods WITH bodies (wrappers): use _zynml_{Type}_{method} to avoid ZRTL collision
+            // For extern struct methods WITHOUT bodies: auto-map creates external function with ZRTL link
+            // For regular structs: {TypeName}${method_name} or {TypeName}${TraitName}${method_name}
             let mangled_name = {
                 let type_name = match &implementing_type {
                     Type::Named { id, .. } => {
@@ -2348,16 +2379,22 @@ impl LoweringContext {
                             method.name // Fallback to original name
                         }
                     }
-                    _ => method.name, // For non-named types, use original name
+                    Type::Extern { name, .. } => *name,  // Use the extern struct's name
+                    _ => method.name, // For other types, use original name
                 };
 
                 // For inherent impls (empty trait name), use simpler mangling
                 if is_inherent {
                     let type_name_str = type_name.resolve_global()
                         .unwrap_or_else(|| "UnknownType".to_string());
+                    // Strip $ prefix if present (extern struct names have runtime_prefix)
+                    let base_type_name = type_name_str.strip_prefix('$').unwrap_or(&type_name_str);
                     let method_name_str = method.name.resolve_global()
                         .unwrap_or_else(|| "unknown_method".to_string());
-                    let mangled = format!("{}${}", type_name_str, method_name_str);
+
+                    // Use consistent TypeName$method naming for all extern struct methods
+                    // ZRTL symbols start with $ (e.g., $Tensor$sum_f32), so no collision
+                    let mangled = format!("{}${}", base_type_name, method_name_str);
                     InternedString::new_global(&mangled)
                 } else {
                     // For trait impls, include trait name
@@ -2381,7 +2418,44 @@ impl LoweringContext {
                 new_id
             };
 
-            // Create a function from the method
+            // For extern struct methods WITHOUT a body, create external function declaration
+            // that automatically maps to ZRTL symbol: $TypeName$method_name
+            // If the method has an explicit body, use that body as an override
+            if is_extern_struct && method.body.is_none() {
+                if let Some(ref type_name) = extern_type_name {
+                    let method_name_str = method.name.resolve_global().unwrap_or_default();
+                    // ZRTL symbol format: $TypeName$method_name (e.g., $Tensor$matmul)
+                    let zrtl_symbol = format!("${}${}", type_name, method_name_str);
+                    eprintln!("[LOWERING] Extern struct method: {} -> ZRTL symbol: {} (params: {})",
+                        mangled_name.resolve_global().unwrap_or_default(), zrtl_symbol, params.len());
+
+                    let func = TypedFunction {
+                        name: mangled_name,
+                        annotations: vec![],
+                        effects: vec![],
+                        type_params: vec![],
+                        params,
+                        return_type: resolved_return_type,
+                        body: None,  // No body - external function
+                        visibility: zyntax_typed_ast::type_registry::Visibility::Public,
+                        is_async: method.is_async,
+                        is_pure: false,
+                        is_external: true,  // Mark as external
+                        calling_convention: zyntax_typed_ast::type_registry::CallingConvention::Default,
+                        link_name: Some(InternedString::new_global(&zrtl_symbol)),  // Link to ZRTL symbol
+                    };
+
+                    if let Err(e) = self.lower_function(&func) {
+                        let method_name_str = mangled_name.resolve_global().unwrap_or_default();
+                        eprintln!("[LOWERING WARN] Skipping extern method '{}': {:?}", method_name_str, e);
+                        self.symbols.functions.remove(&mangled_name);
+                        continue;
+                    }
+                    continue;  // Skip regular function lowering
+                }
+            }
+
+            // Create a function from the method (regular, non-extern struct)
             let func = TypedFunction {
                 name: mangled_name,  // Use mangled name for trait method
                 annotations: vec![],
@@ -3131,9 +3205,24 @@ impl LoweringContext {
         self.lower_function(&func)
     }
 
-    /// Resolve associated function call (Type::method) to mangled trait method name
+    /// Resolve associated function call (Type::method) to mangled method name
     /// Returns None if the function cannot be resolved
     fn resolve_associated_function_to_mangled(&self, type_name: &str, method_name: &str) -> Option<String> {
+        // First, check for inherent impl methods (including extern struct methods)
+        // Try wrapper method name first: _zynml_{Type}_{method}
+        let wrapper_name = format!("_zynml_{}_{}", type_name, method_name);
+        let wrapper_interned = InternedString::new_global(&wrapper_name);
+        if self.symbols.functions.contains_key(&wrapper_interned) {
+            return Some(wrapper_name);
+        }
+
+        // Try standard inherent method: {Type}${method}
+        let inherent_name = format!("{}${}", type_name, method_name);
+        let inherent_interned = InternedString::new_global(&inherent_name);
+        if self.symbols.functions.contains_key(&inherent_interned) {
+            return Some(inherent_name);
+        }
+
         // Search through all trait implementations to find the method
         for (_trait_id, impls) in self.type_registry.iter_implementations() {
             for impl_def in impls {

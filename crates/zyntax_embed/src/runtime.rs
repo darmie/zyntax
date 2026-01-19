@@ -934,6 +934,12 @@ impl ZyntaxRuntime {
         program: &mut zyntax_typed_ast::TypedProgram,
         type_registry: &mut zyntax_typed_ast::TypeRegistry,
     ) -> RuntimeResult<()> {
+        // Use thread-local storage to track processed imports for circular dependency detection
+        thread_local! {
+            static PROCESSED_IMPORTS: std::cell::RefCell<std::collections::HashSet<String>> =
+                std::cell::RefCell::new(std::collections::HashSet::new());
+        }
+
         use zyntax_typed_ast::typed_ast::TypedDeclaration;
 
         // Collect imports to process (can't mutate while iterating)
@@ -950,6 +956,16 @@ impl ZyntaxRuntime {
 
         // Process each import
         for module_name in imports_to_process {
+            // Skip if already processed (circular import detection)
+            let already_processed = PROCESSED_IMPORTS.with(|set| set.borrow().contains(&module_name));
+            if already_processed {
+                log::debug!("Skipping already processed import: {}", module_name);
+                continue;
+            }
+
+            // Mark as processed BEFORE recursive processing
+            PROCESSED_IMPORTS.with(|set| set.borrow_mut().insert(module_name.clone()));
+
             log::debug!("Processing import: {}", module_name);
 
             // Try to resolve the import using our import resolvers
@@ -974,6 +990,11 @@ impl ZyntaxRuntime {
                     log::info!("Parsed stdlib module '{}': {} declarations",
                         module_name, imported_program.declarations.len());
 
+                    // IMPORTANT: Recursively process imports from the imported module FIRST
+                    // This ensures transitive dependencies (e.g., tensor -> prelude) are loaded
+                    // before we process the imported module's declarations
+                    self.process_imports_for_traits(&mut imported_program, type_registry)?;
+
                     // First, merge the TypeRegistry from the imported module
                     // This includes struct definitions, trait definitions, etc.
                     type_registry.merge_from(&imported_program.type_registry);
@@ -991,7 +1012,7 @@ impl ZyntaxRuntime {
                     }
 
                     // Merge declarations from imported module into main program
-                    // Filter out the import declarations themselves to avoid circular imports
+                    // Filter out the import declarations themselves to avoid re-processing
                     for imported_decl in imported_program.declarations.drain(..) {
                         if !matches!(imported_decl.node, TypedDeclaration::Import(_)) {
                             program.declarations.push(imported_decl);
@@ -1029,8 +1050,38 @@ impl ZyntaxRuntime {
         // Build a map of function names to return types from declarations
         let mut function_returns: std::collections::HashMap<InternedString, Type> = std::collections::HashMap::new();
         for decl in program.declarations.iter() {
-            if let TypedDeclaration::Function(func) = &decl.node {
-                function_returns.insert(func.name, func.return_type.clone());
+            match &decl.node {
+                TypedDeclaration::Function(func) => {
+                    function_returns.insert(func.name, func.return_type.clone());
+                }
+                TypedDeclaration::Impl(impl_block) => {
+                    // Add methods from impl blocks with mangled names (TypeName$method)
+                    // Extract type name from for_type
+                    let type_name_opt = match &impl_block.for_type {
+                        Type::Named { id, .. } => {
+                            type_registry.get_type_by_id(*id)
+                                .and_then(|td| td.name.resolve_global())
+                        }
+                        Type::Unresolved(name) => name.resolve_global(),
+                        Type::Extern { name, .. } => {
+                            // Strip $ prefix if present
+                            name.resolve_global()
+                                .map(|s| s.strip_prefix('$').unwrap_or(&s).to_string())
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(type_name) = type_name_opt {
+                        for method in &impl_block.methods {
+                            let method_name = method.name.resolve_global().unwrap_or_default();
+                            let mangled_name = format!("{}${}", type_name, method_name);
+                            let mangled_interned = InternedString::new_global(&mangled_name);
+                            function_returns.insert(mangled_interned, method.return_type.clone());
+                            log::debug!("[RESOLVE_TYPES] Added impl method '{}' with return type {:?}", mangled_name, method.return_type);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         log::debug!("Built function_returns map with {} entries", function_returns.len());
@@ -1160,8 +1211,33 @@ impl ZyntaxRuntime {
                 for named_arg in &mut call.named_args {
                     Self::resolve_in_expr(&mut named_arg.value, type_registry, function_returns);
                 }
+
+                // If the callee is a Path expression (e.g., Tensor::arange), convert to Variable with mangled name
+                if let TypedExpression::Path(path) = &call.callee.node {
+                    // Convert path segments to mangled function name
+                    let segments: Vec<String> = path.segments.iter()
+                        .filter_map(|s| s.resolve_global())
+                        .collect();
+                    let mangled_name = segments.join("$");  // "Tensor$arange"
+                    let mangled_interned = zyntax_typed_ast::InternedString::new_global(&mangled_name);
+
+                    log::debug!("[RESOLVE_TYPES] Converting Path {:?} to Variable '{}'", segments, mangled_name);
+
+                    // Look up return type from function_returns using mangled name
+                    if let Some(return_type) = function_returns.get(&mangled_interned) {
+                        let mut resolved_return_type = return_type.clone();
+                        Self::resolve_in_type(&mut resolved_return_type, type_registry);
+                        if !matches!(resolved_return_type, Type::Any | Type::Unknown) {
+                            expr.ty = resolved_return_type;
+                            log::debug!("[RESOLVE_TYPES] Path call '{}' resolved to return type {:?}", mangled_name, expr.ty);
+                        }
+                    }
+
+                    // Convert Path to Variable so SSA can handle it
+                    call.callee.node = TypedExpression::Variable(mangled_interned);
+                }
                 // If the callee is a variable (function name), look up its return type
-                if let TypedExpression::Variable(func_name) = &call.callee.node {
+                else if let TypedExpression::Variable(func_name) = &call.callee.node {
                     if let Some(return_type) = function_returns.get(func_name) {
                         let mut resolved_return_type = return_type.clone();
                         Self::resolve_in_type(&mut resolved_return_type, type_registry);

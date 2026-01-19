@@ -59,6 +59,9 @@ pub struct SsaBuilder {
     address_taken_vars: HashSet<InternedString>,
     /// Stack slots for address-taken variables (var name -> alloca result)
     stack_slots: IndexMap<InternedString, HirId>,
+    /// External function link names (alias -> ZRTL symbol)
+    /// e.g., "tensor_add" -> "$Tensor$add"
+    extern_link_names: IndexMap<InternedString, String>,
 }
 
 /// Context for pattern matching
@@ -290,6 +293,7 @@ impl SsaBuilder {
             original_return_type: None,
             address_taken_vars: HashSet::new(),
             stack_slots: IndexMap::new(),
+            extern_link_names: IndexMap::new(),
         }
     }
 
@@ -297,6 +301,13 @@ impl SsaBuilder {
     /// This is needed for auto-wrapping return values in Result::Ok for error union types
     pub fn with_return_type(mut self, return_type: Type) -> Self {
         self.original_return_type = Some(return_type);
+        self
+    }
+
+    /// Set external function link names for alias resolution
+    /// Maps alias names (e.g., "tensor_add") to ZRTL symbols (e.g., "$Tensor$add")
+    pub fn with_extern_link_names(mut self, link_names: IndexMap<InternedString, String>) -> Self {
+        self.extern_link_names = link_names;
         self
     }
     
@@ -387,6 +398,8 @@ impl SsaBuilder {
                 param.name.resolve_global().unwrap_or_default(), self.var_types.get(&param.name));
 
             // Define parameter in entry block so it's available to all code
+            eprintln!("[PARAM DEBUG] write_variable({}, entry_block={:?})",
+                param.name.resolve_global().unwrap_or_default(), entry_block);
             self.write_variable(param.name, entry_block, param_value_id);
         }
 
@@ -435,17 +448,25 @@ impl SsaBuilder {
         processed_blocks.insert(entry_block);
 
         // Process entry block statements and terminator
+        let mut found_entry = false;
         for node_idx in cfg.graph.node_indices() {
             let typed_block = &cfg.graph[node_idx];
+            eprintln!("[SSA DEBUG] CFG block: typed_block.id={:?}, entry_block={:?}, match={}",
+                typed_block.id, entry_block, typed_block.id == entry_block);
             if typed_block.id == entry_block {
+                found_entry = true;
                 // Track current block - try expressions may create continuation blocks
                 let mut current_block = entry_block;
+                eprintln!("[SSA DEBUG] Processing entry block {:?} with {} statements", entry_block, typed_block.statements.len());
                 for stmt in &typed_block.statements {
                     current_block = self.process_statement(current_block, stmt)?;
                 }
                 self.process_typed_terminator(current_block, &typed_block.terminator, &typed_block.pattern_check)?;
                 break;
             }
+        }
+        if !found_entry {
+            eprintln!("[SSA DEBUG] WARNING: entry_block {:?} NOT FOUND in CFG!", entry_block);
         }
 
         // Keep processing until worklist is empty
@@ -1496,6 +1517,7 @@ impl SsaBuilder {
                 let args = &call.positional_args;
 
                 // Check if callee is a function name (direct call) vs expression (indirect call)
+                // Path expressions should be resolved to Variable during lowering/type resolution
                 let (hir_callable, indirect_callee_val) = if let TypedExpression::Variable(func_name) = &callee.node {
                     // Resolve the function name string using global interner
                     // (InternedString.resolve_global() returns the actual string value)
@@ -1513,14 +1535,15 @@ impl SsaBuilder {
                     // Check if this is an external runtime symbol (e.g., "$haxe$trace$int")
                     // External symbols start with '$' and are resolved at link time
                     if name_str.starts_with('$') {
-                        log::debug!("[SSA] Detected external symbol call: {}", name_str);
                         (crate::hir::HirCallable::Symbol(name_str), None)
                     } else if let Some(&func_id) = self.function_symbols.get(func_name) {
                         // Direct function call to known function
                         (crate::hir::HirCallable::Function(func_id), None)
+                    } else if let Some(link_name) = self.extern_link_names.get(func_name) {
+                        // External function with link_name (e.g., tensor_add -> $Tensor$add)
+                        (crate::hir::HirCallable::Symbol(link_name.clone()), None)
                     } else {
                         // Variable lookup (function pointer)
-                        log::debug!("[SSA] Function '{}' not in function_symbols, falling back to indirect call", name_str);
                         let callee_val = self.translate_expression(block_id, callee)?;
                         (crate::hir::HirCallable::Indirect(callee_val), Some(callee_val))
                     }
@@ -2019,18 +2042,19 @@ impl SsaBuilder {
                     arg_vals.push(arg_val);
                 }
 
-                // Look up the function by mangled name
-                let func_id = self.function_symbols.get(&mangled_name)
-                    .copied()
-                    .ok_or_else(|| {
-                        let arena = self.arena.lock().unwrap();
-                        let name_str = arena.resolve_string(mangled_name)
-                            .unwrap_or("unknown")
-                            .to_string();
-                        crate::CompilerError::Analysis(
-                            format!("Method function '{}' not found in symbol table", name_str)
-                        )
-                    })?;
+                // Look up the function by mangled name - first in function_symbols, then extern_link_names
+                let hir_callable = if let Some(&func_id) = self.function_symbols.get(&mangled_name) {
+                    // Direct function call to known function
+                    crate::hir::HirCallable::Function(func_id)
+                } else if let Some(link_name) = self.extern_link_names.get(&mangled_name) {
+                    // External function with link_name (e.g., Tensor$sum -> $Tensor$sum)
+                    crate::hir::HirCallable::Symbol(link_name.clone())
+                } else {
+                    let name_str = mangled_name.resolve_global().unwrap_or_default();
+                    return Err(crate::CompilerError::Analysis(
+                        format!("Method function '{}' not found in symbol table", name_str)
+                    ));
+                };
 
                 // Determine result type: if the method call has type Any, look up the trait method's return type
                 let result_type = if matches!(expr.ty, Type::Any) {
@@ -2081,7 +2105,7 @@ impl SsaBuilder {
 
                 self.add_instruction(block_id, HirInstruction::Call {
                     result,
-                    callee: crate::hir::HirCallable::Function(func_id),
+                    callee: hir_callable,
                     args: arg_vals.clone(),
                     type_args: vec![],
                     const_args: vec![],
@@ -3042,17 +3066,19 @@ impl SsaBuilder {
         let type_id = match receiver_type {
             Type::Named { id, .. } => *id,
             Type::Extern { name, .. } => {
-                // For extern types, method calls go through the trait impl
-                // The mangled name format is: ${TypeName}${method_name}
-                // E.g., $Tensor$add for Tensor.add()
+                // For extern types, method calls go through the impl block
+                // The mangled name format is: {TypeName}${method_name} (no leading $)
+                // E.g., Tensor$add for Tensor.add()
                 let arena = self.arena.lock().unwrap();
                 let type_name_str = arena.resolve_string(*name)
                     .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve extern type name".into()))?;
                 let method_name_str = arena.resolve_string(method_name)
                     .ok_or_else(|| crate::CompilerError::Analysis("Could not resolve method name".into()))?;
 
-                // Format: ${TypeName}${method_name}
-                let mangled = format!("{}${}", type_name_str, method_name_str);
+                // Strip $ prefix if present (extern type names often have runtime_prefix like "$Tensor")
+                let base_type_name = type_name_str.strip_prefix('$').unwrap_or(&type_name_str);
+                // Format: {TypeName}${method_name} (matches lowering.rs format)
+                let mangled = format!("{}${}", base_type_name, method_name_str);
                 drop(arena);
                 return Ok(InternedString::new_global(&mangled));
             }
