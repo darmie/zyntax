@@ -29,6 +29,9 @@
 // ============================================================================
 
 @builtin {
+    // Internal dispatch aliases (language-level constructs lowered to plugin calls)
+    __internal_compute_dispatch: "$ZynML$compute",
+
     // === Tensor Operations (zrtl_tensor) ===
     tensor: "tensor_from_array",          // tensor([1.0, 2.0]) -> tensor_from_array([1.0, 2.0])
     tensor_from_array: "$Tensor$from_array_f32",

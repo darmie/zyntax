@@ -19,6 +19,10 @@ use zyntax_typed_ast::{
     ConstValue, InternedString, Type,
 };
 
+/// Internal alias used when lowering `compute(...) { ... }` expressions.
+/// This must not collide with user code.
+const INTERNAL_COMPUTE_ALIAS: &str = "__internal_compute_dispatch";
+
 /// SSA builder state
 pub struct SsaBuilder {
     /// Current function being built
@@ -1752,11 +1756,9 @@ impl SsaBuilder {
                     if name_str == "Some" || name_str == "Ok" || name_str == "Err" {
                         return self
                             .translate_enum_constructor(block_id, &name_str, args, &expr.ty);
-                    }
-
-                    // Check if this is an external runtime symbol (e.g., "$haxe$trace$int")
-                    // External symbols start with '$' and are resolved at link time
-                    if name_str.starts_with('$') {
+                    } else if name_str.starts_with('$') {
+                        // Check if this is an external runtime symbol (e.g., "$haxe$trace$int")
+                        // External symbols start with '$' and are resolved at link time
                         (crate::hir::HirCallable::Symbol(name_str), None)
                     } else if let Some(&func_id) = self.function_symbols.get(func_name) {
                         // Direct function call to known function
@@ -1851,7 +1853,7 @@ impl SsaBuilder {
             TypedExpression::Compute(compute) => {
                 // Lower compute expressions through the existing call pipeline for now.
                 // This preserves call-based execution while keeping typed compute structure.
-                let compute_name = InternedString::new_global("compute");
+                let compute_name = InternedString::new_global(INTERNAL_COMPUTE_ALIAS);
                 let lowered = zyntax_typed_ast::typed_ast::TypedCall {
                     callee: Box::new(zyntax_typed_ast::typed_node(
                         TypedExpression::Variable(compute_name),
