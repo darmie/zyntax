@@ -137,6 +137,28 @@ mod module_system {
             result.err()
         );
     }
+
+    #[test]
+    fn test_from_import_named_items() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("from zynml.image import resize, crop");
+        assert!(
+            result.is_ok(),
+            "Should parse from-import named items: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_from_import_wildcard() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("from zynml.image import *");
+        assert!(
+            result.is_ok(),
+            "Should parse from-import wildcard: {:?}",
+            result.err()
+        );
+    }
 }
 
 // ============================================================================

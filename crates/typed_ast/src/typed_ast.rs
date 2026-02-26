@@ -430,6 +430,8 @@ pub enum TypedStatement {
     /// Let with pattern destructuring: let (x, y) = expr
     LetPattern(TypedLetPattern),
     Return(Option<Box<TypedNode<TypedExpression>>>),
+    /// Yield from compute/reduction contexts
+    Yield(Box<TypedNode<TypedExpression>>),
     If(TypedIf),
     While(TypedWhile),
     Block(TypedBlock),
@@ -524,6 +526,8 @@ pub enum TypedExpression {
     Slice(TypedSlice),
     /// Import modifier expression: import loader("path") as Type
     ImportModifier(TypedImportModifier),
+    /// Compute expression: compute(args) @modifier { ... }
+    Compute(TypedComputeExpr),
     /// Path expression: Type::method or module::function
     Path(TypedPath),
 }
@@ -565,6 +569,7 @@ pub enum BinaryOp {
     Add,
     Sub,
     Mul,
+    MatMul,
     Div,
     Rem,
     // Comparison
@@ -984,6 +989,41 @@ pub struct TypedImportModifier {
 pub struct TypedPath {
     /// Path segments (e.g., ["Tensor", "zeros"] for Tensor::zeros)
     pub segments: Vec<InternedString>,
+}
+
+/// Compute expression: `compute(args...) @modifier { body }`
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedComputeExpr {
+    /// Positional compute inputs
+    pub args: Vec<TypedNode<TypedExpression>>,
+    /// Compute-level modifiers (e.g., @device("cpu"), @async)
+    #[serde(default)]
+    pub modifiers: Vec<TypedComputeModifier>,
+    /// Kernel-specific attributes (e.g., @kernel(matmul), @workgroup(16,16))
+    #[serde(default)]
+    pub kernel_attrs: Vec<TypedKernelAttr>,
+    /// Compute body block
+    pub body: TypedBlock,
+}
+
+/// Generic compute modifier
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedComputeModifier {
+    pub name: InternedString,
+    #[serde(default)]
+    pub positional_args: Vec<TypedNode<TypedExpression>>,
+    #[serde(default)]
+    pub named_args: Vec<TypedNamedArg>,
+}
+
+/// Kernel-specific attribute
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedKernelAttr {
+    pub name: InternedString,
+    #[serde(default)]
+    pub positional_args: Vec<TypedNode<TypedExpression>>,
+    #[serde(default)]
+    pub named_args: Vec<TypedNamedArg>,
 }
 
 /// Method call with enhanced argument support

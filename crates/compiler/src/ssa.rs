@@ -1363,6 +1363,10 @@ impl SsaBuilder {
                 // Evaluate expression for side effects
                 self.translate_expression(block_id, expr)?;
             }
+            TypedStatement::Yield(expr) => {
+                // Yield behaves like an expression statement at the SSA level.
+                self.translate_expression(block_id, expr)?;
+            }
 
             TypedStatement::Match(match_stmt) => {
                 // Handle match statement: evaluate scrutinee
@@ -1655,6 +1659,14 @@ impl SsaBuilder {
                 }
                 eprintln!("[DEBUG SSA] No trait dispatch, using native binary op");
 
+                // `@` must dispatch through MatMul::matmul; do not silently alias to numeric `mul`.
+                if matches!(op, FrontendOp::MatMul) {
+                    return Err(crate::CompilerError::Analysis(format!(
+                        "matrix multiplication '@' requires MatMul::matmul implementation for lhs type {:?}",
+                        left_with_type.ty
+                    )));
+                }
+
                 // Regular binary operations for primitive types
                 let left_val = self.translate_expression(block_id, left)?;
                 let right_val = self.translate_expression(block_id, right)?;
@@ -1834,6 +1846,28 @@ impl SsaBuilder {
                 }
 
                 Ok(result_or_void)
+            }
+
+            TypedExpression::Compute(compute) => {
+                // Lower compute expressions through the existing call pipeline for now.
+                // This preserves call-based execution while keeping typed compute structure.
+                let compute_name = InternedString::new_global("compute");
+                let lowered = zyntax_typed_ast::typed_ast::TypedCall {
+                    callee: Box::new(zyntax_typed_ast::typed_node(
+                        TypedExpression::Variable(compute_name),
+                        Type::Any,
+                        expr.span,
+                    )),
+                    positional_args: compute.args.clone(),
+                    named_args: vec![],
+                    type_args: vec![],
+                };
+                let lowered_expr = zyntax_typed_ast::typed_node(
+                    TypedExpression::Call(lowered),
+                    expr.ty.clone(),
+                    expr.span,
+                );
+                self.translate_expression(block_id, &lowered_expr)
             }
 
             TypedExpression::Field(field_access) => {
@@ -4097,6 +4131,7 @@ impl SsaBuilder {
             FrontendOp::Add => HirOp::Add,
             FrontendOp::Sub => HirOp::Sub,
             FrontendOp::Mul => HirOp::Mul,
+            FrontendOp::MatMul => HirOp::Mul,
             FrontendOp::Div => HirOp::Div,
             FrontendOp::Rem => HirOp::Rem,
             FrontendOp::BitAnd => HirOp::And,
@@ -4150,6 +4185,7 @@ impl SsaBuilder {
             FrontendOp::Add => "add",
             FrontendOp::Sub => "sub",
             FrontendOp::Mul => "mul",
+            FrontendOp::MatMul => "matmul",
             FrontendOp::Div => "div",
             FrontendOp::Rem => "mod",
             FrontendOp::Eq => "eq",
@@ -6205,6 +6241,12 @@ impl SsaBuilder {
                     &bin.right,
                     result_ty,
                 )?;
+
+                if matches!(bin.op, zyntax_typed_ast::typed_ast::BinaryOp::MatMul) {
+                    return Err(crate::CompilerError::Analysis(
+                        "matrix multiplication '@' requires trait dispatch and is not supported in lambda const lowering".to_string(),
+                    ));
+                }
 
                 let hir_op = self.convert_binary_op(&bin.op);
                 let result_id = HirId::new();

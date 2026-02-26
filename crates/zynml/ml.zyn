@@ -256,7 +256,7 @@
     // === Operator Overloads ===
     // Syntax: x op y -> builtin(x, y)
     // Note: These apply globally - for type-aware overloading, use method syntax
-    $@: "vec_dot"                 // x @ y -> vec_dot(x, y) (matrix multiply, like Python)
+    $@: "matmul"                  // x @ y -> matmul(x, y)
 }
 
 // ============================================================================
@@ -349,19 +349,36 @@ top_level_item = {
 // import tensor
 // import prelude
 // import zynml.tensor as T
-import_stmt = { import_aliased | import_simple }
+import_stmt = { import_from | import_aliased | import_simple }
+
+// from zynml.image import resize, crop
+// from zynml.image import *
+import_from = { "from" ~ path:module_path ~ "import" ~ items:import_items }
+  -> TypedDeclaration::Import {
+      path: [intern(path)],
+      items: items,
+  }
 
 // import zynml.tensor as T
 import_aliased = { "import" ~ path:module_path ~ "as" ~ alias:identifier }
   -> TypedDeclaration::Import {
       path: [intern(path)],
+      alias: intern(alias),
   }
 
 // import tensor
-import_simple = { "import" ~ name:identifier }
+import_simple = { "import" ~ path:module_path }
   -> TypedDeclaration::Import {
-      path: [intern(name)],
+      path: [intern(path)],
   }
+
+import_items = { import_items_glob | import_items_list }
+
+import_items_glob = { "*" }
+  -> intern("*")
+
+import_items_list = { item:identifier ~ ("," ~ item:identifier)* }
+  -> item
 
 // Module path: zynml.tensor.ops
 module_path = @{ identifier ~ ("." ~ identifier)* }
@@ -382,32 +399,44 @@ module_decl = { "module" ~ name:identifier }
 
 // config { device: "cpu", precision: "float32", batch_size: 32 }
 config_block = { "config" ~ "{" ~ config_entries ~ "}" }
-  -> TypedDeclaration::Variable {
-      name: intern("__config"),
-      type_annotation: None,
-      initializer: None,
-      is_mutable: false,
+  -> TypedStatement::Expression {
+      expr: TypedExpression::Call {
+          callee: Box::new(TypedExpression::Variable { name: intern("config") }),
+          args: [],
+          named_args: config_entries,
+      }
   }
 
-config_entries = { config_entry ~ ("," ~ config_entry)* ~ ","? }
-  -> List {
-      "get_all_children": true
-  }
+config_entry_comma = { "," ~ e:config_entry }
+  -> e
+
+config_entries = { first:config_entry ~ rest:config_entry_comma* ~ ","? }
+  -> prepend_list(first, rest)
 
 config_entry = { key:identifier ~ ":" ~ value:expr }
-  -> value
+  -> TypedFieldInit {
+      name: intern(key),
+      value: value,
+  }
 
 // ============================================================================
 // Pipeline Definition
 // ============================================================================
 
 // pipeline image_search(query: text, top_k: int) -> list { ... }
-pipeline_def = { "pipeline" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ("->" ~ type_expr)? ~ body:block }
+pipeline_return_clause = { "->" ~ ty:type_expr }
+  -> ty
+
+pipeline_def = { "pipeline" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ret:pipeline_return_clause? ~ body:block }
   -> TypedDeclaration::Function {
       name: intern(name),
       params: params,
-      return_type: Type::Unit,
+      return_type: ret,
       body: Some(body),
+      annotations: [TypedAnnotation {
+          name: intern("pipeline"),
+          args: [],
+      }],
   }
 
 // ============================================================================
@@ -601,25 +630,26 @@ handler_impl = { "def" ~ name:identifier ~ type_params:type_params? ~ "(" ~ para
 
 // render photo
 // render chart(data) { type: "line", title: "My Chart" }
-render_stmt = { decl:render_with_options | decl:render_simple }
-  -> decl
+render_stmt = { stmt:render_with_options | stmt:render_simple }
+  -> stmt
 
 // render photo { title: "Original Image", width: 400 }
 render_with_options = { "render" ~ value:expr ~ "{" ~ config_entries ~ "}" }
-  -> TypedDeclaration::Variable {
-      name: intern("__render"),
-      type_annotation: None,
-      initializer: Some(value),
-      is_mutable: false,
+  -> TypedStatement::Expression {
+      expr: TypedExpression::Call {
+          callee: Box::new(TypedExpression::Variable { name: intern("render") }),
+          args: [value],
+          named_args: config_entries,
+      }
   }
 
 // render photo
 render_simple = { "render" ~ value:expr }
-  -> TypedDeclaration::Variable {
-      name: intern("__render"),
-      type_annotation: None,
-      initializer: Some(value),
-      is_mutable: false,
+  -> TypedStatement::Expression {
+      expr: TypedExpression::Call {
+          callee: Box::new(TypedExpression::Variable { name: intern("render") }),
+          args: [value],
+      }
   }
 
 // ============================================================================
@@ -628,11 +658,11 @@ render_simple = { "render" ~ value:expr }
 
 // stream sensor_data |> window(100) |> sink(alert_system)
 stream_stmt = { "stream" ~ source:identifier ~ ("|>" ~ pipe_call)+ }
-  -> TypedDeclaration::Variable {
-      name: intern("__stream"),
-      type_annotation: None,
-      initializer: Some(TypedExpression::Variable { name: intern(source) }),
-      is_mutable: false,
+  -> TypedStatement::Expression {
+      expr: TypedExpression::Call {
+          callee: Box::new(TypedExpression::Variable { name: intern("stream") }),
+          args: [TypedExpression::Variable { name: intern(source) }],
+      }
   }
 
 // ============================================================================
@@ -1286,7 +1316,7 @@ type_args_angle = { "<" ~ args:type_args ~ ">" }
 //   List<int>      -> List<int>
 //   int            -> int
 //
-type_expr = { ty:optional_type | ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:primitive_type | ty:simple_type }
+type_expr = { ty:optional_type | ty:fn_type | ty:tuple_type | ty:tensor_type | ty:generic_type | ty:array_type | ty:primitive_type | ty:simple_type }
   -> ty
 
 // Tuple type: (T1, T2) or (T1, T2, T3)
@@ -1337,8 +1367,27 @@ optional_type = { "?" ~ inner:type_expr_non_optional }
   }
 
 // Type expression without the optional prefix (to avoid infinite recursion)
-type_expr_non_optional = { ty:fn_type | ty:tuple_type | ty:generic_type | ty:array_type | ty:primitive_type | ty:simple_type }
+type_expr_non_optional = { ty:fn_type | ty:tuple_type | ty:tensor_type | ty:generic_type | ty:array_type | ty:primitive_type | ty:simple_type }
   -> ty
+
+// Tensor type syntax (canonical): tensor[shape..., dtype?]
+// Examples:
+//   tensor[2, 3]
+//   tensor[batch, seq, hidden]
+//   tensor[1, 3, 224, 224, f32]
+tensor_type = { "tensor" ~ "[" ~ tensor_type_items? ~ "]" }
+  -> Type::Named {
+      name: intern("Tensor"),
+  }
+
+tensor_type_items = { first:tensor_type_item ~ rest:tensor_type_item_comma* }
+  -> prepend_list(first, rest)
+
+tensor_type_item_comma = { "," ~ item:tensor_type_item }
+  -> item
+
+tensor_type_item = { identifier | "?" | ASCII_DIGIT+ }
+  -> text()
 
 // Primitive types must be matched BEFORE simple_type to avoid treating them as named types
 primitive_type = { ty:prim_i8 | ty:prim_i16 | ty:prim_i32 | ty:prim_i64 | ty:prim_i128
@@ -1834,6 +1883,8 @@ statement = {
     try_stmt |
     match_stmt |
     return_stmt |
+    yield_stmt |
+    compute_kernel_stmt |
     break_stmt |
     continue_stmt |
     assign_stmt |
@@ -1992,6 +2043,22 @@ return_stmt = { "return" ~ value:expr? }
       value: value,
   }
 
+// yield expr (for compute reductions)
+yield_stmt = { "yield" ~ value:expr }
+  -> TypedStatement::Yield {
+      value: value,
+  }
+
+// compute-kernel directive inside compute body: @kernel elementwise
+compute_kernel_stmt = { "@" ~ "kernel" ~ name:identifier }
+  -> TypedStatement::Expression {
+      expr: TypedExpression::Call {
+          callee: Box::new(TypedExpression::Variable { name: intern("kernel") }),
+          args: [TypedExpression::Variable { name: intern(name) }],
+          named_args: [],
+      }
+  }
+
 // break
 break_stmt = { "break" ~ value:expr? }
   -> TypedStatement::Break {
@@ -2130,11 +2197,13 @@ expr = { e:pipe_expr }
 
 // Pipe operator: x |> f(args) |> g()
 // Transforms: a |> f(b) into f(a, b)
-// For now, simplified - just parse and pass first operand
-pipe_expr = { first:ternary_expr ~ ("|>" ~ pipe_call)* }
-  -> first
+pipe_expr = { first:ternary_expr ~ rest:pipe_rest* }
+  -> fold_pipe(first, rest)
 
-pipe_call = { callee:identifier ~ "(" ~ args:call_args? ~ ")" }
+pipe_rest = { "|>" ~ call:pipe_call }
+  -> call
+
+pipe_call = { callee:identifier ~ "(" ~ args:call_args_list? ~ ")" }
   -> TypedExpression::Call {
       callee: Box::new(TypedExpression::Variable { name: intern(callee) }),
       args: args,
@@ -2175,13 +2244,23 @@ null_coalesce_binary = { left:or_expr ~ "??" ~ right:null_coalesce_expr }
       right: Box::new(right),
   }
 
-// Logical OR - simplified (just pass through inner expression for now)
-or_expr = { inner:and_expr ~ ("||" ~ and_expr)* }
-  -> inner
+// Logical OR (left-associative)
+or_expr = { first:and_expr ~ rest:or_rest* }
+  -> fold_left_ops(first, rest)
 
-// Logical AND - simplified (just pass through inner expression for now)
-and_expr = { inner:comparison_expr ~ ("&&" ~ comparison_expr)* }
-  -> inner
+or_rest = { op:or_op ~ operand:and_expr }
+  -> make_pair(op, operand)
+
+or_op = @{ "||" }
+
+// Logical AND (left-associative)
+and_expr = { first:comparison_expr ~ rest:and_rest* }
+  -> fold_left_ops(first, rest)
+
+and_rest = { op:and_op ~ operand:comparison_expr }
+  -> make_pair(op, operand)
+
+and_op = @{ "&&" }
 
 // Comparison expressions - properly build Binary expressions
 // comparison_with_op handles: a < b, a == b, etc.
@@ -2360,7 +2439,7 @@ call_arg = { keyword_arg | positional_arg }
 
 // name=value (keyword argument)
 keyword_arg = { name:identifier ~ "=" ~ !("=") ~ value:expr }
-  -> TypedExpression::KeywordArg {
+  -> TypedFieldInit {
       name: intern(name),
       value: value,
   }
@@ -2500,22 +2579,34 @@ import_modifier_expr = { "import" ~ loader:identifier ~ "(" ~ path:string_litera
 // ============================================================================
 
 // model("bert.onnx") { input: text, output: Embedding }
-model_config_expr = { "model" ~ "(" ~ path:string_literal ~ ")" ~ _config:raw_brace_block }
+model_config_block = { "{" ~ entries:config_entries ~ "}" }
+  -> entries
+
+model_config_expr = { "model" ~ "(" ~ path:string_literal ~ ")" ~ cfg:model_config_block? }
   -> TypedExpression::Call {
       callee: Box::new(TypedExpression::Variable { name: intern("model") }),
       args: [path],
+      named_args: cfg,
   }
 
 // ============================================================================
 // Compute Expression (GPU Kernel Dispatch)
 // ============================================================================
 
-// compute(tensor) { @kernel elementwise for i in 0..len { out[i] = x[i] * 2.0 } }
-compute_expr = { "compute" ~ "(" ~ args:call_args ~ ")" ~ _body:raw_brace_block }
-  -> TypedExpression::Call {
-      callee: Box::new(TypedExpression::Variable { name: intern("compute") }),
+// compute(tensor) @device("cpu") { ... }
+// compute(tensor) @kernel(matmul) @workgroup(16, 16) { ... }
+compute_expr = { "compute" ~ "(" ~ args:call_args_list? ~ ")" ~ modifiers:compute_modifiers? ~ body:block }
+  -> TypedExpression::Compute {
       args: args,
+      modifiers: modifiers,
+      body: body,
   }
+
+compute_modifiers = { mods:compute_modifier+ }
+  -> mods
+
+compute_modifier = { ann:annotation }
+  -> ann
 
 // Permissive brace block used by syntax sugar forms that only need token-level parsing.
 raw_brace_block = { "{" ~ raw_brace_item* ~ "}" }

@@ -1096,6 +1096,13 @@ impl TypeChecker {
 
                 Ok(Type::Never)
             }
+            TypedStatement::Yield(expr_node) => {
+                // Yield is currently validated as an expression-producing statement.
+                // Context-specific validation (e.g., only within compute reductions)
+                // happens in lowering/runtime passes.
+                self.check_expression(&expr_node.node)?;
+                Ok(Type::Primitive(PrimitiveType::Unit))
+            }
             TypedStatement::If(if_stmt) => self.check_if_statement(if_stmt),
             TypedStatement::While(while_stmt) => {
                 self.check_while_statement(while_stmt)?;
@@ -1243,7 +1250,8 @@ impl TypeChecker {
             | TypedExpression::Range(_)
             | TypedExpression::Block(_)
             | TypedExpression::ListComprehension(_)
-            | TypedExpression::Slice(_) => {
+            | TypedExpression::Slice(_)
+            | TypedExpression::Compute(_) => {
                 // Placeholder for now
                 Ok(self.inference.fresh_type_var())
             }
@@ -1281,7 +1289,7 @@ impl TypeChecker {
         use BinaryOp::*;
         match bin.op {
             // Arithmetic operators
-            Add | Sub | Mul | Div | Rem => {
+            Add | Sub | Mul | MatMul | Div | Rem => {
                 self.inference.unify(left_ty.clone(), right_ty)?;
                 Ok(left_ty)
             }

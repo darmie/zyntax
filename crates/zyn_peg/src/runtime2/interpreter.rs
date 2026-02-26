@@ -13,19 +13,21 @@ use super::state::{ParseFailure, ParseResult, ParsedValue, ParserState};
 use crate::grammar::{ActionIR, CharClass, ExprIR, GrammarIR, PatternIR, RuleIR, RuleModifier};
 use log::{debug, trace};
 use std::collections::HashMap;
-use zyntax_typed_ast::typed_ast::{TypedCatch, TypedTry};
+use zyntax_typed_ast::typed_ast::{
+    TypedCatch, TypedComputeExpr, TypedComputeModifier, TypedKernelAttr, TypedNamedArg, TypedTry,
+};
 use zyntax_typed_ast::{
     type_registry::{
         CallingConvention, ConstValue, Mutability, NullabilityKind, PrimitiveType, Type, Visibility,
     },
     typed_node, ParameterKind, Span, TypedAnnotation, TypedAnnotationArg, TypedAnnotationValue,
     TypedBlock, TypedCall, TypedDeclaration, TypedExpression, TypedExtern, TypedExternStruct,
-    TypedFieldAccess, TypedFieldInit, TypedFor, TypedFunction, TypedIf, TypedImportModifier,
-    TypedIndex, TypedInterface, TypedLambda, TypedLambdaBody, TypedLambdaParam, TypedLet,
-    TypedLetPattern, TypedLiteral, TypedLiteralPattern, TypedMatch, TypedMatchArm, TypedMethodCall,
-    TypedNode, TypedParameter, TypedPath, TypedPattern, TypedProgram, TypedRange, TypedStatement,
-    TypedStructLiteral, TypedTypeAlias, TypedTypeParam, TypedUnary, TypedVariable, TypedVariant,
-    TypedVariantFields, TypedWhile, UnaryOp,
+    TypedFieldAccess, TypedFieldInit, TypedFor, TypedFunction, TypedIf, TypedImportItem,
+    TypedImportModifier, TypedIndex, TypedInterface, TypedLambda, TypedLambdaBody,
+    TypedLambdaParam, TypedLet, TypedLetPattern, TypedLiteral, TypedLiteralPattern, TypedMatch,
+    TypedMatchArm, TypedMethodCall, TypedNode, TypedParameter, TypedPath, TypedPattern,
+    TypedProgram, TypedRange, TypedStatement, TypedStructLiteral, TypedTypeAlias, TypedTypeParam,
+    TypedUnary, TypedVariable, TypedVariant, TypedVariantFields, TypedWhile, UnaryOp,
 };
 
 /// Runtime interpreter for GrammarIR
@@ -422,6 +424,10 @@ impl<'g> GrammarInterpreter<'g> {
                 let value = self.get_field_optional_expr("value", fields, state)?;
                 TypedStatement::Return(value.map(Box::new))
             }
+            "Yield" => {
+                let value = self.get_field_as_expr("value", fields, state)?;
+                TypedStatement::Yield(Box::new(value))
+            }
             "If" => {
                 let condition = self.get_field_as_expr("condition", fields, state)?;
                 let then_block = self.get_field_as_block("then_branch", fields, state)?;
@@ -552,12 +558,34 @@ impl<'g> GrammarInterpreter<'g> {
             }
             "Call" => {
                 let callee = self.get_field_as_expr("callee", fields, state)?;
-                let args = self.get_field_as_expr_list("args", fields, state)?;
+                let (args, mut named_args) = match self.get_field("args", fields) {
+                    Some(expr) => {
+                        let raw = self.eval_expr(expr, state)?;
+                        self.parsed_value_to_call_args(raw, state, span)?
+                    }
+                    None => (vec![], vec![]),
+                };
+                let named_args = if self.get_field("named_args", fields).is_some() {
+                    let field_inits =
+                        self.get_field_as_field_init_list("named_args", fields, state)?;
+                    let mut from_named_field: Vec<TypedNamedArg> = field_inits
+                        .into_iter()
+                        .map(|fi| TypedNamedArg {
+                            name: fi.name,
+                            value: fi.value,
+                            span,
+                        })
+                        .collect();
+                    named_args.append(&mut from_named_field);
+                    named_args
+                } else {
+                    named_args
+                };
 
                 TypedExpression::Call(TypedCall {
                     callee: Box::new(callee),
                     positional_args: args,
-                    named_args: vec![],
+                    named_args,
                     type_args: vec![],
                 })
             }
@@ -725,6 +753,41 @@ impl<'g> GrammarInterpreter<'g> {
                     target_type,
                 })
             }
+            "Compute" => {
+                let args = match self.get_field("args", fields) {
+                    Some(_) => self.get_field_as_expr_list("args", fields, state)?,
+                    None => vec![],
+                };
+                let annotations = self.get_field_as_annotation_list("modifiers", fields, state)?;
+                let mut modifiers = Vec::new();
+                let mut kernel_attrs = Vec::new();
+                for ann in annotations {
+                    let (positional_args, named_args) =
+                        self.annotation_args_to_call_args(&ann.args, state, span)?;
+                    let modifier = TypedComputeModifier {
+                        name: ann.name,
+                        positional_args: positional_args.clone(),
+                        named_args: named_args.clone(),
+                    };
+                    if let Some(name) = ann.name.resolve_global() {
+                        if matches!(name.as_str(), "kernel" | "workgroup") {
+                            kernel_attrs.push(TypedKernelAttr {
+                                name: ann.name,
+                                positional_args,
+                                named_args,
+                            });
+                        }
+                    }
+                    modifiers.push(modifier);
+                }
+                let body = self.get_field_as_block("body", fields, state)?;
+                TypedExpression::Compute(TypedComputeExpr {
+                    args,
+                    modifiers,
+                    kernel_attrs,
+                    body,
+                })
+            }
             "Path" => {
                 // Path expression: Type::method or module::function
                 let segments = self.get_field_as_interned_list("segments", fields, state)?;
@@ -786,10 +849,12 @@ impl<'g> GrammarInterpreter<'g> {
                     .get_field_optional("return_type", fields, state)?
                     .unwrap_or(Type::Primitive(PrimitiveType::Unit));
                 let body = self.get_field_optional_block("body", fields, state)?;
+                let annotations =
+                    self.get_field_as_annotation_list("annotations", fields, state)?;
 
                 TypedDeclaration::Function(TypedFunction {
                     name,
-                    annotations: vec![],
+                    annotations,
                     effects: vec![],
                     type_params: vec![],
                     params,
@@ -840,11 +905,42 @@ impl<'g> GrammarInterpreter<'g> {
                 })
             }
             "Import" => {
-                let module_path = self.get_field_as_interned_list("path", fields, state)?;
+                let raw_path = self.get_field_as_interned_list("path", fields, state)?;
+                let mut module_path = Vec::new();
+                for part in raw_path {
+                    if let Some(s) = part.resolve_global() {
+                        if s.contains('.') {
+                            for seg in s.split('.') {
+                                module_path.push(state.intern(seg));
+                            }
+                            continue;
+                        }
+                    }
+                    module_path.push(part);
+                }
+
+                let mut items = vec![TypedImportItem::Glob];
+                if let Some(items_expr) = self.get_field("items", fields) {
+                    let val = self.eval_expr(items_expr, state)?;
+                    let parsed = self.parsed_value_to_import_items(val, state)?;
+                    if !parsed.is_empty() {
+                        items = parsed;
+                    }
+                } else if self.get_field("alias", fields).is_some() {
+                    let alias = self.get_field_as_interned("alias", fields, state)?;
+                    let name = module_path
+                        .last()
+                        .copied()
+                        .unwrap_or_else(|| state.intern("module"));
+                    items = vec![TypedImportItem::Named {
+                        name,
+                        alias: Some(alias),
+                    }];
+                }
 
                 TypedDeclaration::Import(zyntax_typed_ast::TypedImport {
                     module_path,
-                    items: vec![zyntax_typed_ast::TypedImportItem::Glob],
+                    items,
                     span,
                 })
             }
@@ -1945,6 +2041,60 @@ impl<'g> GrammarInterpreter<'g> {
 
                 Ok(acc)
             }
+            "fold_pipe" => {
+                // fold_pipe(first, rest) - transforms a |> f(b) into f(a, b)
+                if args.len() != 2 {
+                    return Err(
+                        "fold_pipe() requires exactly 2 arguments (first, rest)".to_string()
+                    );
+                }
+                let first = self.eval_expr(&args[0], state)?;
+                let rest = self.eval_expr(&args[1], state)?;
+
+                let rest_list = match rest {
+                    ParsedValue::List(items) => items,
+                    ParsedValue::Optional(None) | ParsedValue::None => vec![],
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => items,
+                        other => vec![other],
+                    },
+                    other => vec![other],
+                };
+
+                if rest_list.is_empty() {
+                    return Ok(first);
+                }
+
+                let mut acc = first;
+                for call_val in rest_list {
+                    let piped_input = self.parsed_value_to_expr(acc, state)?;
+                    let call_expr = self.parsed_value_to_expr(call_val, state)?;
+                    match call_expr.node {
+                        TypedExpression::Call(mut call) => {
+                            let mut positional_args = vec![piped_input];
+                            positional_args.append(&mut call.positional_args);
+                            let ty = call_expr.ty.clone();
+                            acc = ParsedValue::Expression(Box::new(typed_node(
+                                TypedExpression::Call(TypedCall {
+                                    callee: call.callee,
+                                    positional_args,
+                                    named_args: call.named_args,
+                                    type_args: call.type_args,
+                                }),
+                                ty,
+                                span,
+                            )));
+                        }
+                        _ => {
+                            return Err(
+                                "pipe operator expects a call on the right-hand side".to_string()
+                            )
+                        }
+                    }
+                }
+
+                Ok(acc)
+            }
             "fold_postfix" => {
                 // fold_postfix(base, suffixes) - fold postfix operations into nested expressions
                 // base: the base expression (TypedExpression)
@@ -2701,6 +2851,41 @@ impl<'g> GrammarInterpreter<'g> {
         }
     }
 
+    fn parsed_value_to_call_args<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<(Vec<TypedNode<TypedExpression>>, Vec<TypedNamedArg>), String> {
+        let items = match val {
+            ParsedValue::List(items) => items,
+            ParsedValue::Optional(None) | ParsedValue::None => vec![],
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => items,
+                other => vec![other],
+            },
+            other => vec![other],
+        };
+
+        let mut positional = Vec::new();
+        let mut named = Vec::new();
+        for item in items {
+            match item {
+                ParsedValue::FieldInit { name, value } => {
+                    let value_expr = self.parsed_value_to_expr(*value, state)?;
+                    named.push(TypedNamedArg {
+                        name,
+                        value: Box::new(value_expr),
+                        span,
+                    });
+                }
+                other => positional.push(self.parsed_value_to_expr(other, state)?),
+            }
+        }
+
+        Ok((positional, named))
+    }
+
     fn get_field_optional_block<'a>(
         &self,
         name: &str,
@@ -3439,7 +3624,10 @@ impl<'g> GrammarInterpreter<'g> {
                     }),
                     TypedStatement::Expression(expr_stmt) => Ok(TypedNode {
                         node: TypedDeclaration::Variable(TypedVariable {
-                            name: zyntax_typed_ast::InternedString::new_global("__expr"),
+                            name: zyntax_typed_ast::InternedString::new_global(&format!(
+                                "__expr_{}",
+                                span.start
+                            )),
                             ty: expr_stmt.ty.clone(),
                             mutability: Mutability::Immutable,
                             initializer: Some(expr_stmt),
@@ -3591,6 +3779,68 @@ impl<'g> GrammarInterpreter<'g> {
         }
     }
 
+    fn parsed_value_to_import_items<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedImportItem>, String> {
+        match val {
+            ParsedValue::None | ParsedValue::Optional(None) => Ok(vec![]),
+            ParsedValue::Text(s) => {
+                if s == "*" {
+                    Ok(vec![TypedImportItem::Glob])
+                } else {
+                    Ok(vec![TypedImportItem::Named {
+                        name: state.intern(&s),
+                        alias: None,
+                    }])
+                }
+            }
+            ParsedValue::Interned(i) => {
+                if i.resolve_global().as_deref() == Some("*") {
+                    Ok(vec![TypedImportItem::Glob])
+                } else {
+                    Ok(vec![TypedImportItem::Named {
+                        name: i,
+                        alias: None,
+                    }])
+                }
+            }
+            ParsedValue::List(items) => {
+                let mut out = Vec::new();
+                for item in items {
+                    match item {
+                        ParsedValue::Text(s) => out.push(TypedImportItem::Named {
+                            name: state.intern(&s),
+                            alias: None,
+                        }),
+                        ParsedValue::Interned(i) => out.push(TypedImportItem::Named {
+                            name: i,
+                            alias: None,
+                        }),
+                        ParsedValue::Optional(Some(inner)) => match *inner {
+                            ParsedValue::Text(s) => out.push(TypedImportItem::Named {
+                                name: state.intern(&s),
+                                alias: None,
+                            }),
+                            ParsedValue::Interned(i) => out.push(TypedImportItem::Named {
+                                name: i,
+                                alias: None,
+                            }),
+                            _ => {}
+                        },
+                        ParsedValue::Optional(None) | ParsedValue::None => {}
+                        other => {
+                            return Err(format!("invalid import item: {:?}", other));
+                        }
+                    }
+                }
+                Ok(out)
+            }
+            other => Err(format!("cannot convert value to import items: {:?}", other)),
+        }
+    }
+
     /// Convert ParsedValue to TypedAnnotation
     fn parsed_value_to_annotation(&self, val: ParsedValue) -> Result<TypedAnnotation, String> {
         match val {
@@ -3630,6 +3880,71 @@ impl<'g> GrammarInterpreter<'g> {
                 val
             )),
         }
+    }
+
+    fn annotation_value_to_expr<'a>(
+        &self,
+        value: &TypedAnnotationValue,
+        _state: &mut ParserState<'a>,
+        span: Span,
+    ) -> TypedNode<TypedExpression> {
+        match value {
+            TypedAnnotationValue::String(s) => typed_node(
+                TypedExpression::Literal(TypedLiteral::String(*s)),
+                Type::Primitive(PrimitiveType::String),
+                span,
+            ),
+            TypedAnnotationValue::Integer(i) => typed_node(
+                TypedExpression::Literal(TypedLiteral::Integer(*i as i128)),
+                Type::Primitive(PrimitiveType::I64),
+                span,
+            ),
+            TypedAnnotationValue::Float(f) => typed_node(
+                TypedExpression::Literal(TypedLiteral::Float(*f)),
+                Type::Primitive(PrimitiveType::F64),
+                span,
+            ),
+            TypedAnnotationValue::Bool(b) => typed_node(
+                TypedExpression::Literal(TypedLiteral::Bool(*b)),
+                Type::Primitive(PrimitiveType::Bool),
+                span,
+            ),
+            TypedAnnotationValue::Identifier(id) => {
+                typed_node(TypedExpression::Variable(*id), Type::Any, span)
+            }
+            TypedAnnotationValue::List(items) => {
+                let exprs = items
+                    .iter()
+                    .map(|item| self.annotation_value_to_expr(item, _state, span))
+                    .collect();
+                typed_node(TypedExpression::Array(exprs), Type::Any, span)
+            }
+        }
+    }
+
+    fn annotation_args_to_call_args<'a>(
+        &self,
+        args: &[TypedAnnotationArg],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<(Vec<TypedNode<TypedExpression>>, Vec<TypedNamedArg>), String> {
+        let mut positional = Vec::new();
+        let mut named = Vec::new();
+        for arg in args {
+            match arg {
+                TypedAnnotationArg::Positional(value) => {
+                    positional.push(self.annotation_value_to_expr(value, state, span));
+                }
+                TypedAnnotationArg::Named { name, value } => {
+                    named.push(TypedNamedArg {
+                        name: *name,
+                        value: Box::new(self.annotation_value_to_expr(value, state, span)),
+                        span,
+                    });
+                }
+            }
+        }
+        Ok((positional, named))
     }
 
     /// Get a field as a list of TypedEffectOp
@@ -3823,7 +4138,7 @@ impl<'g> GrammarInterpreter<'g> {
             "+" | "Add" => Ok(zyntax_typed_ast::BinaryOp::Add),
             "-" | "Sub" => Ok(zyntax_typed_ast::BinaryOp::Sub),
             "*" | "Mul" => Ok(zyntax_typed_ast::BinaryOp::Mul),
-            "@" => Ok(zyntax_typed_ast::BinaryOp::Mul),
+            "@" | "MatMul" => Ok(zyntax_typed_ast::BinaryOp::MatMul),
             "/" | "Div" => Ok(zyntax_typed_ast::BinaryOp::Div),
             "%" | "Rem" => Ok(zyntax_typed_ast::BinaryOp::Rem),
             "==" | "Eq" => Ok(zyntax_typed_ast::BinaryOp::Eq),

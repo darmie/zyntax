@@ -156,6 +156,8 @@ pub use typed_ast::{
     TypedCast,
     // Class/Struct/Enum types
     TypedClass,
+    TypedComputeExpr,
+    TypedComputeModifier,
     TypedDeclaration,
     // Defer type
     TypedDefer,
@@ -191,6 +193,7 @@ pub use typed_ast::{
     TypedImportModifier,
     TypedIndex,
     TypedInterface,
+    TypedKernelAttr,
     // Lambda types
     TypedLambda,
     TypedLambdaBody,
@@ -209,6 +212,7 @@ pub use typed_ast::{
     TypedMethodCall,
     TypedMethodParam,
     TypedModule,
+    TypedNamedArg,
     TypedNode,
     // Additional types for parser generation
     TypedParameter,
