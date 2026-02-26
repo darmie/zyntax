@@ -188,12 +188,59 @@ mod type_system {
     #[test]
     fn test_parse_type_alias_tensor() {
         let grammar = get_grammar();
-        // Current grammar doesn't support tensor[shape, dtype] syntax in type position
-        let result = grammar.parse_to_json("type Embedding = Tensor");
+        let result = grammar.parse_to_json("type Embedding = tensor[2, 3, f32]");
         assert!(
             result.is_ok(),
             "Should parse tensor type alias: {:?}",
             result.err()
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.unwrap()).expect("JSON should deserialize");
+        let named = &parsed["declarations"][0]["node"]["TypeAlias"]["target"]["Named"];
+        let const_args = named["const_args"]
+            .as_array()
+            .expect("const_args should be an array");
+        assert_eq!(
+            const_args.len(),
+            2,
+            "tensor shape should have two dimensions"
+        );
+        assert_eq!(const_args[0]["Int"], 2);
+        assert_eq!(const_args[1]["Int"], 3);
+        assert_eq!(
+            named["type_args"][0]["Primitive"], "F32",
+            "tensor dtype should map to Primitive::F32"
+        );
+    }
+
+    #[test]
+    fn test_parse_type_alias_tensor_symbolic_shape() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("type HiddenState = tensor[batch, seq, hidden]");
+        assert!(
+            result.is_ok(),
+            "Should parse tensor type alias with symbolic shape: {:?}",
+            result.err()
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&result.unwrap()).expect("JSON should deserialize");
+        let named = &parsed["declarations"][0]["node"]["TypeAlias"]["target"]["Named"];
+        let const_args = named["const_args"]
+            .as_array()
+            .expect("const_args should be an array");
+        assert_eq!(const_args.len(), 3);
+        assert_eq!(const_args[0]["Variable"], "batch");
+        assert_eq!(const_args[1]["Variable"], "seq");
+        assert_eq!(const_args[2]["Variable"], "hidden");
+        assert_eq!(
+            named["type_args"]
+                .as_array()
+                .expect("type_args should be an array")
+                .len(),
+            0,
+            "symbolic tensor shape should not imply dtype when omitted"
         );
     }
 

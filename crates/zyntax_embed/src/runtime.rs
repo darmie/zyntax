@@ -1669,6 +1669,21 @@ impl ZyntaxRuntime {
                     );
                 }
             }
+            Type::Named { id, type_args, .. } => {
+                for type_arg in type_args {
+                    Self::resolve_in_type(type_arg, type_registry);
+                }
+
+                // Canonicalize Named IDs by name in case this ID came from a placeholder
+                // registry entry created before imports/externs were merged.
+                if let Some(type_def) = type_registry.get_type_by_id(*id) {
+                    if let Some(canonical) = type_registry.get_type_by_name(type_def.name) {
+                        if canonical.id != *id {
+                            *id = canonical.id;
+                        }
+                    }
+                }
+            }
             // Recursively resolve nested types
             Type::Reference { ty: inner, .. } => {
                 Self::resolve_in_type(inner, type_registry);

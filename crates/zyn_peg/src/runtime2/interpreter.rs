@@ -18,7 +18,8 @@ use zyntax_typed_ast::typed_ast::{
 };
 use zyntax_typed_ast::{
     type_registry::{
-        CallingConvention, ConstValue, Mutability, NullabilityKind, PrimitiveType, Type, Visibility,
+        CallingConvention, ConstValue, Mutability, NullabilityKind, PrimitiveType, Type,
+        TypeMetadata, Visibility,
     },
     typed_node, ParameterKind, Span, TypedAnnotation, TypedAnnotationArg, TypedAnnotationValue,
     TypedBlock, TypedCall, TypedDeclaration, TypedExpression, TypedExtern, TypedExternStruct,
@@ -1147,12 +1148,14 @@ impl<'g> GrammarInterpreter<'g> {
         span: Span,
     ) -> Result<ParsedValue, String> {
         let declarations = self.get_field_as_decl_list("declarations", fields, state)?;
+        // Preserve any placeholder or inferred type entries created while parsing.
+        let type_registry = state.type_registry().clone();
 
         Ok(ParsedValue::Program(Box::new(TypedProgram {
             declarations,
             span,
             source_files: vec![],
-            type_registry: zyntax_typed_ast::type_registry::TypeRegistry::new(),
+            type_registry,
         })))
     }
 
@@ -1162,13 +1165,68 @@ impl<'g> GrammarInterpreter<'g> {
         variant: &str,
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
-        _span: Span,
+        span: Span,
     ) -> Result<ParsedValue, String> {
         let ty = match variant {
             "Unit" => Type::Primitive(PrimitiveType::Unit),
             "Named" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
-                Type::Unresolved(name)
+                let mut type_args = self
+                    .get_field_as_type_list_optional("type_args", fields, state)?
+                    .unwrap_or_default();
+                let mut const_args = self.get_field_as_const_list("const_args", fields, state)?;
+
+                // Tensor shape/dtype sugar from tensor[...] syntax.
+                let tensor_items =
+                    self.get_field_as_interned_list("tensor_items", fields, state)?;
+                if !tensor_items.is_empty() {
+                    let mut tokens: Vec<String> = tensor_items
+                        .into_iter()
+                        .map(|item| {
+                            item.resolve_global().or_else(|| {
+                                state
+                                    .builder()
+                                    .arena()
+                                    .resolve_string(item)
+                                    .map(|s| s.to_string())
+                            })
+                        })
+                        .collect::<Option<Vec<String>>>()
+                        .unwrap_or_default();
+
+                    if let Some(last) = tokens.last() {
+                        if let Some(dtype_prim) = self.primitive_type_from_name(last) {
+                            type_args.push(Type::Primitive(dtype_prim));
+                            tokens.pop();
+                        }
+                    }
+
+                    for token in tokens {
+                        if let Ok(v) = token.parse::<i64>() {
+                            const_args.push(ConstValue::Int(v));
+                        } else {
+                            const_args.push(ConstValue::Variable(
+                                zyntax_typed_ast::InternedString::new_global(&token),
+                            ));
+                        }
+                    }
+                }
+
+                let type_id = if let Some(type_def) = state.type_registry().get_type_by_name(name) {
+                    type_def.id
+                } else {
+                    state
+                        .type_registry()
+                        .register_atomic_type(name, TypeMetadata::default(), span)
+                };
+
+                Type::Named {
+                    id: type_id,
+                    type_args,
+                    const_args,
+                    variance: vec![],
+                    nullability: NullabilityKind::NonNull,
+                }
             }
             "Primitive" => {
                 // Parse primitive type from name
@@ -1180,21 +1238,9 @@ impl<'g> GrammarInterpreter<'g> {
                 if name_str == "type" {
                     return Ok(ParsedValue::Type(Type::Any));
                 }
-                let prim = match name_str.as_str() {
-                    "i8" => PrimitiveType::I8,
-                    "i16" => PrimitiveType::I16,
-                    "i32" => PrimitiveType::I32,
-                    "i64" => PrimitiveType::I64,
-                    "u8" => PrimitiveType::U8,
-                    "u16" => PrimitiveType::U16,
-                    "u32" => PrimitiveType::U32,
-                    "u64" => PrimitiveType::U64,
-                    "f32" => PrimitiveType::F32,
-                    "f64" => PrimitiveType::F64,
-                    "bool" => PrimitiveType::Bool,
-                    "void" => PrimitiveType::Unit,
-                    _ => return Err(format!("unknown primitive type: {}", name_str)),
-                };
+                let prim = self
+                    .primitive_type_from_name(&name_str)
+                    .ok_or_else(|| format!("unknown primitive type: {}", name_str))?;
                 Type::Primitive(prim)
             }
             "Pointer" => {
@@ -1831,6 +1877,83 @@ impl<'g> GrammarInterpreter<'g> {
             },
             ParsedValue::Type(ty) => Ok(Some(vec![ty])),
             other => Err(format!("field '{}' is not a type list: {:?}", name, other)),
+        }
+    }
+
+    fn get_field_as_const_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<ConstValue>, String> {
+        let Some(expr) = self.get_field(name, fields) else {
+            return Ok(vec![]);
+        };
+
+        let val = self.eval_expr(expr, state)?;
+        match val {
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| self.parsed_value_to_const(item, state))
+                .collect(),
+            ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => items
+                    .into_iter()
+                    .map(|item| self.parsed_value_to_const(item, state))
+                    .collect(),
+                single => Ok(vec![self.parsed_value_to_const(single, state)?]),
+            },
+            single => Ok(vec![self.parsed_value_to_const(single, state)?]),
+        }
+    }
+
+    fn parsed_value_to_const<'a>(
+        &self,
+        value: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<ConstValue, String> {
+        match value {
+            ParsedValue::Int(i) => Ok(ConstValue::Int(i)),
+            ParsedValue::Bool(b) => Ok(ConstValue::Bool(b)),
+            ParsedValue::Text(s) => Ok(ConstValue::String(state.intern(&s))),
+            ParsedValue::Interned(s) => Ok(ConstValue::Variable(s)),
+            ParsedValue::Literal(TypedLiteral::Integer(i)) => Ok(ConstValue::Int(i as i64)),
+            ParsedValue::Literal(TypedLiteral::Bool(b)) => Ok(ConstValue::Bool(b)),
+            ParsedValue::Literal(TypedLiteral::String(s)) => Ok(ConstValue::String(s)),
+            ParsedValue::Literal(TypedLiteral::Char(c)) => Ok(ConstValue::Char(c)),
+            ParsedValue::Optional(Some(inner)) => self.parsed_value_to_const(*inner, state),
+            ParsedValue::Optional(None) | ParsedValue::None => {
+                Err("cannot convert empty optional to const value".to_string())
+            }
+            other => Err(format!(
+                "cannot convert value to const argument: {:?}",
+                other
+            )),
+        }
+    }
+
+    fn primitive_type_from_name(&self, name: &str) -> Option<PrimitiveType> {
+        match name {
+            "i8" => Some(PrimitiveType::I8),
+            "i16" => Some(PrimitiveType::I16),
+            "i32" => Some(PrimitiveType::I32),
+            "i64" => Some(PrimitiveType::I64),
+            "i128" => Some(PrimitiveType::I128),
+            "u8" => Some(PrimitiveType::U8),
+            "u16" => Some(PrimitiveType::U16),
+            "u32" => Some(PrimitiveType::U32),
+            "u64" => Some(PrimitiveType::U64),
+            "u128" => Some(PrimitiveType::U128),
+            "f32" => Some(PrimitiveType::F32),
+            "f64" => Some(PrimitiveType::F64),
+            "bool" => Some(PrimitiveType::Bool),
+            "char" => Some(PrimitiveType::Char),
+            "str" | "String" => Some(PrimitiveType::String),
+            "isize" => Some(PrimitiveType::ISize),
+            "usize" => Some(PrimitiveType::USize),
+            "void" => Some(PrimitiveType::Unit),
+            _ => None,
         }
     }
 

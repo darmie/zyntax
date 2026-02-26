@@ -764,9 +764,10 @@ type_opaque = { "@" ~ "opaque" ~ "(" ~ string_literal ~ ")" ~ "type" ~ name:iden
   }
 
 // Type alias: type Scalar = f32
-type_alias = { "type" ~ name:identifier ~ "=" ~ type_expr }
+type_alias = { "type" ~ name:identifier ~ "=" ~ target:type_expr }
   -> TypedDeclaration::TypeAlias {
       name: intern(name),
+      target: target,
   }
 
 // Struct type: type Point = { x: f32, y: f32 }
@@ -1367,6 +1368,7 @@ optional_type = { "?" ~ inner:type_expr_non_optional }
   -> Type::Named {
       name: intern("Option"),
       type_args: [inner],
+      const_args: [],
   }
 
 // Type expression without the optional prefix (to avoid infinite recursion)
@@ -1378,9 +1380,12 @@ type_expr_non_optional = { ty:fn_type | ty:tuple_type | ty:tensor_type | ty:gene
 //   tensor[2, 3]
 //   tensor[batch, seq, hidden]
 //   tensor[1, 3, 224, 224, f32]
-tensor_type = { "tensor" ~ "[" ~ tensor_type_items? ~ "]" }
+tensor_type = { "tensor" ~ "[" ~ items:tensor_type_items? ~ "]" }
   -> Type::Named {
       name: intern("Tensor"),
+      tensor_items: items,
+      type_args: [],
+      const_args: [],
   }
 
 tensor_type_items = { first:tensor_type_item ~ rest:tensor_type_item_comma* }
@@ -1389,7 +1394,7 @@ tensor_type_items = { first:tensor_type_item ~ rest:tensor_type_item_comma* }
 tensor_type_item_comma = { "," ~ item:tensor_type_item }
   -> item
 
-tensor_type_item = { identifier | "?" | ASCII_DIGIT+ }
+tensor_type_item = @{ identifier | "?" | ASCII_DIGIT+ }
   -> text()
 
 // Primitive types must be matched BEFORE simple_type to avoid treating them as named types
@@ -1453,16 +1458,22 @@ prim_unit = { "()" }
 simple_type = { name:identifier }
   -> Type::Named {
       name: intern(name),
+      type_args: [],
+      const_args: [],
   }
 
 array_type = { "Array" ~ "<" ~ elem:type_expr ~ ">" }
   -> Type::Named {
       name: intern("Array"),
+      type_args: [elem],
+      const_args: [],
   }
 
-generic_type = { name:identifier ~ "<" ~ type_args ~ ">" }
+generic_type = { name:identifier ~ "<" ~ args:type_args ~ ">" }
   -> Type::Named {
       name: intern(name),
+      type_args: args,
+      const_args: [],
   }
 
 // Type arguments: can be regular types or associated type bindings (Item=T)
@@ -1505,6 +1516,8 @@ where_bounds = { bound:where_bound ~ ("," ~ bound:where_bound)* }
 where_bound = { name:identifier ~ ":" ~ bounds:where_trait_bounds }
   -> Type::Named {
       name: intern(name),
+      type_args: [],
+      const_args: [],
   }
 
 // Multiple trait bounds separated by +: Clone + Debug + Iterator<Item=T>
@@ -1519,12 +1532,16 @@ where_trait_bound = { bound:trait_bound_generic | bound:trait_bound_fn | bound:t
 trait_bound_generic = { name:identifier ~ "<" ~ args:type_args ~ ">" }
   -> Type::Named {
       name: intern(name),
+      type_args: args,
+      const_args: [],
   }
 
 // Simple trait bound: Clone, Debug
 trait_bound_simple = { name:identifier }
   -> Type::Named {
       name: intern(name),
+      type_args: [],
+      const_args: [],
   }
 
 // Function type as trait bound: (T) => U
