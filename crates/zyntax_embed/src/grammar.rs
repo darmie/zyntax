@@ -33,10 +33,10 @@ use std::sync::{Arc, Mutex};
 
 use pest_meta::{optimizer, parser};
 use pest_vm::Vm;
+use zyn_peg::grammar::{parse_grammar, GrammarIR};
 use zyn_peg::runtime::{
     AstHostFunctions, CommandInterpreter, RuntimeValue, TypedAstBuilder, ZpegModule,
 };
-use zyn_peg::grammar::{parse_grammar, GrammarIR};
 use zyntax_typed_ast::TypedProgram;
 
 /// Errors that can occur during grammar operations
@@ -101,8 +101,7 @@ impl LanguageGrammar {
     /// let grammar = LanguageGrammar::load("my_lang.zpeg")?;
     /// ```
     pub fn load<P: AsRef<Path>>(path: P) -> GrammarResult<Self> {
-        let module = ZpegModule::load(path)
-            .map_err(|e| GrammarError::LoadError(e.to_string()))?;
+        let module = ZpegModule::load(path).map_err(|e| GrammarError::LoadError(e.to_string()))?;
         Ok(Self {
             module: Arc::new(module),
             grammar2: None, // No Grammar2 for pre-compiled modules
@@ -147,8 +146,9 @@ impl LanguageGrammar {
         use zyn_peg::{Rule as ZynRule, ZynGrammarParser};
 
         // Parse the .zyn grammar file using the old parser (for ZpegModule metadata)
-        let pairs = ZynGrammarParser::parse(ZynRule::program, zyn_source)
-            .map_err(|e| GrammarError::ParseError(format!("Failed to parse .zyn grammar: {}", e)))?;
+        let pairs = ZynGrammarParser::parse(ZynRule::program, zyn_source).map_err(|e| {
+            GrammarError::ParseError(format!("Failed to parse .zyn grammar: {}", e))
+        })?;
 
         // Build the grammar AST
         let grammar = build_grammar(pairs)
@@ -160,8 +160,9 @@ impl LanguageGrammar {
 
         // Also create a Grammar2 parser (GrammarIR) for actual parsing
         // Grammar2 correctly handles the new action format
-        let grammar2 = parse_grammar(zyn_source)
-            .map_err(|e| GrammarError::CompileError(format!("Failed to compile Grammar2: {}", e)))?;
+        let grammar2 = parse_grammar(zyn_source).map_err(|e| {
+            GrammarError::CompileError(format!("Failed to compile Grammar2: {}", e))
+        })?;
 
         Ok(Self {
             module: Arc::new(module),
@@ -254,7 +255,21 @@ impl LanguageGrammar {
     ///
     /// # Returns
     /// The TypedAST serialized as JSON
-    pub fn parse_to_json_with_filename(&self, source: &str, filename: &str) -> GrammarResult<String> {
+    pub fn parse_to_json_with_filename(
+        &self,
+        source: &str,
+        filename: &str,
+    ) -> GrammarResult<String> {
+        // Use Grammar2 (packrat memoized) when available to avoid exponential backtracking
+        // in the old pest VM for files with many f-strings.
+        if self.grammar2.is_some() {
+            let program = self.parse_to_typed_program(source, filename)?;
+            let json = serde_json::to_string(&program).map_err(|e| {
+                GrammarError::AstBuildError(format!("Failed to serialize TypedAST: {}", e))
+            })?;
+            return Ok(json);
+        }
+
         let mut builder = TypedAstBuilder::new();
         builder.set_source(filename.to_string(), source.to_string());
         self.parse_with_builder(source, builder)
@@ -283,8 +298,9 @@ impl LanguageGrammar {
         use zyntax_typed_ast::source::SourceFile;
 
         let json = self.parse_to_json_with_filename(source, filename)?;
-        let mut program: TypedProgram = serde_json::from_str(&json)
-            .map_err(|e| GrammarError::AstBuildError(format!("Failed to deserialize TypedAST: {}", e)))?;
+        let mut program: TypedProgram = serde_json::from_str(&json).map_err(|e| {
+            GrammarError::AstBuildError(format!("Failed to deserialize TypedAST: {}", e))
+        })?;
 
         // Add source file for proper diagnostics
         program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
@@ -327,44 +343,54 @@ impl LanguageGrammar {
 
     /// Parse source code directly to TypedProgram without JSON serialization
     /// This preserves the TypeRegistry which is not serializable
-    fn parse_to_typed_program(
-        &self,
-        source: &str,
-        filename: &str,
-    ) -> GrammarResult<TypedProgram> {
+    fn parse_to_typed_program(&self, source: &str, filename: &str) -> GrammarResult<TypedProgram> {
+        use zyn_peg::runtime2::{GrammarInterpreter, ParseResult, ParsedValue, ParserState};
         use zyntax_typed_ast::source::SourceFile;
         use zyntax_typed_ast::type_registry::TypeRegistry;
         use zyntax_typed_ast::TypedASTBuilder;
-        use zyn_peg::runtime2::{GrammarInterpreter, ParserState, ParseResult, ParsedValue};
 
         // Use Grammar2 if available (preferred path - handles new action format correctly)
         if let Some(grammar2) = &self.grammar2 {
             log::debug!("[parse_to_typed_program] Using Grammar2 for parsing");
 
-            let interpreter = GrammarInterpreter::new(grammar2);
-            let mut builder = TypedASTBuilder::new();
-            let mut registry = TypeRegistry::new();
-            let mut state = ParserState::new(source, &mut builder, &mut registry);
+            // Grammar2's recursive descent parser can overflow the default 8 MB thread stack
+            // for source files with deep expression nesting or many f-strings (due to
+            // mutual recursion between `expr` and `f_string_interp` rules). Spawn a
+            // dedicated thread with 64 MB stack to avoid SIGABRT from stack overflow.
+            let grammar2 = Arc::clone(grammar2);
+            let source_owned = source.to_string();
+            let filename_owned = filename.to_string();
 
-            let result = interpreter.parse(&mut state);
+            let parse_result: GrammarResult<TypedProgram> = std::thread::Builder::new()
+                .stack_size(64 * 1024 * 1024) // 64 MB
+                .spawn(move || {
+                    let interpreter = GrammarInterpreter::new(&grammar2);
+                    let mut builder = TypedASTBuilder::new();
+                    let mut registry = TypeRegistry::new();
+                    let mut state = ParserState::new(&source_owned, &mut builder, &mut registry);
 
-            match result {
-                ParseResult::Success(ParsedValue::Program(mut program), _) => {
-                    program.source_files = vec![SourceFile::new(filename.to_string(), source.to_string())];
-                    return Ok(*program);
-                }
-                ParseResult::Success(other, _) => {
-                    log::warn!("[parse_to_typed_program] Grammar2 returned {:?}, expected Program",
-                        std::mem::discriminant(&other));
-                    return Err(GrammarError::AstBuildError("Grammar2 returned unexpected result type".into()));
-                }
-                ParseResult::Failure(e) => {
-                    return Err(GrammarError::SourceParseError(format!(
-                        "Parse error at {}:{}: expected {:?}",
-                        e.line, e.column, e.expected
-                    )));
-                }
-            }
+                    match interpreter.parse(&mut state) {
+                        ParseResult::Success(ParsedValue::Program(mut program), _) => {
+                            program.source_files =
+                                vec![SourceFile::new(filename_owned, source_owned)];
+                            Ok(*program)
+                        }
+                        ParseResult::Success(_, _) => Err(GrammarError::AstBuildError(
+                            "Grammar2 returned unexpected result type".into(),
+                        )),
+                        ParseResult::Failure(e) => Err(GrammarError::SourceParseError(format!(
+                            "Parse error at {}:{}: expected {:?}",
+                            e.line, e.column, e.expected
+                        ))),
+                    }
+                })
+                .map_err(|e| {
+                    GrammarError::AstBuildError(format!("Failed to spawn parser thread: {}", e))
+                })?
+                .join()
+                .map_err(|_| GrammarError::AstBuildError("Parser thread panicked".into()))?;
+
+            return parse_result;
         }
 
         // Fallback to old ZpegModule path (for pre-compiled grammars)
@@ -458,12 +484,15 @@ impl LanguageGrammar {
     /// Compile the pest grammar to optimized rules
     fn compile_pest_grammar(&self) -> GrammarResult<Vec<pest_meta::optimizer::OptimizedRule>> {
         // Parse the pest grammar
-        let pairs = parser::parse(parser::Rule::grammar_rules, &self.module.pest_grammar)
-            .map_err(|e| GrammarError::CompileError(format!("Failed to parse pest grammar: {:?}", e)))?;
+        let pairs =
+            parser::parse(parser::Rule::grammar_rules, &self.module.pest_grammar).map_err(|e| {
+                GrammarError::CompileError(format!("Failed to parse pest grammar: {:?}", e))
+            })?;
 
         // Convert to AST and optimize
-        let ast = parser::consume_rules(pairs)
-            .map_err(|e| GrammarError::CompileError(format!("Failed to consume grammar rules: {:?}", e)))?;
+        let ast = parser::consume_rules(pairs).map_err(|e| {
+            GrammarError::CompileError(format!("Failed to consume grammar rules: {:?}", e))
+        })?;
 
         Ok(optimizer::optimize(ast))
     }
@@ -479,22 +508,28 @@ impl LanguageGrammar {
     fn inject_builtin_externs(
         &self,
         program: &mut TypedProgram,
-        signatures: Option<&std::collections::HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>>,
+        signatures: Option<
+            &std::collections::HashMap<String, zyntax_compiler::zrtl::ZrtlSymbolSig>,
+        >,
     ) -> GrammarResult<()> {
+        use zyntax_typed_ast::type_registry::{PrimitiveType, Type};
         use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedFunction, TypedParameter};
-        use zyntax_typed_ast::type_registry::{Type, PrimitiveType};
-        use zyntax_typed_ast::{typed_node, Span, Visibility, CallingConvention, Mutability, InternedString};
+        use zyntax_typed_ast::{
+            typed_node, CallingConvention, InternedString, Mutability, Span, Visibility,
+        };
 
         let span = Span::new(0, 0); // Synthetic span for injected declarations
 
         // Iterate over all builtins from @builtin directive
         for (source_name, target_symbol) in &self.module.metadata.builtins.functions {
             // Get return type from @types.function_returns if available, otherwise use signature or Any
-            let return_type = if let Some(type_str) = self.module.metadata.types.function_returns.get(source_name) {
+            let return_type = if let Some(type_str) =
+                self.module.metadata.types.function_returns.get(source_name)
+            {
                 // Use type from @types directive
                 Type::Extern {
                     name: InternedString::new_global(type_str),
-                    layout: None,  // Layout determined by ZRTL at runtime
+                    layout: None, // Layout determined by ZRTL at runtime
                 }
             } else if let Some(sigs) = signatures {
                 // Try to get return type from plugin signature
@@ -526,10 +561,10 @@ impl LanguageGrammar {
                         })
                         .collect()
                 } else {
-                    vec![]  // No signature found - accept anything
+                    vec![] // No signature found - accept anything
                 }
             } else {
-                vec![]  // No signatures provided - accept anything
+                vec![] // No signatures provided - accept anything
             };
 
             // 1. Create alias extern (e.g., println -> links to $IO$println_dynamic)
@@ -541,11 +576,11 @@ impl LanguageGrammar {
                 type_params: vec![],
                 params: params.clone(),
                 return_type: return_type.clone(),
-                body: None,  // Extern functions have no body
+                body: None, // Extern functions have no body
                 visibility: Visibility::Public,
                 is_async: false,
                 is_pure: false,
-                is_external: true,  // Mark as external
+                is_external: true, // Mark as external
                 calling_convention: CallingConvention::Default,
                 link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
             };
@@ -565,11 +600,11 @@ impl LanguageGrammar {
                     type_params: vec![],
                     params,
                     return_type,
-                    body: None,  // Extern functions have no body
+                    body: None, // Extern functions have no body
                     visibility: Visibility::Public,
                     is_async: false,
                     is_pure: false,
-                    is_external: true,  // Mark as external
+                    is_external: true, // Mark as external
                     calling_convention: CallingConvention::Default,
                     link_name: Some(InternedString::new_global(target_symbol)), // Link to ZRTL symbol
                 };
@@ -587,9 +622,11 @@ impl LanguageGrammar {
     /// Convert ZRTL TypeTag to Type
     ///
     /// Maps ZRTL runtime type tags to compile-time Type enum values
-    fn type_tag_to_type(tag: &zyntax_compiler::zrtl::TypeTag) -> zyntax_typed_ast::type_registry::Type {
-        use zyntax_compiler::zrtl::{TypeCategory, PrimitiveSize};
-        use zyntax_typed_ast::type_registry::{Type, PrimitiveType};
+    fn type_tag_to_type(
+        tag: &zyntax_compiler::zrtl::TypeTag,
+    ) -> zyntax_typed_ast::type_registry::Type {
+        use zyntax_compiler::zrtl::{PrimitiveSize, TypeCategory};
+        use zyntax_typed_ast::type_registry::{PrimitiveType, Type};
 
         match tag.category() {
             TypeCategory::Void => Type::Primitive(PrimitiveType::Unit),
@@ -629,12 +666,15 @@ impl LanguageGrammar {
                 // Use placeholder that will be replaced by the calling code
                 Type::Any
             }
-            _ => Type::Any,  // Fallback for complex types
+            _ => Type::Any, // Fallback for complex types
         }
     }
 
     /// Convert a ZRTL TypeTag to a Type, using the symbol name for opaque type inference
-    fn type_tag_to_type_with_symbol(tag: &zyntax_compiler::zrtl::TypeTag, symbol: &str) -> zyntax_typed_ast::type_registry::Type {
+    fn type_tag_to_type_with_symbol(
+        tag: &zyntax_compiler::zrtl::TypeTag,
+        symbol: &str,
+    ) -> zyntax_typed_ast::type_registry::Type {
         use zyntax_compiler::zrtl::TypeCategory;
         use zyntax_typed_ast::type_registry::Type;
         use zyntax_typed_ast::InternedString;
@@ -694,12 +734,16 @@ fn walk_parse_tree<'a, H: AstHostFunctions>(
         // Set current span for THIS node (after children have been processed)
         // This ensures the span corresponds to the current rule, not a child
         interpreter.set_current_span(span_start, span_end);
-        interpreter.host_mut().set_current_span(span_start, span_end);
+        interpreter
+            .host_mut()
+            .set_current_span(span_start, span_end);
 
         // Execute commands for this rule with the correct span
         let result = interpreter
             .execute_rule(&rule_name, &text, children)
-            .map_err(|e| GrammarError::AstBuildError(format!("Error executing rule '{}': {}", rule_name, e)))?;
+            .map_err(|e| {
+                GrammarError::AstBuildError(format!("Error executing rule '{}': {}", rule_name, e))
+            })?;
 
         results.push(result);
     }
@@ -736,12 +780,19 @@ fn walk_pair_to_value<'a, H: AstHostFunctions>(
         .map(|c| walk_pair_to_value(c, interpreter))
         .collect();
 
-    log::trace!("[WALK_PAIR] {}: children.len()={}, children={:?}", rule_name, children.len(), children);
+    log::trace!(
+        "[WALK_PAIR] {}: children.len()={}, children={:?}",
+        rule_name,
+        children.len(),
+        children
+    );
 
     // Set current span for THIS node (after children have been processed)
     // This ensures the span corresponds to the current rule, not a child
     interpreter.set_current_span(span_start, span_end);
-    interpreter.host_mut().set_current_span(span_start, span_end);
+    interpreter
+        .host_mut()
+        .set_current_span(span_start, span_end);
 
     // Execute commands for this rule with the correct span
     let result = interpreter
@@ -760,7 +811,8 @@ mod tests {
     #[test]
     fn test_grammar_metadata() {
         // Test with a simple grammar
-        let grammar = LanguageGrammar::compile_zyn(r#"
+        let grammar = LanguageGrammar::compile_zyn(
+            r#"
             @language {
                 name: "TestLang",
                 version: "1.0",
@@ -770,7 +822,8 @@ mod tests {
             program = { SOI ~ expr* ~ EOI }
             expr = { number }
             number = @{ ASCII_DIGIT+ }
-        "#);
+        "#,
+        );
 
         match grammar {
             Ok(g) => {
@@ -779,15 +832,17 @@ mod tests {
                 // The grammar declares ".test" which may be stored as-is or normalized
                 let extensions = g.file_extensions();
                 assert!(
-                    extensions == &["test".to_string()] ||
-                    extensions == &[".test".to_string()],
+                    extensions == &["test".to_string()] || extensions == &[".test".to_string()],
                     "Expected file_extensions to be [\"test\"] or [\".test\"], got {:?}",
                     extensions
                 );
             }
             Err(e) => {
                 // Grammar compilation may fail in test environment, that's OK
-                eprintln!("Grammar compilation failed (expected in some environments): {}", e);
+                eprintln!(
+                    "Grammar compilation failed (expected in some environments): {}",
+                    e
+                );
             }
         }
     }

@@ -43,15 +43,20 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::error::{Result, ZynPegError};
-use crate::{ZynGrammar, BuiltinMappings, TypeDeclarations};
+use crate::{BuiltinMappings, TypeDeclarations, ZynGrammar};
 
 // Re-export types from typed_ast for host function implementations
 pub use zyntax_typed_ast::{
-    TypedASTBuilder, TypedProgram, TypedNode, TypedDeclaration, TypedExpression,
-    TypedStatement, TypedBlock, BinaryOp, UnaryOp, Span, InternedString,
-    TypedClass, TypedEnum, TypedField, TypedVariant,
-    typed_ast::{TypedVariantFields, TypedMatchExpr, TypedMatchArm, TypedPattern, TypedLiteralPattern, TypedLiteral, TypedFieldPattern, TypedMethod, TypedMethodParam, TypedTypeParam, ParameterKind, ParameterAttribute, TypedRange, TypedExtern, TypedExternStruct, TypedTypeAlias},
-    type_registry::{Type, PrimitiveType, Mutability, Visibility, ConstValue},
+    type_registry::{ConstValue, Mutability, PrimitiveType, Type, Visibility},
+    typed_ast::{
+        ParameterAttribute, ParameterKind, TypedExtern, TypedExternStruct, TypedFieldPattern,
+        TypedLiteral, TypedLiteralPattern, TypedMatchArm, TypedMatchExpr, TypedMethod,
+        TypedMethodParam, TypedPattern, TypedRange, TypedTypeAlias, TypedTypeParam,
+        TypedVariantFields,
+    },
+    BinaryOp, InternedString, Span, TypedASTBuilder, TypedBlock, TypedClass, TypedDeclaration,
+    TypedEnum, TypedExpression, TypedField, TypedNode, TypedProgram, TypedStatement, TypedVariant,
+    UnaryOp,
 };
 
 // ============================================================================
@@ -307,7 +312,13 @@ pub trait AstHostFunctions {
     fn create_struct_def(&mut self, name: &str, fields: Vec<NodeHandle>) -> NodeHandle;
 
     /// Create an abstract type definition (abstract Name(UnderlyingType) or abstract Name(UnderlyingType): fields, Suffix("x"))
-    fn create_abstract_def(&mut self, name: &str, underlying_type: NodeHandle, fields: Vec<NodeHandle>, suffixes: Vec<String>) -> NodeHandle;
+    fn create_abstract_def(
+        &mut self,
+        name: &str,
+        underlying_type: NodeHandle,
+        fields: Vec<NodeHandle>,
+        suffixes: Vec<String>,
+    ) -> NodeHandle;
 
     /// Lookup suffix in suffix registry to find the abstract type name
     /// Returns None if suffix is not registered
@@ -363,7 +374,12 @@ pub trait AstHostFunctions {
 
     /// Create a function call expression with explicit return type
     /// Used when we know the return type from @types directive
-    fn create_call_with_return_type(&mut self, callee: NodeHandle, args: Vec<NodeHandle>, return_type: Option<&str>) -> NodeHandle {
+    fn create_call_with_return_type(
+        &mut self,
+        callee: NodeHandle,
+        args: Vec<NodeHandle>,
+        return_type: Option<&str>,
+    ) -> NodeHandle {
         // Default implementation ignores return type
         self.create_call(callee, args)
     }
@@ -380,16 +396,28 @@ pub trait AstHostFunctions {
     ) -> NodeHandle {
         // Check if callee is an identifier that matches a builtin function
         if let Some(name) = self.get_identifier_name(callee) {
-            log::trace!("[builtin resolution] callee name='{}', checking {} builtins", name, builtins.functions.len());
+            log::trace!(
+                "[builtin resolution] callee name='{}', checking {} builtins",
+                name,
+                builtins.functions.len()
+            );
 
             // Look up return type from @types directive
             let return_type = types.function_returns.get(&name).map(|s| s.as_str());
             if return_type.is_some() {
-                log::trace!("[builtin resolution] found return type for '{}': {:?}", name, return_type);
+                log::trace!(
+                    "[builtin resolution] found return type for '{}': {:?}",
+                    name,
+                    return_type
+                );
             }
 
             if let Some(symbol) = builtins.functions.get(&name) {
-                log::trace!("[builtin resolution] found builtin '{}' -> '{}'", name, symbol);
+                log::trace!(
+                    "[builtin resolution] found builtin '{}' -> '{}'",
+                    name,
+                    symbol
+                );
                 // Create a new identifier with the runtime symbol name
                 let resolved_callee = self.create_identifier(symbol);
                 return self.create_call_with_return_type(resolved_callee, args, return_type);
@@ -421,10 +449,20 @@ pub trait AstHostFunctions {
     fn store_type(&mut self, handle: NodeHandle, ty: zyntax_typed_ast::type_registry::Type);
 
     /// Create a method call expression
-    fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle;
+    fn create_method_call(
+        &mut self,
+        receiver: NodeHandle,
+        method: &str,
+        args: Vec<NodeHandle>,
+    ) -> NodeHandle;
 
     /// Create a static method call expression: TypeName::method(args)
-    fn create_static_method_call(&mut self, type_name: &str, method: &str, args: Vec<NodeHandle>) -> NodeHandle;
+    fn create_static_method_call(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: Vec<NodeHandle>,
+    ) -> NodeHandle;
 
     /// Create an array/index access expression
     fn create_index(&mut self, array: NodeHandle, index: NodeHandle) -> NodeHandle;
@@ -436,7 +474,11 @@ pub trait AstHostFunctions {
     fn create_array(&mut self, elements: Vec<NodeHandle>) -> NodeHandle;
 
     /// Create a struct literal expression
-    fn create_struct_literal(&mut self, name: &str, fields: Vec<(String, NodeHandle)>) -> NodeHandle;
+    fn create_struct_literal(
+        &mut self,
+        name: &str,
+        fields: Vec<(String, NodeHandle)>,
+    ) -> NodeHandle;
 
     /// Store a struct field initialization (for later lookup by struct_init)
     fn store_struct_field_init(&mut self, name: &str, value: NodeHandle) -> NodeHandle;
@@ -509,7 +551,12 @@ pub trait AstHostFunctions {
     fn create_expression_stmt(&mut self, expr: NodeHandle) -> NodeHandle;
 
     /// Create a range expression (start..end or start...end)
-    fn create_range(&mut self, start: Option<NodeHandle>, end: Option<NodeHandle>, inclusive: bool) -> NodeHandle;
+    fn create_range(
+        &mut self,
+        start: Option<NodeHandle>,
+        end: Option<NodeHandle>,
+        inclusive: bool,
+    ) -> NodeHandle;
 
     /// Apply a postfix operation (call, field access, index) to a base expression
     fn apply_postfix(&mut self, base: NodeHandle, postfix_op: NodeHandle) -> NodeHandle;
@@ -538,7 +585,12 @@ pub trait AstHostFunctions {
     fn create_field_pattern(&mut self, name: &str, pattern: Option<NodeHandle>) -> NodeHandle;
 
     /// Create an enum/variant pattern: Some(x), None, Ok(v)
-    fn create_enum_pattern(&mut self, name: &str, variant: &str, fields: Vec<NodeHandle>) -> NodeHandle;
+    fn create_enum_pattern(
+        &mut self,
+        name: &str,
+        variant: &str,
+        fields: Vec<NodeHandle>,
+    ) -> NodeHandle;
 
     /// Create an array pattern: [x, y, z]
     fn create_array_pattern(&mut self, elements: Vec<NodeHandle>) -> NodeHandle;
@@ -547,7 +599,12 @@ pub trait AstHostFunctions {
     fn create_tuple_pattern(&mut self, elements: Vec<NodeHandle>) -> NodeHandle;
 
     /// Create a range pattern: 1..10 or 1..=10
-    fn create_range_pattern(&mut self, start: NodeHandle, end: NodeHandle, inclusive: bool) -> NodeHandle;
+    fn create_range_pattern(
+        &mut self,
+        start: NodeHandle,
+        end: NodeHandle,
+        inclusive: bool,
+    ) -> NodeHandle;
 
     /// Create an or pattern: x | y | z
     fn create_or_pattern(&mut self, patterns: Vec<NodeHandle>) -> NodeHandle;
@@ -556,7 +613,12 @@ pub trait AstHostFunctions {
     fn create_pointer_pattern(&mut self, inner: NodeHandle, mutable: bool) -> NodeHandle;
 
     /// Create a slice pattern: arr[0..5]
-    fn create_slice_pattern(&mut self, prefix: Vec<NodeHandle>, middle: Option<NodeHandle>, suffix: Vec<NodeHandle>) -> NodeHandle;
+    fn create_slice_pattern(
+        &mut self,
+        prefix: Vec<NodeHandle>,
+        middle: Option<NodeHandle>,
+        suffix: Vec<NodeHandle>,
+    ) -> NodeHandle;
 
     /// Create an error pattern: error.X (Zig-style)
     fn create_error_pattern(&mut self, error_name: &str) -> NodeHandle;
@@ -599,7 +661,12 @@ pub trait AstHostFunctions {
     // ========== Class/OOP Declarations (Haxe) ==========
 
     /// Create a class declaration with type parameters and members
-    fn create_class(&mut self, name: &str, type_params: Vec<String>, members: Vec<NodeHandle>) -> NodeHandle;
+    fn create_class(
+        &mut self,
+        name: &str,
+        type_params: Vec<String>,
+        members: Vec<NodeHandle>,
+    ) -> NodeHandle;
 
     /// Create a method declaration
     fn create_method(
@@ -613,7 +680,12 @@ pub trait AstHostFunctions {
     ) -> NodeHandle;
 
     /// Create a ternary conditional expression (condition ? then_expr : else_expr)
-    fn create_ternary(&mut self, condition: NodeHandle, then_expr: NodeHandle, else_expr: NodeHandle) -> NodeHandle;
+    fn create_ternary(
+        &mut self,
+        condition: NodeHandle,
+        then_expr: NodeHandle,
+        else_expr: NodeHandle,
+    ) -> NodeHandle;
 
     // ========== Span/Location ==========
 
@@ -738,16 +810,25 @@ impl ZpegCompiler {
     }
 
     /// Parse commands from a single JSON object
-    fn parse_json_object_commands(map: &serde_json::Map<String, serde_json::Value>) -> Result<Vec<AstCommand>> {
+    fn parse_json_object_commands(
+        map: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Vec<AstCommand>> {
         let mut commands = Vec::new();
 
-        if true {  // Scope for borrowing map
+        if true {
+            // Scope for borrowing map
             // Check for different command types
 
             // "get_child": { "index": 0 }
             if let Some(val) = map.get("get_child") {
-                let index = val.get("index").and_then(|v| v.as_u64()).map(|n| n as usize);
-                let name = val.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let index = val
+                    .get("index")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize);
+                let name = val
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 commands.push(AstCommand::GetChild { index, name });
             }
 
@@ -757,7 +838,9 @@ impl ZpegCompiler {
                 commands.push(AstCommand::GetAllChildren);
                 // If "store" field exists, add a Store command after get_all_children
                 if let Some(store_name) = map.get("store").and_then(|v| v.as_str()) {
-                    commands.push(AstCommand::Store { name: store_name.to_string() });
+                    commands.push(AstCommand::Store {
+                        name: store_name.to_string(),
+                    });
                 }
             }
 
@@ -794,7 +877,9 @@ impl ZpegCompiler {
                 });
                 // If "store" field exists, add a Store command after the define
                 if let Some(store_name) = map.get("store").and_then(|v| v.as_str()) {
-                    commands.push(AstCommand::Store { name: store_name.to_string() });
+                    commands.push(AstCommand::Store {
+                        name: store_name.to_string(),
+                    });
                 }
             }
 
@@ -812,23 +897,30 @@ impl ZpegCompiler {
                 });
                 // If "store" field exists, add a Store command after the call
                 if let Some(store_name) = map.get("store").and_then(|v| v.as_str()) {
-                    commands.push(AstCommand::Store { name: store_name.to_string() });
+                    commands.push(AstCommand::Store {
+                        name: store_name.to_string(),
+                    });
                 }
             }
 
             // "fold_binary": { "operand": "term", "operator_map": {...} }
             if let Some(val) = map.get("fold_binary") {
-                let operand_rule = val.get("operand")
+                let operand_rule = val
+                    .get("operand")
                     .or(val.get("operand_rule"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("operand")
                     .to_string();
-                let operator_rule = val.get("operator")
+                let operator_rule = val
+                    .get("operator")
                     .or(val.get("operator_rule"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("operator")
                     .to_string();
-                commands.push(AstCommand::FoldBinary { operand_rule, operator_rule });
+                commands.push(AstCommand::FoldBinary {
+                    operand_rule,
+                    operator_rule,
+                });
             }
 
             // "match_rule": { "rule_name": [...], ... }
@@ -836,7 +928,8 @@ impl ZpegCompiler {
                 let mut cases = std::collections::HashMap::new();
                 for (rule_name, case_cmds) in cases_map {
                     if let serde_json::Value::Array(arr) = case_cmds {
-                        let cmds: Vec<AstCommand> = arr.iter()
+                        let cmds: Vec<AstCommand> = arr
+                            .iter()
                             .filter_map(|v| Self::json_value_to_command(v).ok())
                             .collect();
                         cases.insert(rule_name.clone(), cmds);
@@ -848,14 +941,18 @@ impl ZpegCompiler {
             // "store": { "name": "var_name" }
             if let Some(val) = map.get("store") {
                 if let Some(name) = val.get("name").and_then(|v| v.as_str()) {
-                    commands.push(AstCommand::Store { name: name.to_string() });
+                    commands.push(AstCommand::Store {
+                        name: name.to_string(),
+                    });
                 }
             }
 
             // "load": { "name": "var_name" }
             if let Some(val) = map.get("load") {
                 if let Some(name) = val.get("name").and_then(|v| v.as_str()) {
-                    commands.push(AstCommand::Load { name: name.to_string() });
+                    commands.push(AstCommand::Load {
+                        name: name.to_string(),
+                    });
                 }
             }
 
@@ -876,11 +973,13 @@ impl ZpegCompiler {
 
             // "fold_left": { "op": "pipe", "transform": "prepend_arg" }
             if let Some(val) = map.get("fold_left") {
-                let op = val.get("op")
+                let op = val
+                    .get("op")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let transform = val.get("transform")
+                let transform = val
+                    .get("transform")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
                 commands.push(AstCommand::FoldLeft { op, transform });
@@ -928,8 +1027,14 @@ impl ZpegCompiler {
     fn json_value_to_command(value: &serde_json::Value) -> Result<AstCommand> {
         if let serde_json::Value::Object(map) = value {
             if let Some(val) = map.get("get_child") {
-                let index = val.get("index").and_then(|v| v.as_u64()).map(|n| n as usize);
-                let name = val.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+                let index = val
+                    .get("index")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize);
+                let name = val
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
                 return Ok(AstCommand::GetChild { index, name });
             }
             if map.get("get_text").is_some() {
@@ -944,7 +1049,10 @@ impl ZpegCompiler {
                 } else {
                     vec![]
                 };
-                return Ok(AstCommand::Call { func: func.to_string(), args });
+                return Ok(AstCommand::Call {
+                    func: func.to_string(),
+                    args,
+                });
             }
             // Handle nested "define" commands
             if let Some(node_type) = map.get("define").and_then(|v| v.as_str()) {
@@ -1298,14 +1406,24 @@ impl TypedAstBuilder {
         let interned_name = self.inner.intern(name);
 
         // First check if this type was already declared (struct, enum, etc.)
-        debug!("[DEBUG get_type_by_name] Looking up '{}', declared_types has {} entries", name, self.declared_types.len());
+        debug!(
+            "[DEBUG get_type_by_name] Looking up '{}', declared_types has {} entries",
+            name,
+            self.declared_types.len()
+        );
         if let Some(ty) = self.declared_types.get(name) {
-            debug!("[DEBUG get_type_by_name] Found declared type for '{}': {:?}", name, ty);
+            debug!(
+                "[DEBUG get_type_by_name] Found declared type for '{}': {:?}",
+                name, ty
+            );
             return ty.clone();
         }
 
         // If not declared yet, return an unresolved type for later resolution
-        debug!("[DEBUG get_type_by_name] Type '{}' not found in declared_types, returning Unresolved", name);
+        debug!(
+            "[DEBUG get_type_by_name] Type '{}' not found in declared_types, returning Unresolved",
+            name
+        );
         Type::Unresolved(interned_name)
     }
 
@@ -1318,19 +1436,26 @@ impl TypedAstBuilder {
     pub fn build_program(&self) -> TypedProgram {
         use zyntax_typed_ast::source::SourceFile;
 
-        let decls: Vec<TypedNode<TypedDeclaration>> = self.program_decls.iter()
+        let decls: Vec<TypedNode<TypedDeclaration>> = self
+            .program_decls
+            .iter()
             .filter_map(|h| self.declarations.get(h).cloned())
             .collect();
 
         // Create SourceFile if we have source information
-        let source_files = if let (Some(name), Some(content)) = (self.inner.source_file(), self.inner.source_content()) {
+        let source_files = if let (Some(name), Some(content)) =
+            (self.inner.source_file(), self.inner.source_content())
+        {
             vec![SourceFile::new(name.to_string(), content.to_string())]
         } else {
             vec![]
         };
 
-        debug!("[DEBUG build_program] Building program with {} declarations, registry has {} types",
-            decls.len(), self.inner.registry.get_all_types().count());
+        debug!(
+            "[DEBUG build_program] Building program with {} declarations, registry has {} types",
+            decls.len(),
+            self.inner.registry.get_all_types().count()
+        );
 
         TypedProgram {
             declarations: decls,
@@ -1424,16 +1549,26 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Convert param handles to TypedParameter using stored parameter info
-        let typed_params: Vec<_> = params.iter()
+        let typed_params: Vec<_> = params
+            .iter()
             .map(|h| {
                 if let Some((name, ty)) = self.params.get(h) {
                     // Register parameter type in variable_types for later variable references
                     self.variable_types.insert(name.clone(), ty.clone());
-                    debug!("[DEBUG create_function] Registered parameter '{}' with type {:?}", name, ty);
-                    self.inner.parameter(name, ty.clone(), Mutability::Immutable, span)
+                    debug!(
+                        "[DEBUG create_function] Registered parameter '{}' with type {:?}",
+                        name, ty
+                    );
+                    self.inner
+                        .parameter(name, ty.clone(), Mutability::Immutable, span)
                 } else {
                     // Fallback for unknown params
-                    self.inner.parameter("arg", Type::Primitive(PrimitiveType::I32), Mutability::Immutable, span)
+                    self.inner.parameter(
+                        "arg",
+                        Type::Primitive(PrimitiveType::I32),
+                        Mutability::Immutable,
+                        span,
+                    )
                 }
             })
             .collect();
@@ -1442,15 +1577,26 @@ impl AstHostFunctions for TypedAstBuilder {
         let body_block = if let Some(block) = self.get_block(body) {
             block
         } else if let Some(stmt) = self.get_stmt(body) {
-            TypedBlock { statements: vec![stmt], span }
+            TypedBlock {
+                statements: vec![stmt],
+                span,
+            }
         } else if let Some(expr) = self.get_expr(body) {
-            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+            TypedBlock {
+                statements: vec![self.inner.expression_statement(expr, span)],
+                span,
+            }
         } else {
-            TypedBlock { statements: vec![], span }
+            TypedBlock {
+                statements: vec![],
+                span,
+            }
         };
 
         // Get return type from handle, default to Unit (void)
-        let ret_type = self.types.get(&return_type)
+        let ret_type = self
+            .types
+            .get(&return_type)
             .cloned()
             .unwrap_or(Type::Primitive(PrimitiveType::Unit));
 
@@ -1476,30 +1622,35 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Convert param handles to TypedParameter using stored parameter info
-        let typed_params: Vec<_> = params.iter()
+        let typed_params: Vec<_> = params
+            .iter()
             .map(|h| {
                 if let Some((name, ty)) = self.params.get(h) {
-                    self.inner.parameter(name, ty.clone(), Mutability::Immutable, span)
+                    self.inner
+                        .parameter(name, ty.clone(), Mutability::Immutable, span)
                 } else {
                     // Fallback for unknown params
-                    self.inner.parameter("arg", Type::Primitive(PrimitiveType::I32), Mutability::Immutable, span)
+                    self.inner.parameter(
+                        "arg",
+                        Type::Primitive(PrimitiveType::I32),
+                        Mutability::Immutable,
+                        span,
+                    )
                 }
             })
             .collect();
 
         // Get return type from handle, default to Unit (void)
-        let ret_type = self.types.get(&return_type)
+        let ret_type = self
+            .types
+            .get(&return_type)
             .cloned()
             .unwrap_or(Type::Primitive(PrimitiveType::Unit));
 
         // Create extern function (no body, is_external = true)
-        let func = self.inner.extern_function(
-            name,
-            typed_params,
-            ret_type,
-            Visibility::Public,
-            span,
-        );
+        let func =
+            self.inner
+                .extern_function(name, typed_params, ret_type, Visibility::Public, span);
 
         self.store_decl(func)
     }
@@ -1514,13 +1665,20 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Convert param handles to TypedParameter using stored parameter info
-        let typed_params: Vec<_> = params.iter()
+        let typed_params: Vec<_> = params
+            .iter()
             .map(|h| {
                 if let Some((name, ty)) = self.params.get(h) {
-                    self.inner.parameter(name, ty.clone(), Mutability::Immutable, span)
+                    self.inner
+                        .parameter(name, ty.clone(), Mutability::Immutable, span)
                 } else {
                     // Fallback for unknown params
-                    self.inner.parameter("arg", Type::Primitive(PrimitiveType::I32), Mutability::Immutable, span)
+                    self.inner.parameter(
+                        "arg",
+                        Type::Primitive(PrimitiveType::I32),
+                        Mutability::Immutable,
+                        span,
+                    )
                 }
             })
             .collect();
@@ -1529,15 +1687,26 @@ impl AstHostFunctions for TypedAstBuilder {
         let body_block = if let Some(block) = self.get_block(body) {
             block
         } else if let Some(stmt) = self.get_stmt(body) {
-            TypedBlock { statements: vec![stmt], span }
+            TypedBlock {
+                statements: vec![stmt],
+                span,
+            }
         } else if let Some(expr) = self.get_expr(body) {
-            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+            TypedBlock {
+                statements: vec![self.inner.expression_statement(expr, span)],
+                span,
+            }
         } else {
-            TypedBlock { statements: vec![], span }
+            TypedBlock {
+                statements: vec![],
+                span,
+            }
         };
 
         // Get return type from handle, default to Unit (void)
-        let ret_type = self.types.get(&return_type)
+        let ret_type = self
+            .types
+            .get(&return_type)
             .cloned()
             .unwrap_or(Type::Primitive(PrimitiveType::Unit));
 
@@ -1548,7 +1717,7 @@ impl AstHostFunctions for TypedAstBuilder {
             ret_type,
             body_block,
             Visibility::Public,
-            true,  // is_async = true
+            true, // is_async = true
             span,
         );
 
@@ -1588,10 +1757,14 @@ impl AstHostFunctions for TypedAstBuilder {
         items: Vec<NodeHandle>,
     ) -> NodeHandle {
         let span = self.default_span();
-        debug!("DEBUG: create_impl_block span=({}, {})", span.start, span.end);
+        debug!(
+            "DEBUG: create_impl_block span=({}, {})",
+            span.start, span.end
+        );
 
         // Convert trait type arguments from handles to Type
-        let trait_type_args: Vec<Type> = trait_args.iter()
+        let trait_type_args: Vec<Type> = trait_args
+            .iter()
             .filter_map(|h| self.get_type_from_handle(*h))
             .collect();
 
@@ -1616,19 +1789,23 @@ impl AstHostFunctions for TypedAstBuilder {
                         // Set is_self flag based on parameter name matching
                         // The compiler will handle type resolution for self parameters
                         let self_name = self.inner.intern("self");
-                        let method_params: Vec<TypedMethodParam> = func.params.iter().map(|p| {
-                            let is_self_param = p.name == self_name;
-                            TypedMethodParam {
-                                name: p.name,
-                                ty: p.ty.clone(),
-                                mutability: p.mutability,
-                                is_self: is_self_param,  // Mark self params - compiler will resolve type
-                                default_value: None,
-                                attributes: vec![],
-                                kind: ParameterKind::Regular,
-                                span: p.span,
-                            }
-                        }).collect();
+                        let method_params: Vec<TypedMethodParam> = func
+                            .params
+                            .iter()
+                            .map(|p| {
+                                let is_self_param = p.name == self_name;
+                                TypedMethodParam {
+                                    name: p.name,
+                                    ty: p.ty.clone(),
+                                    mutability: p.mutability,
+                                    is_self: is_self_param, // Mark self params - compiler will resolve type
+                                    default_value: None,
+                                    attributes: vec![],
+                                    kind: ParameterKind::Regular,
+                                    span: p.span,
+                                }
+                            })
+                            .collect();
 
                         // Convert function to method
                         debug!("[DEBUG] Impl method return type: {:?}", func.return_type);
@@ -1672,10 +1849,14 @@ impl AstHostFunctions for TypedAstBuilder {
         items: Vec<NodeHandle>,
     ) -> NodeHandle {
         let span = self.default_span();
-        debug!("DEBUG: create_abstract_inherent_impl type_name={} span=({}, {})", type_name, span.start, span.end);
+        debug!(
+            "DEBUG: create_abstract_inherent_impl type_name={} span=({}, {})",
+            type_name, span.start, span.end
+        );
 
         // Get the underlying type from the handle
-        let underlying = self.get_type_from_handle(underlying_type)
+        let underlying = self
+            .get_type_from_handle(underlying_type)
             .unwrap_or(Type::Any);
 
         // Create named type for the abstract type
@@ -1684,7 +1865,10 @@ impl AstHostFunctions for TypedAstBuilder {
         // Process items (methods) - same as trait impl blocks
         let mut methods = Vec::new();
 
-        debug!("[DEBUG] Processing {} items for inherent impl block", items.len());
+        debug!(
+            "[DEBUG] Processing {} items for inherent impl block",
+            items.len()
+        );
         for item_handle in items {
             debug!("[DEBUG] Processing item handle: {:?}", item_handle);
             if let Some(decl) = self.declarations.get(&item_handle) {
@@ -1695,19 +1879,23 @@ impl AstHostFunctions for TypedAstBuilder {
 
                         // Convert function parameters to method parameters
                         let self_name = self.inner.intern("self");
-                        let method_params: Vec<TypedMethodParam> = func.params.iter().map(|p| {
-                            let is_self_param = p.name == self_name;
-                            TypedMethodParam {
-                                name: p.name,
-                                ty: p.ty.clone(),
-                                mutability: p.mutability,
-                                is_self: is_self_param,
-                                default_value: None,
-                                attributes: vec![],
-                                kind: ParameterKind::Regular,
-                                span: p.span,
-                            }
-                        }).collect();
+                        let method_params: Vec<TypedMethodParam> = func
+                            .params
+                            .iter()
+                            .map(|p| {
+                                let is_self_param = p.name == self_name;
+                                TypedMethodParam {
+                                    name: p.name,
+                                    ty: p.ty.clone(),
+                                    mutability: p.mutability,
+                                    is_self: is_self_param,
+                                    default_value: None,
+                                    attributes: vec![],
+                                    kind: ParameterKind::Regular,
+                                    span: p.span,
+                                }
+                            })
+                            .collect();
 
                         let method = TypedMethod {
                             name: func.name,
@@ -1731,7 +1919,7 @@ impl AstHostFunctions for TypedAstBuilder {
         // Create an inherent impl block (no trait)
         // We'll use empty trait name to indicate this is an inherent impl
         let impl_decl = self.inner.impl_block(
-            "", // Empty trait name for inherent impl
+            "",     // Empty trait name for inherent impl
             vec![], // No trait type args
             for_type,
             methods,
@@ -1739,7 +1927,10 @@ impl AstHostFunctions for TypedAstBuilder {
             span,
         );
 
-        debug!("[DEBUG impl_decl] Inherent impl_decl.ty = {:?}", impl_decl.ty);
+        debug!(
+            "[DEBUG impl_decl] Inherent impl_decl.ty = {:?}",
+            impl_decl.ty
+        );
 
         self.store_decl(impl_decl)
     }
@@ -1756,19 +1947,22 @@ impl AstHostFunctions for TypedAstBuilder {
             layout: None,
         };
         self.declared_types.insert(name.to_string(), extern_type);
-        debug!("[DEBUG create_opaque_type] Registered extern type '{}' -> Extern({})", name, external_name);
+        debug!(
+            "[DEBUG create_opaque_type] Registered extern type '{}' -> Extern({})",
+            name, external_name
+        );
 
         let extern_struct = TypedExternStruct {
             name: name_interned,
             runtime_prefix,
-            type_params: vec![],  // No type parameters for now
+            type_params: vec![], // No type parameters for now
         };
 
         let decl = TypedDeclaration::Extern(TypedExtern::Struct(extern_struct));
         let decl_node = TypedNode {
             node: decl,
             span: self.default_span(),
-            ty: Type::Never,  // Declarations don't have a type
+            ty: Type::Never, // Declarations don't have a type
         };
 
         self.store_decl(decl_node)
@@ -1778,7 +1972,11 @@ impl AstHostFunctions for TypedAstBuilder {
         // Create a struct as a Class with fields but no methods
         // struct Tensor:
         //     ptr: TensorPtr
-        debug!("[DEBUG create_struct_def] Creating struct '{}' with {} fields", name, fields.len());
+        debug!(
+            "[DEBUG create_struct_def] Creating struct '{}' with {} fields",
+            name,
+            fields.len()
+        );
 
         let name_interned = self.inner.intern(name);
 
@@ -1818,21 +2016,29 @@ impl AstHostFunctions for TypedAstBuilder {
         };
 
         // Register the struct type so it can be referenced
-        self.declared_types.insert(name.to_string(), struct_type.clone());
-        debug!("[DEBUG create_struct_def] Registered struct type '{}' with ID {:?}", name, type_id);
+        self.declared_types
+            .insert(name.to_string(), struct_type.clone());
+        debug!(
+            "[DEBUG create_struct_def] Registered struct type '{}' with ID {:?}",
+            name, type_id
+        );
 
         // Register the type definition in the type registry
-        let field_defs: Vec<zyntax_typed_ast::type_registry::FieldDef> = typed_fields.clone().into_iter().map(|f| zyntax_typed_ast::type_registry::FieldDef {
-            name: f.name,
-            ty: f.ty,
-            visibility: f.visibility,
-            mutability: f.mutability,
-            is_static: f.is_static,
-            span: f.span,
-            getter: None,
-            setter: None,
-            is_synthetic: false,
-        }).collect();
+        let field_defs: Vec<zyntax_typed_ast::type_registry::FieldDef> = typed_fields
+            .clone()
+            .into_iter()
+            .map(|f| zyntax_typed_ast::type_registry::FieldDef {
+                name: f.name,
+                ty: f.ty,
+                visibility: f.visibility,
+                mutability: f.mutability,
+                is_static: f.is_static,
+                span: f.span,
+                getter: None,
+                setter: None,
+                is_synthetic: false,
+            })
+            .collect();
 
         let type_def = zyntax_typed_ast::type_registry::TypeDefinition {
             id: type_id,
@@ -1876,15 +2082,27 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_decl(decl_node)
     }
 
-    fn create_abstract_def(&mut self, name: &str, underlying_type_handle: NodeHandle, field_handles: Vec<NodeHandle>, suffixes: Vec<String>) -> NodeHandle {
+    fn create_abstract_def(
+        &mut self,
+        name: &str,
+        underlying_type_handle: NodeHandle,
+        field_handles: Vec<NodeHandle>,
+        suffixes: Vec<String>,
+    ) -> NodeHandle {
         // Create an abstract type (Haxe-style zero-cost wrapper)
         // abstract Duration(i64): ms: i64, Suffix("ms"), Suffix("s")
-        debug!("[DEBUG create_abstract_def] Creating abstract type '{}' with {} fields, suffixes={:?}", name, field_handles.len(), suffixes);
+        debug!(
+            "[DEBUG create_abstract_def] Creating abstract type '{}' with {} fields, suffixes={:?}",
+            name,
+            field_handles.len(),
+            suffixes
+        );
 
         let name_interned = self.inner.intern(name);
 
         // Get the underlying type from the handle
-        let underlying_type = self.get_type_from_handle(underlying_type_handle)
+        let underlying_type = self
+            .get_type_from_handle(underlying_type_handle)
             .unwrap_or(Type::Any);
 
         // Convert field handles to TypedField nodes (same as struct_def)
@@ -1909,7 +2127,10 @@ impl AstHostFunctions for TypedAstBuilder {
 
         // Pre-allocate TypeId before creating TypeDefinition
         let type_id = zyntax_typed_ast::type_registry::TypeId::next();
-        debug!("[DEBUG create_abstract_def] Allocated TypeId: {:?}", type_id);
+        debug!(
+            "[DEBUG create_abstract_def] Allocated TypeId: {:?}",
+            type_id
+        );
 
         // Create a Named type for the abstract
         let abstract_type = Type::Named {
@@ -1921,43 +2142,58 @@ impl AstHostFunctions for TypedAstBuilder {
         };
 
         // Register the abstract type so it can be referenced
-        self.declared_types.insert(name.to_string(), abstract_type.clone());
-        debug!("[DEBUG create_abstract_def] Registered abstract type '{}' with ID {:?}", name, type_id);
+        self.declared_types
+            .insert(name.to_string(), abstract_type.clone());
+        debug!(
+            "[DEBUG create_abstract_def] Registered abstract type '{}' with ID {:?}",
+            name, type_id
+        );
 
         // Register suffixes in the suffix registry for literal parsing
         for suffix in &suffixes {
-            debug!("[DEBUG create_abstract_def] Registering suffix '{}' -> '{}'", suffix, name);
-            self.suffix_registry.insert(suffix.clone(), name.to_string());
+            debug!(
+                "[DEBUG create_abstract_def] Registering suffix '{}' -> '{}'",
+                suffix, name
+            );
+            self.suffix_registry
+                .insert(suffix.clone(), name.to_string());
         }
 
         // Register the type definition in the type registry
         // Implicit conversions will be populated later via From/Into trait impls
-        let field_defs: Vec<zyntax_typed_ast::type_registry::FieldDef> = typed_fields.clone().into_iter().map(|f| zyntax_typed_ast::type_registry::FieldDef {
-            name: f.name,
-            ty: f.ty,
-            visibility: f.visibility,
-            mutability: f.mutability,
-            is_static: f.is_static,
-            span: f.span,
-            getter: None,
-            setter: None,
-            is_synthetic: false,
-        }).collect();
+        let field_defs: Vec<zyntax_typed_ast::type_registry::FieldDef> = typed_fields
+            .clone()
+            .into_iter()
+            .map(|f| zyntax_typed_ast::type_registry::FieldDef {
+                name: f.name,
+                ty: f.ty,
+                visibility: f.visibility,
+                mutability: f.mutability,
+                is_static: f.is_static,
+                span: f.span,
+                getter: None,
+                setter: None,
+                is_synthetic: false,
+            })
+            .collect();
 
         // Validate abstract types with suffixes
         if !suffixes.is_empty() {
             // 1. Check numeric underlying type
-            let is_numeric = matches!(&underlying_type,
-                zyntax_typed_ast::Type::Primitive(zyntax_typed_ast::type_registry::PrimitiveType::I8 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::I16 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::I32 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::I64 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::U8 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::U16 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::U32 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::U64 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::F32 |
-                    zyntax_typed_ast::type_registry::PrimitiveType::F64)
+            let is_numeric = matches!(
+                &underlying_type,
+                zyntax_typed_ast::Type::Primitive(
+                    zyntax_typed_ast::type_registry::PrimitiveType::I8
+                        | zyntax_typed_ast::type_registry::PrimitiveType::I16
+                        | zyntax_typed_ast::type_registry::PrimitiveType::I32
+                        | zyntax_typed_ast::type_registry::PrimitiveType::I64
+                        | zyntax_typed_ast::type_registry::PrimitiveType::U8
+                        | zyntax_typed_ast::type_registry::PrimitiveType::U16
+                        | zyntax_typed_ast::type_registry::PrimitiveType::U32
+                        | zyntax_typed_ast::type_registry::PrimitiveType::U64
+                        | zyntax_typed_ast::type_registry::PrimitiveType::F32
+                        | zyntax_typed_ast::type_registry::PrimitiveType::F64
+                )
             );
             if !is_numeric {
                 debug!("[WARNING] Abstract type '{}' uses Suffixes with non-numeric underlying type. This will be reported as an error during type checking.", name);
@@ -1965,16 +2201,26 @@ impl AstHostFunctions for TypedAstBuilder {
 
             // 2. Enforce 'value' field convention
             // Abstract types with suffixes MUST have exactly one field named 'value'
-            let has_value_field = typed_fields.iter().any(|f| {
-                f.name.resolve_global().unwrap_or_default() == "value"
-            });
+            let has_value_field = typed_fields
+                .iter()
+                .any(|f| f.name.resolve_global().unwrap_or_default() == "value");
 
             if !has_value_field {
-                debug!("[ERROR] Abstract type '{}' with Suffixes must have a 'value' field", name);
-                debug!("       Convention: abstract {}({}) with Suffixes(...): value: {}",
+                debug!(
+                    "[ERROR] Abstract type '{}' with Suffixes must have a 'value' field",
+                    name
+                );
+                debug!(
+                    "       Convention: abstract {}({}) with Suffixes(...): value: {}",
                     name,
-                    format!("{:?}", underlying_type).split("::").last().unwrap_or("Type"),
-                    format!("{:?}", underlying_type).split("::").last().unwrap_or("Type")
+                    format!("{:?}", underlying_type)
+                        .split("::")
+                        .last()
+                        .unwrap_or("Type"),
+                    format!("{:?}", underlying_type)
+                        .split("::")
+                        .last()
+                        .unwrap_or("Type")
                 );
                 debug!("       The 'value' field represents the canonical IR representation.");
             } else if typed_fields.len() > 1 {
@@ -2055,7 +2301,10 @@ impl AstHostFunctions for TypedAstBuilder {
                 Type::Named { id, .. } => {
                     // Look up the type name in declared_types by matching TypeId
                     for (name, declared_ty) in &self.declared_types {
-                        if let Type::Named { id: declared_id, .. } = declared_ty {
+                        if let Type::Named {
+                            id: declared_id, ..
+                        } = declared_ty
+                        {
                             if id == declared_id {
                                 return Some(name.clone());
                             }
@@ -2074,7 +2323,10 @@ impl AstHostFunctions for TypedAstBuilder {
                 Type::Named { id, .. } => {
                     // Look up by TypeId match
                     for (name, declared_ty) in &self.declared_types {
-                        if let Type::Named { id: declared_id, .. } = declared_ty {
+                        if let Type::Named {
+                            id: declared_id, ..
+                        } = declared_ty
+                        {
                             if id == declared_id {
                                 return Some(name.clone());
                             }
@@ -2098,8 +2350,12 @@ impl AstHostFunctions for TypedAstBuilder {
         // IMPORTANT: Register parameter type IMMEDIATELY so that variable references
         // in the function body (which is parsed after params but before create_function is called)
         // can find the correct type
-        self.variable_types.insert(name.to_string(), param_type.clone());
-        debug!("[DEBUG create_param] Registered parameter '{}' with type {:?}", name, param_type);
+        self.variable_types
+            .insert(name.to_string(), param_type.clone());
+        debug!(
+            "[DEBUG create_param] Registered parameter '{}' with type {:?}",
+            name, param_type
+        );
         self.params.insert(handle, (name.to_string(), param_type));
         handle
     }
@@ -2107,31 +2363,46 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_binary_op(&mut self, op: &str, left: NodeHandle, right: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let left_expr = self.get_expr(left).unwrap_or_else(|| self.inner.int_literal(0, span));
-        let right_expr = self.get_expr(right).unwrap_or_else(|| self.inner.int_literal(0, span));
+        let left_expr = self
+            .get_expr(left)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
+        let right_expr = self
+            .get_expr(right)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
 
         let binary_op = Self::string_to_binary_op(op);
 
         // Infer result type from operands
         // Comparison operators return bool, arithmetic operators return left operand's type
         let result_type = match binary_op {
-            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le
-            | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::And | BinaryOp::Or
-                => Type::Primitive(PrimitiveType::Bool),
-            _ => left_expr.ty.clone(),  // Arithmetic ops preserve left operand's type
+            BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge
+            | BinaryOp::And
+            | BinaryOp::Or => Type::Primitive(PrimitiveType::Bool),
+            _ => left_expr.ty.clone(), // Arithmetic ops preserve left operand's type
         };
 
-        debug!("[DEBUG create_binary_op] op={:?}, left_type={:?}, right_type={:?}, result_type={:?}",
-            binary_op, left_expr.ty, right_expr.ty, result_type);
+        debug!(
+            "[DEBUG create_binary_op] op={:?}, left_type={:?}, right_type={:?}, result_type={:?}",
+            binary_op, left_expr.ty, right_expr.ty, result_type
+        );
 
-        let expr = self.inner.binary(binary_op, left_expr, right_expr, result_type, span);
+        let expr = self
+            .inner
+            .binary(binary_op, left_expr, right_expr, result_type, span);
         self.store_expr(expr)
     }
 
     fn create_unary_op(&mut self, op: &str, operand: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let operand_expr = self.get_expr(operand).unwrap_or_else(|| self.inner.int_literal(0, span));
+        let operand_expr = self
+            .get_expr(operand)
+            .unwrap_or_else(|| self.inner.int_literal(0, span));
 
         // Handle special cases that aren't true unary ops
         match op.to_lowercase().as_str() {
@@ -2146,8 +2417,10 @@ impl AstHostFunctions for TypedAstBuilder {
         // Most unary ops (neg, not) preserve the operand's type
         let result_type = operand_expr.ty.clone();
 
-        debug!("[DEBUG create_unary_op] op={:?}, operand_type={:?}, result_type={:?}",
-            unary_op, operand_expr.ty, result_type);
+        debug!(
+            "[DEBUG create_unary_op] op={:?}, operand_type={:?}, result_type={:?}",
+            unary_op, operand_expr.ty, result_type
+        );
 
         let expr = self.inner.unary(unary_op, operand_expr, result_type, span);
         self.store_expr(expr)
@@ -2157,7 +2430,8 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Get the expression being awaited
-        let awaited_expr = self.get_expr(expr_handle)
+        let awaited_expr = self
+            .get_expr(expr_handle)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
 
         // The result type of await is the inner type of the Promise
@@ -2181,8 +2455,8 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
         let expr = TypedNode::new(
             TypedExpression::Literal(TypedLiteral::Integer(value as i128)),
-            ty,  // Use the provided type instead of inferring
-            span
+            ty, // Use the provided type instead of inferring
+            span,
         );
         self.store_expr(expr)
     }
@@ -2210,11 +2484,12 @@ impl AstHostFunctions for TypedAstBuilder {
 
         // Look up the variable's actual type from our tracking map
         // If not found, default to Any (will be resolved during type inference)
-        let var_type = self.variable_types.get(name)
-            .cloned()
-            .unwrap_or(Type::Any);
+        let var_type = self.variable_types.get(name).cloned().unwrap_or(Type::Any);
 
-        debug!("[DEBUG create_identifier] Variable '{}' has type {:?}", name, var_type);
+        debug!(
+            "[DEBUG create_identifier] Variable '{}' has type {:?}",
+            name, var_type
+        );
         let expr = self.inner.variable(name, var_type, span);
         self.store_expr(expr)
     }
@@ -2223,36 +2498,48 @@ impl AstHostFunctions for TypedAstBuilder {
         self.create_call_with_return_type(callee, args, None)
     }
 
-    fn create_call_with_return_type(&mut self, callee: NodeHandle, args: Vec<NodeHandle>, return_type: Option<&str>) -> NodeHandle {
+    fn create_call_with_return_type(
+        &mut self,
+        callee: NodeHandle,
+        args: Vec<NodeHandle>,
+        return_type: Option<&str>,
+    ) -> NodeHandle {
         let span = self.default_span();
 
-        let callee_expr = self.get_expr(callee)
-            .unwrap_or_else(|| self.inner.variable("unknown", Type::Primitive(PrimitiveType::I32), span));
+        let callee_expr = self.get_expr(callee).unwrap_or_else(|| {
+            self.inner
+                .variable("unknown", Type::Primitive(PrimitiveType::I32), span)
+        });
 
         // Check if this is a method call: obj.method(args)
         // If callee is a field access, transform into MethodCall
         if let TypedExpression::Field(field_access) = &callee_expr.node {
             let receiver_expr = *field_access.object.clone();
-            let method_name_str = field_access.field.resolve_global()
+            let method_name_str = field_access
+                .field
+                .resolve_global()
                 .unwrap_or_else(|| "unknown".to_string());
 
-            debug!("[PARSER] Detected method call: receiver_ty={:?}, method={}",
-                receiver_expr.ty, method_name_str);
+            debug!(
+                "[PARSER] Detected method call: receiver_ty={:?}, method={}",
+                receiver_expr.ty, method_name_str
+            );
 
             // Store the receiver expression and use create_method_call
             let receiver_handle = self.store_expr(receiver_expr);
             return self.create_method_call(receiver_handle, &method_name_str, args);
         }
 
-        let arg_exprs: Vec<_> = args.iter()
-            .filter_map(|h| self.get_expr(*h))
-            .collect();
+        let arg_exprs: Vec<_> = args.iter().filter_map(|h| self.get_expr(*h)).collect();
 
         // Try to resolve the return type from the function's signature if callee is a simple variable
         let resolved_return_type = if let TypedExpression::Variable(func_name) = &callee_expr.node {
             // Look up the function in declarations to get its actual return type
             let func_name_str = func_name.resolve_global().unwrap_or_default();
-            debug!("[PARSER] Looking up function '{}' to get return type", func_name_str);
+            debug!(
+                "[PARSER] Looking up function '{}' to get return type",
+                func_name_str
+            );
 
             // Search through declarations for this function
             // Try exact match first, then try as a suffix (for mangled names like Type$method)
@@ -2286,29 +2573,29 @@ impl AstHostFunctions for TypedAstBuilder {
             resolved_ty
         } else {
             match return_type {
-            Some(type_name) if type_name.starts_with('$') => {
-                // This is an opaque type - create an Extern type
-                // The type name without $ is used as the extern type name
-                log::trace!("[create_call] opaque return type: {}", type_name);
-                Type::Extern {
-                    name: InternedString::new_global(type_name),
-                    layout: None,
+                Some(type_name) if type_name.starts_with('$') => {
+                    // This is an opaque type - create an Extern type
+                    // The type name without $ is used as the extern type name
+                    log::trace!("[create_call] opaque return type: {}", type_name);
+                    Type::Extern {
+                        name: InternedString::new_global(type_name),
+                        layout: None,
+                    }
                 }
-            }
-            Some(type_name) => {
-                // Regular named type - try to parse it
-                log::trace!("[create_call] named return type: {}", type_name);
-                match type_name {
-                    "i32" | "I32" => Type::Primitive(PrimitiveType::I32),
-                    "i64" | "I64" => Type::Primitive(PrimitiveType::I64),
-                    "f32" | "F32" => Type::Primitive(PrimitiveType::F32),
-                    "f64" | "F64" => Type::Primitive(PrimitiveType::F64),
-                    "bool" | "Bool" => Type::Primitive(PrimitiveType::Bool),
-                    "void" | "Void" | "()" => Type::Primitive(PrimitiveType::Unit),
-                    _ => Type::Any, // Use Any for unknown types - will be resolved during type inference
+                Some(type_name) => {
+                    // Regular named type - try to parse it
+                    log::trace!("[create_call] named return type: {}", type_name);
+                    match type_name {
+                        "i32" | "I32" => Type::Primitive(PrimitiveType::I32),
+                        "i64" | "I64" => Type::Primitive(PrimitiveType::I64),
+                        "f32" | "F32" => Type::Primitive(PrimitiveType::F32),
+                        "f64" | "F64" => Type::Primitive(PrimitiveType::F64),
+                        "bool" | "Bool" => Type::Primitive(PrimitiveType::Bool),
+                        "void" | "Void" | "()" => Type::Primitive(PrimitiveType::Unit),
+                        _ => Type::Any, // Use Any for unknown types - will be resolved during type inference
+                    }
                 }
-            }
-            None => Type::Any, // Use Any when no return type specified - will be resolved during type inference
+                None => Type::Any, // Use Any when no return type specified - will be resolved during type inference
             }
         };
 
@@ -2319,20 +2606,30 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_index(&mut self, array: NodeHandle, index: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let array_expr = self.get_expr(array)
-            .unwrap_or_else(|| self.inner.variable("array", Type::Primitive(PrimitiveType::I32), span));
-        let index_expr = self.get_expr(index)
+        let array_expr = self.get_expr(array).unwrap_or_else(|| {
+            self.inner
+                .variable("array", Type::Primitive(PrimitiveType::I32), span)
+        });
+        let index_expr = self
+            .get_expr(index)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
 
-        let expr = self.inner.index(array_expr, index_expr, Type::Primitive(PrimitiveType::I32), span);
+        let expr = self.inner.index(
+            array_expr,
+            index_expr,
+            Type::Primitive(PrimitiveType::I32),
+            span,
+        );
         self.store_expr(expr)
     }
 
     fn create_field_access(&mut self, object: NodeHandle, field: &str) -> NodeHandle {
         let span = self.default_span();
 
-        let object_expr = self.get_expr(object)
-            .unwrap_or_else(|| self.inner.variable("object", Type::Primitive(PrimitiveType::I32), span));
+        let object_expr = self.get_expr(object).unwrap_or_else(|| {
+            self.inner
+                .variable("object", Type::Primitive(PrimitiveType::I32), span)
+        });
 
         // Check if this is an enum variant access (EnumType.Variant)
         if let TypedExpression::Variable(var_name) = &object_expr.node {
@@ -2352,7 +2649,8 @@ impl AstHostFunctions for TypedAstBuilder {
             Type::Struct { fields, .. } => {
                 // Find the field by name and get its type
                 let field_name = InternedString::new_global(field);
-                fields.iter()
+                fields
+                    .iter()
                     .find(|f| f.name == field_name)
                     .map(|f| f.ty.clone())
                     .unwrap_or(Type::Primitive(PrimitiveType::I32))
@@ -2360,7 +2658,9 @@ impl AstHostFunctions for TypedAstBuilder {
             _ => Type::Primitive(PrimitiveType::I32),
         };
 
-        let expr = self.inner.field_access(object_expr, field, field_type, span);
+        let expr = self
+            .inner
+            .field_access(object_expr, field, field_type, span);
         self.store_expr(expr)
     }
 
@@ -2374,23 +2674,25 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         let init_expr = init.and_then(|h| self.get_expr(h));
-        let mutability = if is_const { Mutability::Immutable } else { Mutability::Mutable };
+        let mutability = if is_const {
+            Mutability::Immutable
+        } else {
+            Mutability::Mutable
+        };
 
         // Infer type from initializer expression if available
-        let var_type = init_expr.as_ref()
+        let var_type = init_expr
+            .as_ref()
             .map(|expr| expr.ty.clone())
             .unwrap_or(Type::Any);
 
         // Register the variable type for later lookup
-        self.variable_types.insert(name.to_string(), var_type.clone());
+        self.variable_types
+            .insert(name.to_string(), var_type.clone());
 
-        let stmt = self.inner.let_statement(
-            name,
-            var_type,
-            mutability,
-            init_expr,
-            span,
-        );
+        let stmt = self
+            .inner
+            .let_statement(name, var_type, mutability, init_expr, span);
         self.store_stmt(stmt)
     }
 
@@ -2400,16 +2702,15 @@ impl AstHostFunctions for TypedAstBuilder {
         log::trace!("[create_assignment] target={:?}, value={:?}", target, value);
 
         // Get target and value expressions
-        let target_expr = self.get_expr(target)
-            .unwrap_or_else(|| {
-                log::trace!("[create_assignment] FAILED to get target expression!");
-                self.inner.variable("target", Type::Primitive(PrimitiveType::I32), span)
-            });
-        let value_expr = self.get_expr(value)
-            .unwrap_or_else(|| {
-                log::trace!("[create_assignment] FAILED to get value expression!");
-                self.inner.int_literal(0, span)
-            });
+        let target_expr = self.get_expr(target).unwrap_or_else(|| {
+            log::trace!("[create_assignment] FAILED to get target expression!");
+            self.inner
+                .variable("target", Type::Primitive(PrimitiveType::I32), span)
+        });
+        let value_expr = self.get_expr(value).unwrap_or_else(|| {
+            log::trace!("[create_assignment] FAILED to get value expression!");
+            self.inner.int_literal(0, span)
+        });
 
         // Create assignment as a binary expression: target = value
         // Store as EXPRESSION - the expr_stmt wrapper will handle statement wrapping
@@ -2446,18 +2747,28 @@ impl AstHostFunctions for TypedAstBuilder {
     ) -> NodeHandle {
         let span = self.default_span();
 
-        let cond_expr = self.get_expr(condition)
+        let cond_expr = self
+            .get_expr(condition)
             .unwrap_or_else(|| self.inner.bool_literal(true, span));
 
         // Get the then block - check for block first, then statement, then expression
         let then_block = if let Some(block) = self.get_block(then_branch) {
             block
         } else if let Some(stmt) = self.get_stmt(then_branch) {
-            TypedBlock { statements: vec![stmt], span }
+            TypedBlock {
+                statements: vec![stmt],
+                span,
+            }
         } else if let Some(expr) = self.get_expr(then_branch) {
-            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+            TypedBlock {
+                statements: vec![self.inner.expression_statement(expr, span)],
+                span,
+            }
         } else {
-            TypedBlock { statements: vec![], span }
+            TypedBlock {
+                statements: vec![],
+                span,
+            }
         };
 
         // Get the else block if present
@@ -2465,33 +2776,54 @@ impl AstHostFunctions for TypedAstBuilder {
             if let Some(block) = self.get_block(h) {
                 block
             } else if let Some(stmt) = self.get_stmt(h) {
-                TypedBlock { statements: vec![stmt], span }
+                TypedBlock {
+                    statements: vec![stmt],
+                    span,
+                }
             } else if let Some(expr) = self.get_expr(h) {
-                TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+                TypedBlock {
+                    statements: vec![self.inner.expression_statement(expr, span)],
+                    span,
+                }
             } else {
-                TypedBlock { statements: vec![], span }
+                TypedBlock {
+                    statements: vec![],
+                    span,
+                }
             }
         });
 
-        let stmt = self.inner.if_statement(cond_expr, then_block, else_block, span);
+        let stmt = self
+            .inner
+            .if_statement(cond_expr, then_block, else_block, span);
         self.store_stmt(stmt)
     }
 
     fn create_while(&mut self, condition: NodeHandle, body: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let cond_expr = self.get_expr(condition)
+        let cond_expr = self
+            .get_expr(condition)
             .unwrap_or_else(|| self.inner.bool_literal(true, span));
 
         // Get body block - check for block first, then statement, then expression
         let body_block = if let Some(block) = self.get_block(body) {
             block
         } else if let Some(stmt) = self.get_stmt(body) {
-            TypedBlock { statements: vec![stmt], span }
+            TypedBlock {
+                statements: vec![stmt],
+                span,
+            }
         } else if let Some(expr) = self.get_expr(body) {
-            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+            TypedBlock {
+                statements: vec![self.inner.expression_statement(expr, span)],
+                span,
+            }
         } else {
-            TypedBlock { statements: vec![], span }
+            TypedBlock {
+                statements: vec![],
+                span,
+            }
         };
 
         let stmt = self.inner.while_loop(cond_expr, body_block, span);
@@ -2501,36 +2833,56 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_for(&mut self, iterator: &str, iterable: NodeHandle, body: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let iter_expr = self.get_expr(iterable)
-            .unwrap_or_else(|| self.inner.variable("iter", Type::Primitive(PrimitiveType::I32), span));
+        let iter_expr = self.get_expr(iterable).unwrap_or_else(|| {
+            self.inner
+                .variable("iter", Type::Primitive(PrimitiveType::I32), span)
+        });
 
-        log::trace!("[create_for] iterator={}, iterable={:?}, iter_expr.node={:?}",
-            iterator, iterable, iter_expr.node);
+        log::trace!(
+            "[create_for] iterator={}, iterable={:?}, iter_expr.node={:?}",
+            iterator,
+            iterable,
+            iter_expr.node
+        );
 
         // Get body block - check for block first, then statement, then expression
         let body_block = if let Some(block) = self.get_block(body) {
             block
         } else if let Some(stmt) = self.get_stmt(body) {
-            TypedBlock { statements: vec![stmt], span }
+            TypedBlock {
+                statements: vec![stmt],
+                span,
+            }
         } else if let Some(expr) = self.get_expr(body) {
-            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+            TypedBlock {
+                statements: vec![self.inner.expression_statement(expr, span)],
+                span,
+            }
         } else {
-            TypedBlock { statements: vec![], span }
+            TypedBlock {
+                statements: vec![],
+                span,
+            }
         };
 
         // Check if iterable is a Range - if so, desugar to while loop
         // for (i in 0...5) { body } => { var i = 0; while (i < 5) { body; i = i + 1; } }
         if let TypedExpression::Range(range) = &iter_expr.node {
             // Extract start and end values
-            let start_expr = range.start.as_ref()
+            let start_expr = range
+                .start
+                .as_ref()
                 .map(|e| (**e).clone())
                 .unwrap_or_else(|| self.inner.int_literal(0, span));
-            let end_expr = range.end.as_ref()
+            let end_expr = range
+                .end
+                .as_ref()
                 .map(|e| (**e).clone())
                 .unwrap_or_else(|| self.inner.int_literal(0, span));
 
             // Register the iterator variable type
-            self.variable_types.insert(iterator.to_string(), Type::Primitive(PrimitiveType::I32));
+            self.variable_types
+                .insert(iterator.to_string(), Type::Primitive(PrimitiveType::I32));
 
             // Transform for-loop to handle continue correctly:
             // The challenge: continue always jumps to loop header, but we need increment between iterations.
@@ -2553,7 +2905,13 @@ impl AstHostFunctions for TypedAstBuilder {
 
             // Create: let mut i = start - 1
             let one = self.inner.int_literal(1, span);
-            let start_minus_one = self.inner.binary(BinaryOp::Sub, start_expr.clone(), one.clone(), Type::Primitive(PrimitiveType::I32), span);
+            let start_minus_one = self.inner.binary(
+                BinaryOp::Sub,
+                start_expr.clone(),
+                one.clone(),
+                Type::Primitive(PrimitiveType::I32),
+                span,
+            );
             let iter_str = &iterator.to_string();
             let init_stmt = self.inner.let_statement(
                 iter_str,
@@ -2564,15 +2922,41 @@ impl AstHostFunctions for TypedAstBuilder {
             );
 
             // Create: i = i + 1
-            let iter_ref1 = self.inner.variable(iter_str, Type::Primitive(PrimitiveType::I32), span);
-            let iter_inc = self.inner.binary(BinaryOp::Add, iter_ref1.clone(), one, Type::Primitive(PrimitiveType::I32), span);
-            let iter_assign = self.inner.binary(BinaryOp::Assign, iter_ref1, iter_inc, Type::Primitive(PrimitiveType::I32), span);
+            let iter_ref1 =
+                self.inner
+                    .variable(iter_str, Type::Primitive(PrimitiveType::I32), span);
+            let iter_inc = self.inner.binary(
+                BinaryOp::Add,
+                iter_ref1.clone(),
+                one,
+                Type::Primitive(PrimitiveType::I32),
+                span,
+            );
+            let iter_assign = self.inner.binary(
+                BinaryOp::Assign,
+                iter_ref1,
+                iter_inc,
+                Type::Primitive(PrimitiveType::I32),
+                span,
+            );
             let incr_stmt = self.inner.expression_statement(iter_assign, span);
 
             // Create condition check: if i >= end { break }
-            let iter_ref2 = self.inner.variable(iter_str, Type::Primitive(PrimitiveType::I32), span);
-            let cond_op = if range.inclusive { BinaryOp::Gt } else { BinaryOp::Ge };
-            let break_cond = self.inner.binary(cond_op, iter_ref2, end_expr, Type::Primitive(PrimitiveType::Bool), span);
+            let iter_ref2 =
+                self.inner
+                    .variable(iter_str, Type::Primitive(PrimitiveType::I32), span);
+            let cond_op = if range.inclusive {
+                BinaryOp::Gt
+            } else {
+                BinaryOp::Ge
+            };
+            let break_cond = self.inner.binary(
+                cond_op,
+                iter_ref2,
+                end_expr,
+                Type::Primitive(PrimitiveType::Bool),
+                span,
+            );
 
             let break_stmt = TypedNode::new(
                 TypedStatement::Break(None),
@@ -2626,7 +3010,10 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         log::trace!("[create_block] statements: {:?}", statements);
-        log::trace!("[create_block] statements keys: {:?}", self.statements.keys().collect::<Vec<_>>());
+        log::trace!(
+            "[create_block] statements keys: {:?}",
+            self.statements.keys().collect::<Vec<_>>()
+        );
 
         // First collect all the statements we can find
         let mut stmts: Vec<TypedNode<TypedStatement>> = Vec::new();
@@ -2636,7 +3023,10 @@ impl AstHostFunctions for TypedAstBuilder {
                 log::trace!("[create_block]   -> found statement: {:?}", stmt.node);
                 stmts.push(stmt);
             } else if let Some(expr) = self.get_expr(*h) {
-                log::trace!("[create_block]   -> found expression, wrapping: {:?}", expr.node);
+                log::trace!(
+                    "[create_block]   -> found expression, wrapping: {:?}",
+                    expr.node
+                );
                 let expr_stmt = self.inner.expression_statement(expr, span);
                 stmts.push(expr_stmt);
             } else {
@@ -2647,14 +3037,18 @@ impl AstHostFunctions for TypedAstBuilder {
         log::trace!("[create_block] collected {} statements", stmts.len());
 
         // Store the entire block and return its handle
-        let block = TypedBlock { statements: stmts, span };
+        let block = TypedBlock {
+            statements: stmts,
+            span,
+        };
         self.store_block(block)
     }
 
     fn create_expr_stmt(&mut self, expr: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let expr_node = self.get_expr(expr)
+        let expr_node = self
+            .get_expr(expr)
             .unwrap_or_else(|| self.inner.unit_literal(span));
 
         let stmt = self.inner.expression_statement(expr_node, span);
@@ -2681,7 +3075,10 @@ impl AstHostFunctions for TypedAstBuilder {
             "void" | "unit" => Type::Primitive(PrimitiveType::Unit),
             _ => {
                 // Unknown type - create unresolved for compiler resolution
-                debug!("[DEBUG create_primitive_type] Unknown type '{}', creating Unresolved", name);
+                debug!(
+                    "[DEBUG create_primitive_type] Unknown type '{}', creating Unresolved",
+                    name
+                );
                 let name_interned = self.inner.intern(name);
                 Type::Unresolved(name_interned)
             }
@@ -2728,12 +3125,18 @@ impl AstHostFunctions for TypedAstBuilder {
             _ => {
                 // Check if this type was declared in the current file (e.g., via @opaque, struct, enum)
                 if let Some(declared_ty) = self.declared_types.get(name) {
-                    debug!("[DEBUG create_named_type] Found declared type '{}': {:?}", name, declared_ty);
+                    debug!(
+                        "[DEBUG create_named_type] Found declared type '{}': {:?}",
+                        name, declared_ty
+                    );
                     declared_ty.clone()
                 } else {
                     // Type not found in current file - create unresolved for compiler resolution
                     // This handles types from imports or forward references (including language keywords like "Self")
-                    debug!("[DEBUG create_named_type] Creating unresolved type '{}'", name);
+                    debug!(
+                        "[DEBUG create_named_type] Creating unresolved type '{}'",
+                        name
+                    );
                     let name_interned = self.inner.intern(name);
                     Type::Unresolved(name_interned)
                 }
@@ -2823,7 +3226,7 @@ impl AstHostFunctions for TypedAstBuilder {
 
         let variant = TypedVariant {
             name: InternedString::new_global(name),
-            fields: TypedVariantFields::Unit,  // Simple Zig-style enum variants
+            fields: TypedVariantFields::Unit, // Simple Zig-style enum variants
             discriminant: None,
             span,
         };
@@ -2833,7 +3236,12 @@ impl AstHostFunctions for TypedAstBuilder {
         handle
     }
 
-    fn create_class(&mut self, name: &str, type_params: Vec<String>, member_handles: Vec<NodeHandle>) -> NodeHandle {
+    fn create_class(
+        &mut self,
+        name: &str,
+        type_params: Vec<String>,
+        member_handles: Vec<NodeHandle>,
+    ) -> NodeHandle {
         let span = self.default_span();
 
         // Convert type params to TypedTypeParam
@@ -2860,7 +3268,9 @@ impl AstHostFunctions for TypedAstBuilder {
             else if let Some(decl) = self.declarations.get(&handle) {
                 if let TypedDeclaration::Function(func) = &decl.node {
                     // Convert function to method - convert TypedParameter to TypedMethodParam
-                    let method_params: Vec<TypedMethodParam> = func.params.iter()
+                    let method_params: Vec<TypedMethodParam> = func
+                        .params
+                        .iter()
                         .map(|p| TypedMethodParam {
                             name: p.name.clone(),
                             ty: p.ty.clone(),
@@ -2935,19 +3345,18 @@ impl AstHostFunctions for TypedAstBuilder {
         };
 
         // Get parameters - convert to TypedMethodParam
-        let params: Vec<TypedMethodParam> = param_handles.iter()
+        let params: Vec<TypedMethodParam> = param_handles
+            .iter()
             .filter_map(|h| {
-                self.params.get(h).map(|(param_name, ty)| {
-                    TypedMethodParam {
-                        name: InternedString::new_global(param_name),
-                        ty: ty.clone(),
-                        mutability: Mutability::Immutable,
-                        is_self: false,
-                        kind: ParameterKind::Regular,
-                        default_value: None,
-                        attributes: Vec::new(),
-                        span,
-                    }
+                self.params.get(h).map(|(param_name, ty)| TypedMethodParam {
+                    name: InternedString::new_global(param_name),
+                    ty: ty.clone(),
+                    mutability: Mutability::Immutable,
+                    is_self: false,
+                    kind: ParameterKind::Regular,
+                    default_value: None,
+                    attributes: Vec::new(),
+                    span,
                 })
             })
             .collect();
@@ -2961,11 +3370,20 @@ impl AstHostFunctions for TypedAstBuilder {
         let body = if let Some(block) = self.get_block(body_handle) {
             block
         } else if let Some(stmt) = self.get_stmt(body_handle) {
-            TypedBlock { statements: vec![stmt], span }
+            TypedBlock {
+                statements: vec![stmt],
+                span,
+            }
         } else if let Some(expr) = self.get_expr(body_handle) {
-            TypedBlock { statements: vec![self.inner.expression_statement(expr, span)], span }
+            TypedBlock {
+                statements: vec![self.inner.expression_statement(expr, span)],
+                span,
+            }
         } else {
-            TypedBlock { statements: vec![], span }
+            TypedBlock {
+                statements: vec![],
+                span,
+            }
         };
 
         let method = TypedMethod {
@@ -2987,20 +3405,30 @@ impl AstHostFunctions for TypedAstBuilder {
         handle
     }
 
-    fn create_ternary(&mut self, condition: NodeHandle, then_expr_handle: NodeHandle, else_expr_handle: NodeHandle) -> NodeHandle {
+    fn create_ternary(
+        &mut self,
+        condition: NodeHandle,
+        then_expr_handle: NodeHandle,
+        else_expr_handle: NodeHandle,
+    ) -> NodeHandle {
         let span = self.default_span();
 
-        let cond_expr = self.get_expr(condition)
+        let cond_expr = self
+            .get_expr(condition)
             .unwrap_or_else(|| self.inner.bool_literal(true, span));
-        let then_expr = self.get_expr(then_expr_handle)
+        let then_expr = self
+            .get_expr(then_expr_handle)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
-        let else_expr = self.get_expr(else_expr_handle)
+        let else_expr = self
+            .get_expr(else_expr_handle)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
 
         // Type of ternary expression is Any initially - will be resolved during type resolution
         let result_type = Type::Any;
 
-        let expr = self.inner.if_expr(cond_expr, then_expr, else_expr, result_type, span);
+        let expr = self
+            .inner
+            .if_expr(cond_expr, then_expr, else_expr, result_type, span);
         self.store_expr(expr)
     }
 
@@ -3051,7 +3479,12 @@ impl AstHostFunctions for TypedAstBuilder {
         self.create_expr_stmt(expr)
     }
 
-    fn create_range(&mut self, start: Option<NodeHandle>, end: Option<NodeHandle>, inclusive: bool) -> NodeHandle {
+    fn create_range(
+        &mut self,
+        start: Option<NodeHandle>,
+        end: Option<NodeHandle>,
+        inclusive: bool,
+    ) -> NodeHandle {
         let span = self.default_span();
 
         let start_expr = start.and_then(|h| self.get_expr(h));
@@ -3075,7 +3508,11 @@ impl AstHostFunctions for TypedAstBuilder {
         // This is now primarily handled by FoldPostfix command in the interpreter
         // which directly creates call/field/index nodes
         // This fallback just returns base for any unhandled cases
-        log::trace!("[apply_postfix] base={:?}, postfix_op={:?} (fallback)", base, postfix_op);
+        log::trace!(
+            "[apply_postfix] base={:?}, postfix_op={:?} (fallback)",
+            base,
+            postfix_op
+        );
         base
     }
 
@@ -3090,12 +3527,20 @@ impl AstHostFunctions for TypedAstBuilder {
                     self.variable_types.keys().collect::<Vec<_>>());
                 Type::Primitive(PrimitiveType::I32)
             });
-        debug!("[DEBUG create_variable] Variable '{}' has type {:?}", name, var_type);
+        debug!(
+            "[DEBUG create_variable] Variable '{}' has type {:?}",
+            name, var_type
+        );
         let expr = self.inner.variable(name, var_type, span);
         self.store_expr(expr)
     }
 
-    fn create_method_call(&mut self, receiver: NodeHandle, method: &str, args: Vec<NodeHandle>) -> NodeHandle {
+    fn create_method_call(
+        &mut self,
+        receiver: NodeHandle,
+        method: &str,
+        args: Vec<NodeHandle>,
+    ) -> NodeHandle {
         let span = self.default_span();
 
         // Get the receiver expression - it must exist
@@ -3108,29 +3553,35 @@ impl AstHostFunctions for TypedAstBuilder {
             }
         };
 
-        let arg_exprs: Vec<_> = args.iter()
-            .filter_map(|h| self.get_expr(*h))
-            .collect();
+        let arg_exprs: Vec<_> = args.iter().filter_map(|h| self.get_expr(*h)).collect();
 
         // Use Type::Any for method call return type - will be resolved during type checking/lowering
-        let expr = self.inner.method_call(receiver_expr, method, arg_exprs, Type::Any, span);
+        let expr = self
+            .inner
+            .method_call(receiver_expr, method, arg_exprs, Type::Any, span);
         self.store_expr(expr)
     }
 
-    fn create_static_method_call(&mut self, type_name: &str, method: &str, args: Vec<NodeHandle>) -> NodeHandle {
+    fn create_static_method_call(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        args: Vec<NodeHandle>,
+    ) -> NodeHandle {
         let span = self.default_span();
 
         // Get the type from the registry
         let type_ty = self.get_type_by_name(type_name);
 
-        let arg_exprs: Vec<_> = args.iter()
-            .filter_map(|h| self.get_expr(*h))
-            .collect();
+        let arg_exprs: Vec<_> = args.iter().filter_map(|h| self.get_expr(*h)).collect();
 
         // Create a call to the static method using the mangled name format: TypeName$method
         // This matches the inherent method naming convention used in SSA/lowering
         let mangled_name = format!("{}${}", type_name, method);
-        debug!("[STATIC_CALL] Creating static method call to '{}' with return type {:?}", mangled_name, type_ty);
+        debug!(
+            "[STATIC_CALL] Creating static method call to '{}' with return type {:?}",
+            mangled_name, type_ty
+        );
 
         let callee = self.inner.variable(&mangled_name, Type::Any, span);
         let call_expr = self.inner.call_positional(callee, arg_exprs, type_ty, span);
@@ -3141,9 +3592,7 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_array(&mut self, elements: Vec<NodeHandle>) -> NodeHandle {
         let span = self.default_span();
 
-        let elem_exprs: Vec<_> = elements.iter()
-            .filter_map(|h| self.get_expr(*h))
-            .collect();
+        let elem_exprs: Vec<_> = elements.iter().filter_map(|h| self.get_expr(*h)).collect();
 
         let array_type = Type::Array {
             element_type: Box::new(Type::Primitive(PrimitiveType::I32)),
@@ -3155,26 +3604,32 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_expr(expr)
     }
 
-    fn create_struct_literal(&mut self, name: &str, fields: Vec<(String, NodeHandle)>) -> NodeHandle {
+    fn create_struct_literal(
+        &mut self,
+        name: &str,
+        fields: Vec<(String, NodeHandle)>,
+    ) -> NodeHandle {
         let span = self.default_span();
 
-        let field_exprs: Vec<(&str, TypedNode<TypedExpression>)> = fields.iter()
-            .filter_map(|(field_name, h)| {
-                self.get_expr(*h).map(|expr| (field_name.as_str(), expr))
-            })
+        let field_exprs: Vec<(&str, TypedNode<TypedExpression>)> = fields
+            .iter()
+            .filter_map(|(field_name, h)| self.get_expr(*h).map(|expr| (field_name.as_str(), expr)))
             .collect();
 
         // Look up the struct type by name - use Named type reference, not inline Struct
         // The type should have been declared earlier with create_struct_def
         let struct_type = self.get_type_by_name(name);
 
-        let expr = self.inner.struct_literal(name, field_exprs, struct_type, span);
+        let expr = self
+            .inner
+            .struct_literal(name, field_exprs, struct_type, span);
         self.store_expr(expr)
     }
 
     fn store_struct_field_init(&mut self, name: &str, value: NodeHandle) -> NodeHandle {
         let handle = self.alloc_handle();
-        self.struct_field_inits.insert(handle, (name.to_string(), value));
+        self.struct_field_inits
+            .insert(handle, (name.to_string(), value));
         handle
     }
 
@@ -3185,7 +3640,8 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_cast(&mut self, expr_handle: NodeHandle, _target_type: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let expr = self.get_expr(expr_handle)
+        let expr = self
+            .get_expr(expr_handle)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
 
         // For now, cast to i64
@@ -3197,7 +3653,8 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_lambda(&mut self, _params: Vec<NodeHandle>, body: NodeHandle) -> NodeHandle {
         let span = self.default_span();
 
-        let body_expr = self.get_expr(body)
+        let body_expr = self
+            .get_expr(body)
             .unwrap_or_else(|| self.inner.unit_literal(span));
 
         // Simple lambda with no params for now
@@ -3219,13 +3676,13 @@ impl AstHostFunctions for TypedAstBuilder {
     fn create_match_expr(&mut self, scrutinee: NodeHandle, arms: Vec<NodeHandle>) -> NodeHandle {
         let span = self.default_span();
 
-        let scrutinee_expr = self.get_expr(scrutinee)
+        let scrutinee_expr = self
+            .get_expr(scrutinee)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
 
         // Collect match arms from handles
-        let typed_arms: Vec<TypedMatchArm> = arms.iter()
-            .filter_map(|h| self.get_match_arm(*h))
-            .collect();
+        let typed_arms: Vec<TypedMatchArm> =
+            arms.iter().filter_map(|h| self.get_match_arm(*h)).collect();
 
         let match_expr = TypedMatchExpr {
             scrutinee: Box::new(scrutinee_expr),
@@ -3244,17 +3701,15 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Get the pattern
-        let typed_pattern = self.get_pattern(pattern)
-            .unwrap_or_else(|| {
-                TypedNode {
-                    node: TypedPattern::Wildcard,
-                    ty: Type::Primitive(PrimitiveType::I32),
-                    span,
-                }
-            });
+        let typed_pattern = self.get_pattern(pattern).unwrap_or_else(|| TypedNode {
+            node: TypedPattern::Wildcard,
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        });
 
         // Get the body expression
-        let body_expr = self.get_expr(body)
+        let body_expr = self
+            .get_expr(body)
             .unwrap_or_else(|| self.inner.int_literal(0, span));
 
         let arm = TypedMatchArm {
@@ -3275,15 +3730,11 @@ impl AstHostFunctions for TypedAstBuilder {
                 TypedExpression::Literal(TypedLiteral::Integer(n)) => {
                     TypedLiteralPattern::Integer(*n)
                 }
-                TypedExpression::Literal(TypedLiteral::Bool(b)) => {
-                    TypedLiteralPattern::Bool(*b)
-                }
+                TypedExpression::Literal(TypedLiteral::Bool(b)) => TypedLiteralPattern::Bool(*b),
                 TypedExpression::Literal(TypedLiteral::String(s)) => {
                     TypedLiteralPattern::String(s.clone())
                 }
-                TypedExpression::Literal(TypedLiteral::Char(c)) => {
-                    TypedLiteralPattern::Char(*c)
-                }
+                TypedExpression::Literal(TypedLiteral::Char(c)) => TypedLiteralPattern::Char(*c),
                 _ => TypedLiteralPattern::Integer(0),
             }
         } else {
@@ -3330,7 +3781,8 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Collect field patterns from handles
-        let typed_fields: Vec<TypedFieldPattern> = fields.iter()
+        let typed_fields: Vec<TypedFieldPattern> = fields
+            .iter()
             .filter_map(|h| self.field_patterns.get(h).cloned())
             .collect();
 
@@ -3382,13 +3834,17 @@ impl AstHostFunctions for TypedAstBuilder {
         handle
     }
 
-    fn create_enum_pattern(&mut self, name: &str, variant: &str, fields: Vec<NodeHandle>) -> NodeHandle {
+    fn create_enum_pattern(
+        &mut self,
+        name: &str,
+        variant: &str,
+        fields: Vec<NodeHandle>,
+    ) -> NodeHandle {
         let span = self.default_span();
 
         // Collect nested patterns from handles for the enum variant
-        let typed_fields: Vec<TypedNode<TypedPattern>> = fields.iter()
-            .filter_map(|h| self.get_pattern(*h))
-            .collect();
+        let typed_fields: Vec<TypedNode<TypedPattern>> =
+            fields.iter().filter_map(|h| self.get_pattern(*h)).collect();
 
         let pattern = TypedNode {
             node: TypedPattern::Enum {
@@ -3408,7 +3864,8 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Collect nested patterns from handles
-        let typed_elements: Vec<TypedNode<TypedPattern>> = elements.iter()
+        let typed_elements: Vec<TypedNode<TypedPattern>> = elements
+            .iter()
             .filter_map(|h| self.get_pattern(*h))
             .collect();
 
@@ -3429,14 +3886,13 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Collect nested patterns from handles
-        let typed_elements: Vec<TypedNode<TypedPattern>> = elements.iter()
+        let typed_elements: Vec<TypedNode<TypedPattern>> = elements
+            .iter()
             .filter_map(|h| self.get_pattern(*h))
             .collect();
 
         // Build tuple type from element types
-        let element_types: Vec<Type> = typed_elements.iter()
-            .map(|p| p.ty.clone())
-            .collect();
+        let element_types: Vec<Type> = typed_elements.iter().map(|p| p.ty.clone()).collect();
 
         let pattern = TypedNode {
             node: TypedPattern::Tuple(typed_elements),
@@ -3447,27 +3903,33 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_pattern(pattern)
     }
 
-    fn create_range_pattern(&mut self, start: NodeHandle, end: NodeHandle, inclusive: bool) -> NodeHandle {
+    fn create_range_pattern(
+        &mut self,
+        start: NodeHandle,
+        end: NodeHandle,
+        inclusive: bool,
+    ) -> NodeHandle {
         let span = self.default_span();
 
         // Helper to extract literal pattern from a TypedPattern
-        let extract_literal = |pattern_opt: Option<TypedNode<TypedPattern>>| -> TypedNode<TypedLiteralPattern> {
-            if let Some(pattern) = pattern_opt {
-                if let TypedPattern::Literal(lit) = pattern.node {
-                    return TypedNode {
-                        node: lit,
-                        ty: pattern.ty,
-                        span: pattern.span,
-                    };
+        let extract_literal =
+            |pattern_opt: Option<TypedNode<TypedPattern>>| -> TypedNode<TypedLiteralPattern> {
+                if let Some(pattern) = pattern_opt {
+                    if let TypedPattern::Literal(lit) = pattern.node {
+                        return TypedNode {
+                            node: lit,
+                            ty: pattern.ty,
+                            span: pattern.span,
+                        };
+                    }
                 }
-            }
-            // Default to integer 0
-            TypedNode {
-                node: TypedLiteralPattern::Integer(0),
-                ty: Type::Primitive(PrimitiveType::I32),
-                span,
-            }
-        };
+                // Default to integer 0
+                TypedNode {
+                    node: TypedLiteralPattern::Integer(0),
+                    ty: Type::Primitive(PrimitiveType::I32),
+                    span,
+                }
+            };
 
         let start_lit = extract_literal(self.get_pattern(start));
         let end_lit = extract_literal(self.get_pattern(end));
@@ -3489,12 +3951,14 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Collect nested patterns from handles
-        let typed_patterns: Vec<TypedNode<TypedPattern>> = patterns.iter()
+        let typed_patterns: Vec<TypedNode<TypedPattern>> = patterns
+            .iter()
             .filter_map(|h| self.get_pattern(*h))
             .collect();
 
         // Use the type of the first pattern
-        let ty = typed_patterns.first()
+        let ty = typed_patterns
+            .first()
             .map(|p| p.ty.clone())
             .unwrap_or(Type::Primitive(PrimitiveType::I32));
 
@@ -3511,16 +3975,17 @@ impl AstHostFunctions for TypedAstBuilder {
         let span = self.default_span();
 
         // Get the inner pattern
-        let inner_pattern = self.get_pattern(inner)
-            .unwrap_or_else(|| {
-                TypedNode {
-                    node: TypedPattern::Wildcard,
-                    ty: Type::Primitive(PrimitiveType::I32),
-                    span,
-                }
-            });
+        let inner_pattern = self.get_pattern(inner).unwrap_or_else(|| TypedNode {
+            node: TypedPattern::Wildcard,
+            ty: Type::Primitive(PrimitiveType::I32),
+            span,
+        });
 
-        let mutability = if mutable { Mutability::Mutable } else { Mutability::Immutable };
+        let mutability = if mutable {
+            Mutability::Mutable
+        } else {
+            Mutability::Immutable
+        };
         let inner_ty = inner_pattern.ty.clone();
 
         // Create a Reference pattern (Zig uses * for pointers, Rust uses &)
@@ -3541,24 +4006,28 @@ impl AstHostFunctions for TypedAstBuilder {
         self.store_pattern(pattern)
     }
 
-    fn create_slice_pattern(&mut self, prefix: Vec<NodeHandle>, middle: Option<NodeHandle>, suffix: Vec<NodeHandle>) -> NodeHandle {
+    fn create_slice_pattern(
+        &mut self,
+        prefix: Vec<NodeHandle>,
+        middle: Option<NodeHandle>,
+        suffix: Vec<NodeHandle>,
+    ) -> NodeHandle {
         let span = self.default_span();
 
         // Collect prefix patterns
-        let prefix_patterns: Vec<TypedNode<TypedPattern>> = prefix.iter()
-            .filter_map(|h| self.get_pattern(*h))
-            .collect();
+        let prefix_patterns: Vec<TypedNode<TypedPattern>> =
+            prefix.iter().filter_map(|h| self.get_pattern(*h)).collect();
 
         // Get middle (rest) pattern if provided
         let middle_pattern = middle.and_then(|h| self.get_pattern(h));
 
         // Collect suffix patterns
-        let suffix_patterns: Vec<TypedNode<TypedPattern>> = suffix.iter()
-            .filter_map(|h| self.get_pattern(*h))
-            .collect();
+        let suffix_patterns: Vec<TypedNode<TypedPattern>> =
+            suffix.iter().filter_map(|h| self.get_pattern(*h)).collect();
 
         // Determine element type from first available pattern
-        let elem_ty = prefix_patterns.first()
+        let elem_ty = prefix_patterns
+            .first()
             .or(middle_pattern.as_ref())
             .or(suffix_patterns.first())
             .map(|p| p.ty.clone())
@@ -3706,7 +4175,12 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
     /// Look up a builtin function by name, returning the runtime symbol if found
     pub fn lookup_builtin(&self, name: &str) -> Option<&str> {
-        self.module.metadata.builtins.functions.get(name).map(|s| s.as_str())
+        self.module
+            .metadata
+            .builtins
+            .functions
+            .get(name)
+            .map(|s| s.as_str())
     }
 
     /// Get all builtin mappings
@@ -3715,16 +4189,36 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
     }
 
     /// Execute commands for a rule given its parse tree node
-    pub fn execute_rule(&mut self, rule_name: &str, text: &str, children: Vec<RuntimeValue>) -> Result<RuntimeValue> {
-        log::trace!("[EXECUTE_RULE] {}: text='{}', children.len()={}, children={:?}", rule_name, text, children.len(), children);
+    pub fn execute_rule(
+        &mut self,
+        rule_name: &str,
+        text: &str,
+        children: Vec<RuntimeValue>,
+    ) -> Result<RuntimeValue> {
+        log::trace!(
+            "[EXECUTE_RULE] {}: text='{}', children.len()={}, children={:?}",
+            rule_name,
+            text,
+            children.len(),
+            children
+        );
         // Get commands for this rule
         let commands = match self.module.rule_commands(rule_name) {
             Some(cmds) => {
-                log::trace!("[execute_rule] rule='{}' has {} commands, children={:?}", rule_name, cmds.commands.len(), children);
+                log::trace!(
+                    "[execute_rule] rule='{}' has {} commands, children={:?}",
+                    rule_name,
+                    cmds.commands.len(),
+                    children
+                );
                 cmds.commands.clone()
             }
             None => {
-                log::trace!("[execute_rule] rule='{}' has NO commands, using defaults, children={:?}", rule_name, children);
+                log::trace!(
+                    "[execute_rule] rule='{}' has NO commands, using defaults, children={:?}",
+                    rule_name,
+                    children
+                );
                 // No commands defined - default behavior depends on children
                 if children.len() == 1 {
                     return Ok(children.into_iter().next().unwrap());
@@ -3741,14 +4235,16 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
         // Clear previous child variables before storing new ones
         // This is critical - otherwise old $2, $3, etc. from child rules pollute parent rules
         // But preserve $postfix_* variables which are used for postfix operation info
-        self.variables.retain(|k, _| !k.starts_with('$') || k == "$text" || k.starts_with("$postfix_"));
+        self.variables
+            .retain(|k, _| !k.starts_with('$') || k == "$text" || k.starts_with("$postfix_"));
 
         // Store children as $1, $2, etc.
         for (i, child) in children.into_iter().enumerate() {
             self.variables.insert(format!("${}", i + 1), child);
         }
         // Store text as $text
-        self.variables.insert("$text".to_string(), RuntimeValue::String(text.to_string()));
+        self.variables
+            .insert("$text".to_string(), RuntimeValue::String(text.to_string()));
 
         // Execute commands
         for cmd in &commands {
@@ -3776,7 +4272,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             AstCommand::Call { func, args } => {
-                let resolved_args: Vec<RuntimeValue> = args.iter()
+                let resolved_args: Vec<RuntimeValue> = args
+                    .iter()
                     .map(|a| self.resolve_arg(a))
                     .collect::<Result<Vec<_>>>()?;
 
@@ -3787,10 +4284,16 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             AstCommand::GetChild { index, name } => {
                 let value = if let Some(idx) = index {
                     let key = format!("${}", idx + 1);
-                    self.variables.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                    self.variables
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or(RuntimeValue::Null)
                 } else if let Some(n) = name {
                     let key = format!("${}", n);
-                    self.variables.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                    self.variables
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or(RuntimeValue::Null)
                 } else {
                     RuntimeValue::Null
                 };
@@ -3809,7 +4312,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             AstCommand::GetText => {
-                let text = self.variables.get("$text")
+                let text = self
+                    .variables
+                    .get("$text")
                     .cloned()
                     .unwrap_or(RuntimeValue::String(String::new()));
                 self.value_stack.push(text);
@@ -3831,10 +4336,14 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             AstCommand::Span => {
                 // TODO: Get span from current parse position
-                self.value_stack.push(RuntimeValue::Span { start: 0, end: 0 });
+                self.value_stack
+                    .push(RuntimeValue::Span { start: 0, end: 0 });
             }
 
-            AstCommand::FoldBinary { operand_rule: _, operator_rule: _ } => {
+            AstCommand::FoldBinary {
+                operand_rule: _,
+                operator_rule: _,
+            } => {
                 // Binary fold: takes alternating operands and operators from variables
                 // e.g., for "1 + 2 - 3": $1=1, $2="+", $3=2, $4="-", $5=3
                 // Result: ((1 + 2) - 3)
@@ -3846,7 +4355,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     children.push(val.clone());
                     i += 1;
                 }
-                log::trace!("[FoldBinary] children.len()={}, children={:?}", children.len(), children);
+                log::trace!(
+                    "[FoldBinary] children.len()={}, children={:?}",
+                    children.len(),
+                    children
+                );
 
                 // Helper closure to convert RuntimeValue to NodeHandle, creating nodes for immediates
                 let value_to_node = |host: &mut H, val: &RuntimeValue| -> Option<NodeHandle> {
@@ -3945,20 +4458,25 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 }
 
                 // First check value stack (from get_all_children)
-                let children: Vec<RuntimeValue> = if let Some(RuntimeValue::List(list)) = self.value_stack.pop() {
-                    // Flatten nested single-element lists
-                    list.into_iter().map(unwrap_nested_list).collect()
-                } else {
-                    // Fallback: collect from $N variables directly
-                    let mut children: Vec<RuntimeValue> = Vec::new();
-                    let mut i = 1;
-                    while let Some(val) = self.variables.get(&format!("${}", i)) {
-                        children.push(val.clone());
-                        i += 1;
-                    }
+                let children: Vec<RuntimeValue> =
+                    if let Some(RuntimeValue::List(list)) = self.value_stack.pop() {
+                        // Flatten nested single-element lists
+                        list.into_iter().map(unwrap_nested_list).collect()
+                    } else {
+                        // Fallback: collect from $N variables directly
+                        let mut children: Vec<RuntimeValue> = Vec::new();
+                        let mut i = 1;
+                        while let Some(val) = self.variables.get(&format!("${}", i)) {
+                            children.push(val.clone());
+                            i += 1;
+                        }
+                        children
+                    };
+                log::trace!(
+                    "[FoldPostfix] children.len()={}, children={:?}",
+                    children.len(),
                     children
-                };
-                log::trace!("[FoldPostfix] children.len()={}, children={:?}", children.len(), children);
+                );
 
                 if children.is_empty() {
                     self.value_stack.push(RuntimeValue::Null);
@@ -3976,19 +4494,32 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                         let postfix_op = &postfix_ops[idx];
                         // Each postfix_op was created by call_postfix/field_postfix/index_postfix
                         // and has info stored in self.variables
-                        if let (RuntimeValue::Node(base_h), RuntimeValue::Node(op_h)) = (&result, postfix_op) {
+                        if let (RuntimeValue::Node(base_h), RuntimeValue::Node(op_h)) =
+                            (&result, postfix_op)
+                        {
                             // Check what kind of postfix operation this is
                             let postfix_key = format!("$postfix_{}", op_h.0);
-                            log::trace!("[FoldPostfix] Looking up postfix_key={} for op_h={:?}", postfix_key, op_h);
-                            log::trace!("[FoldPostfix] All variables with $postfix: {:?}",
-                                self.variables.iter()
+                            log::trace!(
+                                "[FoldPostfix] Looking up postfix_key={} for op_h={:?}",
+                                postfix_key,
+                                op_h
+                            );
+                            log::trace!(
+                                "[FoldPostfix] All variables with $postfix: {:?}",
+                                self.variables
+                                    .iter()
                                     .filter(|(k, _)| k.starts_with("$postfix"))
-                                    .collect::<Vec<_>>());
-                            if let Some(RuntimeValue::String(op_info)) = self.variables.get(&postfix_key) {
+                                    .collect::<Vec<_>>()
+                            );
+                            if let Some(RuntimeValue::String(op_info)) =
+                                self.variables.get(&postfix_key)
+                            {
                                 if op_info.starts_with("call:") {
                                     // Get the call arguments
                                     let args_key = format!("$postfix_{}_args", op_h.0);
-                                    let call_args: Vec<NodeHandle> = self.variables.get(&args_key)
+                                    let call_args: Vec<NodeHandle> = self
+                                        .variables
+                                        .get(&args_key)
                                         .and_then(|v| match v {
                                             RuntimeValue::List(list) => Some(
                                                 list.iter()
@@ -3996,12 +4527,15 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                                                         RuntimeValue::Node(h) => Some(*h),
                                                         _ => None,
                                                     })
-                                                    .collect()
+                                                    .collect(),
                                             ),
                                             _ => None,
                                         })
                                         .unwrap_or_default();
-                                    log::trace!("[FoldPostfix] creating call with {} args", call_args.len());
+                                    log::trace!(
+                                        "[FoldPostfix] creating call with {} args",
+                                        call_args.len()
+                                    );
                                     // Use builtin resolution to map function names to runtime symbols
                                     let new_node = self.host.create_call_with_builtin_resolution(
                                         base_h.clone(),
@@ -4016,7 +4550,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                                     // Check if this is a method call: field access followed by call
                                     // and the method name is in the methods map
                                     let next_is_call = if idx + 1 < postfix_ops.len() {
-                                        if let RuntimeValue::Node(next_op_h) = &postfix_ops[idx + 1] {
+                                        if let RuntimeValue::Node(next_op_h) = &postfix_ops[idx + 1]
+                                        {
                                             let next_key = format!("$postfix_{}", next_op_h.0);
                                             self.variables.get(&next_key)
                                                 .map(|v| matches!(v, RuntimeValue::String(s) if s.starts_with("call:")))
@@ -4030,13 +4565,23 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                                     // Check if this method name has a builtin mapping
                                     if next_is_call {
-                                        if let Some(builtin_names) = self.module.metadata.builtins.methods.get(field_name) {
+                                        if let Some(builtin_names) =
+                                            self.module.metadata.builtins.methods.get(field_name)
+                                        {
                                             // Method mapping found! Transform x.method(args) -> builtin(x, args)
                                             // Use the first builtin in the list (type-based dispatch can be added later)
                                             let builtin_name = &builtin_names[0];
-                                            let next_op_h = if let RuntimeValue::Node(h) = &postfix_ops[idx + 1] { h } else { unreachable!() };
+                                            let next_op_h = if let RuntimeValue::Node(h) =
+                                                &postfix_ops[idx + 1]
+                                            {
+                                                h
+                                            } else {
+                                                unreachable!()
+                                            };
                                             let args_key = format!("$postfix_{}_args", next_op_h.0);
-                                            let call_args: Vec<NodeHandle> = self.variables.get(&args_key)
+                                            let call_args: Vec<NodeHandle> = self
+                                                .variables
+                                                .get(&args_key)
                                                 .and_then(|v| match v {
                                                     RuntimeValue::List(list) => Some(
                                                         list.iter()
@@ -4044,14 +4589,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                                                                 RuntimeValue::Node(h) => Some(*h),
                                                                 _ => None,
                                                             })
-                                                            .collect()
+                                                            .collect(),
                                                     ),
                                                     _ => None,
                                                 })
                                                 .unwrap_or_default();
 
                                             // Resolve the builtin name through function mappings (e.g., vec_dot -> $Vector$dot_product)
-                                            let resolved_name = self.module.metadata.builtins.functions.get(builtin_name)
+                                            let resolved_name = self
+                                                .module
+                                                .metadata
+                                                .builtins
+                                                .functions
+                                                .get(builtin_name)
                                                 .map(|s| s.clone())
                                                 .unwrap_or_else(|| builtin_name.to_string());
 
@@ -4061,7 +4611,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                                             all_args.extend(call_args);
 
                                             // Create callee identifier for the resolved builtin
-                                            let callee = self.host.create_identifier(&resolved_name);
+                                            let callee =
+                                                self.host.create_identifier(&resolved_name);
                                             let new_node = self.host.create_call(callee, all_args);
                                             log::trace!("[FoldPostfix] Method mapping: {}.{}() -> {}() [resolved: {}]",
                                                 base_h.0, field_name, builtin_name, resolved_name);
@@ -4069,27 +4620,40 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                                             // Skip the next postfix op (the call) since we consumed it
                                             idx += 1;
-                                            log::trace!("[FoldPostfix] Method mapping: {}.{}() -> {}()", field_name, field_name, builtin_name);
+                                            log::trace!(
+                                                "[FoldPostfix] Method mapping: {}.{}() -> {}()",
+                                                field_name,
+                                                field_name,
+                                                builtin_name
+                                            );
                                         } else {
                                             // No method mapping, create normal field access
-                                            let new_node = self.host.create_field_access(base_h.clone(), field_name);
+                                            let new_node = self
+                                                .host
+                                                .create_field_access(base_h.clone(), field_name);
                                             result = RuntimeValue::Node(new_node);
                                         }
                                     } else {
                                         // Not a method call, just field access
-                                        let new_node = self.host.create_field_access(base_h.clone(), field_name);
+                                        let new_node = self
+                                            .host
+                                            .create_field_access(base_h.clone(), field_name);
                                         result = RuntimeValue::Node(new_node);
                                     }
                                 } else if op_info.starts_with("index:") {
                                     let index_key = format!("$postfix_{}_index", op_h.0);
-                                    if let Some(RuntimeValue::Node(index_h)) = self.variables.get(&index_key) {
-                                        let new_node = self.host.create_index(base_h.clone(), index_h.clone());
+                                    if let Some(RuntimeValue::Node(index_h)) =
+                                        self.variables.get(&index_key)
+                                    {
+                                        let new_node =
+                                            self.host.create_index(base_h.clone(), index_h.clone());
                                         result = RuntimeValue::Node(new_node);
                                     }
                                 }
                             } else {
                                 // Fallback to apply_postfix (original behavior)
-                                let new_node = self.host.apply_postfix(base_h.clone(), op_h.clone());
+                                let new_node =
+                                    self.host.apply_postfix(base_h.clone(), op_h.clone());
                                 result = RuntimeValue::Node(new_node);
                             }
                         }
@@ -4110,7 +4674,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     children.push(val.clone());
                     i += 1;
                 }
-                log::trace!("[ApplyUnary] children.len()={}, children={:?}", children.len(), children);
+                log::trace!(
+                    "[ApplyUnary] children.len()={}, children={:?}",
+                    children.len(),
+                    children
+                );
 
                 // Helper to convert RuntimeValue to NodeHandle
                 let value_to_node = |host: &mut H, val: &RuntimeValue| -> Option<NodeHandle> {
@@ -4181,7 +4749,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     children.push(val.clone());
                     i += 1;
                 }
-                log::trace!("[FoldLeftOps] children.len()={}, children={:?}", children.len(), children);
+                log::trace!(
+                    "[FoldLeftOps] children.len()={}, children={:?}",
+                    children.len(),
+                    children
+                );
 
                 // Helper to recursively unwrap nested single-element lists
                 fn unwrap_nested_list(val: RuntimeValue) -> RuntimeValue {
@@ -4243,13 +4815,20 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                         if let (RuntimeValue::Node(left_h), Some(right_h)) = (&result, right_node) {
                             let left_h = *left_h; // Copy to avoid borrow
-                            // Check if this operator has a builtin overload
-                            if let Some(builtin_names) = self.module.metadata.builtins.operators.get(&op_str) {
+                                                  // Check if this operator has a builtin overload
+                            if let Some(builtin_names) =
+                                self.module.metadata.builtins.operators.get(&op_str)
+                            {
                                 // Operator overload found! Transform x op y -> builtin(x, y)
                                 // Use the first builtin in the list (type-based dispatch can be added later)
                                 let builtin_name = &builtin_names[0];
                                 // Resolve the builtin name through function mappings (e.g., vec_dot -> $Vector$dot_product)
-                                let resolved_name = self.module.metadata.builtins.functions.get(builtin_name)
+                                let resolved_name = self
+                                    .module
+                                    .metadata
+                                    .builtins
+                                    .functions
+                                    .get(builtin_name)
                                     .map(|s| s.as_str())
                                     .unwrap_or(builtin_name);
                                 let callee = self.host.create_identifier(resolved_name);
@@ -4280,7 +4859,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     children.push(val.clone());
                     i += 1;
                 }
-                log::trace!("[FoldLeft] op={:?}, transform={:?}, children.len()={}, children={:?}", op, transform, children.len(), children);
+                log::trace!(
+                    "[FoldLeft] op={:?}, transform={:?}, children.len()={}, children={:?}",
+                    op,
+                    transform,
+                    children.len(),
+                    children
+                );
 
                 // Helper to recursively unwrap nested single-element lists
                 fn unwrap_nested_list(val: RuntimeValue) -> RuntimeValue {
@@ -4381,11 +4966,10 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             AstCommand::MatchRule { cases } => {
                 // Get the rule name from first child
                 // For now, execute first case that exists
-                for (_rule_name, cmds) in cases {
+                if let Some((_rule_name, cmds)) = cases.iter().next() {
                     for cmd in cmds {
                         self.execute_command(cmd)?;
                     }
-                    break;
                 }
             }
 
@@ -4408,7 +4992,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 } else {
                     format!("${}", name)
                 };
-                let value = self.variables.get(&key).cloned().unwrap_or(RuntimeValue::Null);
+                let value = self
+                    .variables
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or(RuntimeValue::Null);
                 self.value_stack.push(value);
             }
 
@@ -4426,9 +5014,17 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             CommandArg::ChildRef(ref_str) => {
                 // $1, $2, $name, $text, $result
                 if ref_str == "$result" {
-                    Ok(self.value_stack.last().cloned().unwrap_or(RuntimeValue::Null))
+                    Ok(self
+                        .value_stack
+                        .last()
+                        .cloned()
+                        .unwrap_or(RuntimeValue::Null))
                 } else {
-                    Ok(self.variables.get(ref_str).cloned().unwrap_or(RuntimeValue::Null))
+                    Ok(self
+                        .variables
+                        .get(ref_str)
+                        .cloned()
+                        .unwrap_or(RuntimeValue::Null))
                 }
             }
             CommandArg::StringLit(s) => Ok(RuntimeValue::String(s.clone())),
@@ -4437,7 +5033,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             CommandArg::List(items) => {
                 // Resolve each item in the list - need to collect to avoid borrow issues
                 let items_clone: Vec<CommandArg> = items.clone();
-                let resolved: Vec<RuntimeValue> = items_clone.iter()
+                let resolved: Vec<RuntimeValue> = items_clone
+                    .iter()
                     .map(|item| self.resolve_arg(item))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(RuntimeValue::List(resolved))
@@ -4448,17 +5045,25 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     AstCommand::GetChild { index, name } => {
                         let value = if let Some(idx) = index {
                             let key = format!("${}", idx + 1);
-                            self.variables.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                            self.variables
+                                .get(&key)
+                                .cloned()
+                                .unwrap_or(RuntimeValue::Null)
                         } else if let Some(n) = name {
                             let key = format!("${}", n);
-                            self.variables.get(&key).cloned().unwrap_or(RuntimeValue::Null)
+                            self.variables
+                                .get(&key)
+                                .cloned()
+                                .unwrap_or(RuntimeValue::Null)
                         } else {
                             RuntimeValue::Null
                         };
                         Ok(value)
                     }
                     AstCommand::GetText => {
-                        let text = self.variables.get("$text")
+                        let text = self
+                            .variables
+                            .get("$text")
                             .cloned()
                             .unwrap_or(RuntimeValue::String(String::new()));
                         Ok(text)
@@ -4492,7 +5097,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
     }
 
     /// Define an AST node with named arguments (new format)
-    fn define_node(&mut self, node_type: &str, args: HashMap<String, RuntimeValue>) -> Result<RuntimeValue> {
+    fn define_node(
+        &mut self,
+        node_type: &str,
+        args: HashMap<String, RuntimeValue>,
+    ) -> Result<RuntimeValue> {
         match node_type {
             "int_literal" | "integer" => {
                 let value = match args.get("value") {
@@ -4520,10 +5129,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => String::new(),
                 };
                 // Strip surrounding quotes if present (from grammar capture)
-                let stripped = if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
-                    &value[1..value.len()-1]
+                let stripped = if value.starts_with('"') && value.ends_with('"') && value.len() >= 2
+                {
+                    &value[1..value.len() - 1]
                 } else if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2 {
-                    &value[1..value.len()-1]
+                    &value[1..value.len() - 1]
                 } else {
                     &value
                 };
@@ -4548,7 +5158,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // Lookup suffix in registry to find abstract type and create Type::from_{suffix}(value) call
                 let text = match args.get("text") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("suffixed_literal: missing text".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "suffixed_literal: missing text".into(),
+                        ))
+                    }
                 };
 
                 // Split into number and suffix
@@ -4566,17 +5180,22 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                 // Validate that we have both a number and a suffix
                 if num_str.is_empty() {
-                    return Err(crate::error::ZynPegError::CodeGenError(
-                        format!("Suffix literal '{}' must start with a number", text)
-                    ));
+                    return Err(crate::error::ZynPegError::CodeGenError(format!(
+                        "Suffix literal '{}' must start with a number",
+                        text
+                    )));
                 }
                 if suffix.is_empty() {
-                    return Err(crate::error::ZynPegError::CodeGenError(
-                        format!("Suffix literal '{}' must have a suffix after the number", text)
-                    ));
+                    return Err(crate::error::ZynPegError::CodeGenError(format!(
+                        "Suffix literal '{}' must have a suffix after the number",
+                        text
+                    )));
                 }
 
-                debug!("[SUFFIX LITERAL] Parsing '{}': num='{}', suffix='{}'", text, num_str, suffix);
+                debug!(
+                    "[SUFFIX LITERAL] Parsing '{}': num='{}', suffix='{}'",
+                    text, num_str, suffix
+                );
 
                 // Look up suffix in registry to find the abstract type
                 let type_name = match self.host.lookup_suffix(suffix) {
@@ -4594,26 +5213,32 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     }
                 };
 
-                debug!("[SUFFIX LITERAL] Suffix '{}' maps to abstract type '{}'", suffix, type_name);
+                debug!(
+                    "[SUFFIX LITERAL] Suffix '{}' maps to abstract type '{}'",
+                    suffix, type_name
+                );
 
                 // Parse the number value
-                let num: i64 = num_str.parse()
-                    .map_err(|e| crate::error::ZynPegError::CodeGenError(
-                        format!("Invalid number '{}' in suffix literal '{}': {}", num_str, text, e)
-                    ))?;
+                let num: i64 = num_str.parse().map_err(|e| {
+                    crate::error::ZynPegError::CodeGenError(format!(
+                        "Invalid number '{}' in suffix literal '{}': {}",
+                        num_str, text, e
+                    ))
+                })?;
 
                 // Validate that the abstract type is actually registered in declared_types
                 if self.host.lookup_declared_type(&type_name).is_none() {
-                    return Err(crate::error::ZynPegError::CodeGenError(
-                        format!(
-                            "Abstract type '{}' referenced by suffix '{}' is not defined. \
+                    return Err(crate::error::ZynPegError::CodeGenError(format!(
+                        "Abstract type '{}' referenced by suffix '{}' is not defined. \
                             \nThe suffix was registered but the type definition is missing.",
-                            type_name, suffix
-                        )
-                    ));
+                        type_name, suffix
+                    )));
                 }
 
-                debug!("[SUFFIX LITERAL] Abstract type '{}' is registered in type registry", type_name);
+                debug!(
+                    "[SUFFIX LITERAL] Abstract type '{}' is registered in type registry",
+                    type_name
+                );
 
                 // Call the appropriate from_<suffix> constructor function
                 // e.g., "1000ms" -> Duration::from_ms(1000)
@@ -4624,14 +5249,18 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     ty
                 } else {
                     // Should not reach here since we validated above, but handle gracefully
-                    return Err(crate::error::ZynPegError::CodeGenError(
-                        format!("Failed to retrieve abstract type '{}' after validation", type_name)
-                    ));
+                    return Err(crate::error::ZynPegError::CodeGenError(format!(
+                        "Failed to retrieve abstract type '{}' after validation",
+                        type_name
+                    )));
                 };
 
                 // Construct the constructor function name: from_<suffix>
                 let constructor_name = format!("from_{}", suffix);
-                debug!("[SUFFIX LITERAL] Looking for constructor function '{}' for type '{}'", constructor_name, type_name);
+                debug!(
+                    "[SUFFIX LITERAL] Looking for constructor function '{}' for type '{}'",
+                    constructor_name, type_name
+                );
 
                 // Create a function call: TypeName::from_suffix(num)
                 // This is represented as a static method call
@@ -4639,7 +5268,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let handle = self.host.create_static_method_call(
                     &type_name,
                     &constructor_name,
-                    vec![num_literal]
+                    vec![num_literal],
                 );
 
                 debug!("[SUFFIX LITERAL] Successfully parsed suffix literal '{}' as constructor call {}::{}({})",
@@ -4651,22 +5280,29 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // Parse duration like "5s", "1h", "500ms" into milliseconds as i64
                 let text = match args.get("value") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("duration_literal: missing value".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "duration_literal: missing value".into(),
+                        ))
+                    }
                 };
 
                 // Extract number and unit
                 let (num_str, unit) = if text.ends_with("ms") {
-                    (&text[..text.len()-2], "ms")
+                    (&text[..text.len() - 2], "ms")
                 } else if text.ends_with('s') {
-                    (&text[..text.len()-1], "s")
+                    (&text[..text.len() - 1], "s")
                 } else if text.ends_with('m') {
-                    (&text[..text.len()-1], "m")
+                    (&text[..text.len() - 1], "m")
                 } else if text.ends_with('h') {
-                    (&text[..text.len()-1], "h")
+                    (&text[..text.len() - 1], "h")
                 } else if text.ends_with('d') {
-                    (&text[..text.len()-1], "d")
+                    (&text[..text.len() - 1], "d")
                 } else {
-                    return Err(crate::error::ZynPegError::CodeGenError(format!("duration_literal: unknown unit in '{}'", text)));
+                    return Err(crate::error::ZynPegError::CodeGenError(format!(
+                        "duration_literal: unknown unit in '{}'",
+                        text
+                    )));
                 };
 
                 let num: i64 = num_str.parse().unwrap_or(0);
@@ -4701,11 +5337,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let left = match args.get("left") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("binary_op: missing left operand".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "binary_op: missing left operand".into(),
+                        ))
+                    }
                 };
                 let right = match args.get("right") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("binary_op: missing right operand".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "binary_op: missing right operand".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_binary_op(&op, left, right);
                 Ok(RuntimeValue::Node(handle))
@@ -4718,7 +5362,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let operand = match args.get("operand") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("unary_op: missing operand".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "unary_op: missing operand".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_unary_op(&op, operand);
                 Ok(RuntimeValue::Node(handle))
@@ -4730,7 +5378,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::Node(h)) => {
                         log::trace!("[RETURN_STMT] value is Node: {:?}", h);
                         Some(*h)
-                    },
+                    }
                     Some(other) => {
                         log::trace!("[RETURN_STMT] value is not Node: {:?}", other);
                         None
@@ -4751,14 +5399,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let params: Vec<NodeHandle> = match args.get("params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -4785,14 +5432,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let params: Vec<NodeHandle> = match args.get("params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -4807,7 +5453,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => self.host.create_primitive_type(s),
                     _ => self.host.create_primitive_type("void"),
                 };
-                let handle = self.host.create_async_function(&name, params, return_type, body);
+                let handle = self
+                    .host
+                    .create_async_function(&name, params, return_type, body);
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -4818,14 +5466,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let params: Vec<NodeHandle> = match args.get("params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -4845,21 +5492,21 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     Some(RuntimeValue::Node(h)) => {
                         // Try to extract the identifier name from the node
-                        self.host.get_identifier_name(*h)
+                        self.host
+                            .get_identifier_name(*h)
                             .unwrap_or_else(|| "anonymous_async".to_string())
-                    },
+                    }
                     _ => "anonymous_async".to_string(),
                 };
 
                 let params: Vec<NodeHandle> = match args.get("params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -4874,7 +5521,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 // Create an async function declaration (is_async = true)
-                let handle = self.host.create_async_function(&name, params, return_type, body);
+                let handle = self
+                    .host
+                    .create_async_function(&name, params, return_type, body);
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -4884,14 +5533,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => "AnonymousStruct".to_string(),
                 };
                 let fields: Vec<NodeHandle> = match args.get("fields") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_struct(&name, fields);
@@ -4904,14 +5552,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => "AnonymousEnum".to_string(),
                 };
                 let variants: Vec<NodeHandle> = match args.get("variants") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_enum(&name, variants);
@@ -4957,14 +5604,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "block" => {
                 let statements: Vec<NodeHandle> = match args.get("statements") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     // Handle single statement (when statement* matches exactly one)
                     Some(RuntimeValue::Node(h)) => vec![*h],
                     _ => vec![],
@@ -4977,7 +5623,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // Expression block: wraps a single expression in a block
                 let expr = match args.get("expr") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("expr_block: missing expr".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "expr_block: missing expr".into(),
+                        ))
+                    }
                 };
 
                 // create_block will automatically wrap expressions in expression statements
@@ -4989,10 +5639,10 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     // If name is a node (e.g., identifier), try to extract its string value
-                    Some(RuntimeValue::Node(h)) => {
-                        self.host.get_identifier_name(*h)
-                            .unwrap_or_else(|| "arg".to_string())
-                    }
+                    Some(RuntimeValue::Node(h)) => self
+                        .host
+                        .get_identifier_name(*h)
+                        .unwrap_or_else(|| "arg".to_string()),
                     _ => "arg".to_string(),
                 };
                 // If type is not provided, default to Any (dynamic box pointer)
@@ -5001,7 +5651,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => {
                         // Create a handle for Type::Any
                         let handle = self.host.alloc_handle();
-                        self.host.store_type(handle, zyntax_typed_ast::type_registry::Type::Any);
+                        self.host
+                            .store_type(handle, zyntax_typed_ast::type_registry::Type::Any);
                         handle
                     }
                 };
@@ -5038,10 +5689,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             // ===== ADDITIONAL EXPRESSIONS =====
-
             "char_literal" => {
                 let value = match args.get("value") {
-                    Some(RuntimeValue::String(s)) if !s.is_empty() => s.chars().next().unwrap_or('\0'),
+                    Some(RuntimeValue::String(s)) if !s.is_empty() => {
+                        s.chars().next().unwrap_or('\0')
+                    }
                     _ => '\0',
                 };
                 let handle = self.host.create_char_literal(value);
@@ -5070,13 +5722,18 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                         }
                         path_parts
                     }
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("path: missing segments".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "path: missing segments".into(),
+                        ))
+                    }
                 };
 
                 if segments.len() != 2 {
-                    return Err(crate::error::ZynPegError::CodeGenError(
-                        format!("path: expected 2 segments, got {}", segments.len())
-                    ));
+                    return Err(crate::error::ZynPegError::CodeGenError(format!(
+                        "path: expected 2 segments, got {}",
+                        segments.len()
+                    )));
                 }
 
                 // Create mangled name: "Type::method"
@@ -5093,17 +5750,20 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                         // Create a variable reference for the callee
                         self.host.create_variable(name)
                     }
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("call: missing callee".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "call: missing callee".into(),
+                        ))
+                    }
                 };
                 let call_args: Vec<NodeHandle> = match args.get("args") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     Some(RuntimeValue::Null) => vec![],
                     None => vec![],
                     _ => vec![],
@@ -5124,10 +5784,12 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // If args exists (even empty), create a function call
                 let callee = match args.get("callee") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    Some(RuntimeValue::String(name)) => {
-                        self.host.create_variable(name)
+                    Some(RuntimeValue::String(name)) => self.host.create_variable(name),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "call_or_primary: missing callee".into(),
+                        ))
                     }
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("call_or_primary: missing callee".into())),
                 };
 
                 // Check if args is Null (no parentheses) vs empty list (parentheses but no args)
@@ -5138,7 +5800,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     }
                     Some(RuntimeValue::List(list)) => {
                         // Has parentheses - create a call
-                        let call_args: Vec<NodeHandle> = list.iter()
+                        let call_args: Vec<NodeHandle> = list
+                            .iter()
                             .filter_map(|v| match v {
                                 RuntimeValue::Node(h) => Some(*h),
                                 _ => None,
@@ -5158,21 +5821,24 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "method_call" => {
                 let receiver = match args.get("receiver") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("method_call: missing receiver".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "method_call: missing receiver".into(),
+                        ))
+                    }
                 };
                 let method = match args.get("method") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => String::new(),
                 };
                 let call_args: Vec<NodeHandle> = match args.get("args") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_method_call(receiver, &method, call_args);
@@ -5182,7 +5848,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "field_access" => {
                 let object = match args.get("object") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_access: missing object".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "field_access: missing object".into(),
+                        ))
+                    }
                 };
                 let field = match args.get("field") {
                     Some(RuntimeValue::String(s)) => s.clone(),
@@ -5195,11 +5865,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "index" | "index_expr" => {
                 let object = match args.get("object").or(args.get("array")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("index: missing object".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "index: missing object".into(),
+                        ))
+                    }
                 };
                 let index = match args.get("index") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("index: missing index".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "index: missing index".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_index(object, index);
                 Ok(RuntimeValue::Node(handle))
@@ -5211,14 +5889,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "call_postfix" | "call_args" => {
                 // Extract call arguments
                 let call_args: Vec<NodeHandle> = match args.get("args") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     Some(RuntimeValue::Node(h)) => vec![*h], // Single argument
                     Some(RuntimeValue::Null) => vec![],
                     None => vec![],
@@ -5228,17 +5905,17 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // Create a marker handle - we need to downcast to TypedAstBuilder
                 // For now, create a placeholder node and store postfix info
                 let handle = self.host.create_int_literal(0); // Marker placeholder
-                // Store postfix info in a special way - use the handle as key
-                // Note: This requires TypedAstBuilder to have postfix_ops accessible
-                // For the generic case, we'll store this info as a variable
+                                                              // Store postfix info in a special way - use the handle as key
+                                                              // Note: This requires TypedAstBuilder to have postfix_ops accessible
+                                                              // For the generic case, we'll store this info as a variable
                 self.variables.insert(
                     format!("$postfix_{}", handle.0),
-                    RuntimeValue::String(format!("call:{}", call_args.len()))
+                    RuntimeValue::String(format!("call:{}", call_args.len())),
                 );
                 // Store args for later retrieval
                 self.variables.insert(
                     format!("$postfix_{}_args", handle.0),
-                    RuntimeValue::List(call_args.iter().map(|h| RuntimeValue::Node(*h)).collect())
+                    RuntimeValue::List(call_args.iter().map(|h| RuntimeValue::Node(*h)).collect()),
                 );
                 Ok(RuntimeValue::Node(handle))
             }
@@ -5249,10 +5926,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     Some(RuntimeValue::Node(h)) => {
                         // Field might be stored as an identifier node - get text from variable
-                        self.variables.get(&format!("${}", h.0))
+                        self.variables
+                            .get(&format!("${}", h.0))
                             .and_then(|v| match v {
                                 RuntimeValue::String(s) => Some(s.clone()),
-                                _ => None
+                                _ => None,
                             })
                             .unwrap_or_else(|| format!("field_{}", h.0))
                     }
@@ -5262,7 +5940,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let handle = self.host.create_int_literal(0); // Marker placeholder
                 self.variables.insert(
                     format!("$postfix_{}", handle.0),
-                    RuntimeValue::String(format!("field:{}", field_name))
+                    RuntimeValue::String(format!("field:{}", field_name)),
                 );
                 Ok(RuntimeValue::Node(handle))
             }
@@ -5271,17 +5949,21 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "index_postfix" | "index" => {
                 let index = match args.get("index") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("index_postfix/index: missing index".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "index_postfix/index: missing index".into(),
+                        ))
+                    }
                 };
                 log::trace!("[define_node] index_postfix with index={:?}", index);
                 let handle = self.host.create_int_literal(0); // Marker placeholder
                 self.variables.insert(
                     format!("$postfix_{}", handle.0),
-                    RuntimeValue::String(format!("index:{}", index.0))
+                    RuntimeValue::String(format!("index:{}", index.0)),
                 );
                 self.variables.insert(
                     format!("$postfix_{}_index", handle.0),
-                    RuntimeValue::Node(index)
+                    RuntimeValue::Node(index),
                 );
                 Ok(RuntimeValue::Node(handle))
             }
@@ -5302,14 +5984,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "array" | "array_literal" => {
                 let elements: Vec<NodeHandle> = match args.get("elements") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_array(elements);
@@ -5320,7 +6001,10 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let name = match args.get("type_name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => {
-                        debug!("[ERROR] struct_literal missing type_name, args: {:?}", args.keys());
+                        debug!(
+                            "[ERROR] struct_literal missing type_name, args: {:?}",
+                            args.keys()
+                        );
                         String::new()
                     }
                 };
@@ -5378,7 +6062,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let value = match args.get("value") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("struct_field_init: missing value".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "struct_field_init: missing value".into(),
+                        ))
+                    }
                 };
                 // Store field init and return a handle for later lookup
                 let handle = self.host.store_struct_field_init(&name, value);
@@ -5388,7 +6076,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "cast" => {
                 let expr = match args.get("expr") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("cast: missing expr".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "cast: missing expr".into(),
+                        ))
+                    }
                 };
                 let target_type = match args.get("target_type").or(args.get("type")) {
                     Some(RuntimeValue::Node(h)) => *h,
@@ -5400,26 +6092,28 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "lambda" => {
                 let params: Vec<NodeHandle> = match args.get("params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let body = match args.get("body") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("lambda: missing body".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "lambda: missing body".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_lambda(params, body);
                 Ok(RuntimeValue::Node(handle))
             }
 
             // ===== ADDITIONAL STATEMENTS =====
-
             node_type @ ("let_stmt" | "var_decl" | "var_stmt" | "const_stmt") => {
                 log::trace!("[define_node] {}: args={:?}", node_type, args);
                 let name = match args.get("name") {
@@ -5437,23 +6131,24 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                         // Create an int literal node for the immediate value
                         Some(self.host.create_int_literal(*n))
                     }
-                    Some(RuntimeValue::Float(n)) => {
-                        Some(self.host.create_float_literal(*n))
-                    }
-                    Some(RuntimeValue::String(s)) => {
-                        Some(self.host.create_string_literal(s))
-                    }
-                    Some(RuntimeValue::Bool(b)) => {
-                        Some(self.host.create_bool_literal(*b))
-                    }
+                    Some(RuntimeValue::Float(n)) => Some(self.host.create_float_literal(*n)),
+                    Some(RuntimeValue::String(s)) => Some(self.host.create_string_literal(s)),
+                    Some(RuntimeValue::Bool(b)) => Some(self.host.create_bool_literal(*b)),
                     _ => None,
                 };
-                log::trace!("[define_node] {} name={}, ty={:?}, init={:?}", node_type, name, ty, init);
+                log::trace!(
+                    "[define_node] {} name={}, ty={:?}, init={:?}",
+                    node_type,
+                    name,
+                    ty,
+                    init
+                );
                 // Determine is_const: true if node_type is const_stmt, or if is_const arg is true
-                let is_const = node_type == "const_stmt" || match args.get("is_const").or(args.get("const")) {
-                    Some(RuntimeValue::Bool(b)) => *b,
-                    _ => false,
-                };
+                let is_const = node_type == "const_stmt"
+                    || match args.get("is_const").or(args.get("const")) {
+                        Some(RuntimeValue::Bool(b)) => *b,
+                        _ => false,
+                    };
                 let handle = self.host.create_let(&name, ty, init, is_const);
                 Ok(RuntimeValue::Node(handle))
             }
@@ -5467,11 +6162,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                         // Create a variable reference for the target
                         self.host.create_variable(name)
                     }
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("assignment: missing target".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "assignment: missing target".into(),
+                        ))
+                    }
                 };
                 let value = match args.get("value") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("assignment: missing value".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "assignment: missing value".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_assignment(target, value);
                 Ok(RuntimeValue::Node(handle))
@@ -5482,15 +6185,27 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // Field assignment: object.field = value
                 let object_name = match args.get("object") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_assignment: missing object".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "field_assignment: missing object".into(),
+                        ))
+                    }
                 };
                 let field_name = match args.get("field") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_assignment: missing field".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "field_assignment: missing field".into(),
+                        ))
+                    }
                 };
                 let value = match args.get("value") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("field_assignment: missing value".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "field_assignment: missing value".into(),
+                        ))
+                    }
                 };
 
                 // Create field access expression as target
@@ -5503,13 +6218,29 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             "if_stmt" | "if" => {
                 let condition = match args.get("condition") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("if: missing condition".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "if: missing condition".into(),
+                        ))
+                    }
                 };
-                let then_block = match args.get("then").or(args.get("then_block")).or(args.get("then_branch")) {
+                let then_block = match args
+                    .get("then")
+                    .or(args.get("then_block"))
+                    .or(args.get("then_branch"))
+                {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("if: missing then block".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "if: missing then block".into(),
+                        ))
+                    }
                 };
-                let else_block = match args.get("else").or(args.get("else_block")).or(args.get("else_branch")) {
+                let else_block = match args
+                    .get("else")
+                    .or(args.get("else_block"))
+                    .or(args.get("else_branch"))
+                {
                     Some(RuntimeValue::Node(h)) => Some(*h),
                     _ => None,
                 };
@@ -5521,11 +6252,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 log::trace!("[define_node] while args: {:?}", args);
                 let condition = match args.get("condition") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("while: missing condition".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "while: missing condition".into(),
+                        ))
+                    }
                 };
                 let body = match args.get("body") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("while: missing body".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "while: missing body".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_while(condition, body);
                 log::trace!("[define_node] while created handle={:?}", handle);
@@ -5534,7 +6273,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "for_stmt" | "for" => {
                 log::trace!("[define_node] for args: {:?}", args);
-                let variable = match args.get("variable").or(args.get("iterator")).or(args.get("binding")) {
+                let variable = match args
+                    .get("variable")
+                    .or(args.get("iterator"))
+                    .or(args.get("binding"))
+                {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     Some(RuntimeValue::Node(h)) => {
                         // If it's a node, try to extract the name
@@ -5544,11 +6287,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let iterable = match args.get("iterable") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("for: missing iterable".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "for: missing iterable".into(),
+                        ))
+                    }
                 };
                 let body = match args.get("body") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("for: missing body".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "for: missing body".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_for(&variable, iterable, body);
                 Ok(RuntimeValue::Node(handle))
@@ -5572,7 +6323,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 log::trace!("[define_node] expression_stmt args: {:?}", args);
                 let expr = match args.get("expr") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("expression_stmt: missing expr".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "expression_stmt: missing expr".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_expression_stmt(expr);
                 Ok(RuntimeValue::Node(handle))
@@ -5598,7 +6353,6 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             // ===== TYPES =====
-
             "pointer_type" => {
                 let pointee = match args.get("pointee") {
                     Some(RuntimeValue::Node(h)) => *h,
@@ -5640,20 +6394,22 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // For now, just create a named type with the base name
                 // The type arguments are stored separately but not used yet
                 let handle = self.host.create_named_type(&name);
-                debug!("[DEBUG generic_type] Created generic type: name='{}', handle={:?}", name, handle);
+                debug!(
+                    "[DEBUG generic_type] Created generic type: name='{}', handle={:?}",
+                    name, handle
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
             "function_type" => {
                 let params: Vec<NodeHandle> = match args.get("params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let return_type = match args.get("return_type") {
@@ -5665,7 +6421,6 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             // ===== ZIG-SPECIFIC NODES =====
-
             "null_literal" => {
                 // Create null literal - for now use an int with special marker
                 // TypedASTBuilder may need a null_literal method added
@@ -5677,7 +6432,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // try expression unwraps error union
                 let expr = match args.get("expr").or(args.get("operand")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("try: missing expr".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "try: missing expr".into(),
+                        ))
+                    }
                 };
                 // For now, represent as unary with special op
                 let handle = self.host.create_unary_op("try", expr);
@@ -5688,7 +6447,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // await expression awaits a Promise/Future
                 let expr = match args.get("expr").or(args.get("operand")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("await: missing expr".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "await: missing expr".into(),
+                        ))
+                    }
                 };
                 // Create await expression node
                 let handle = self.host.create_await(expr);
@@ -5699,7 +6462,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // defer statement - execute on scope exit
                 let body = match args.get("body") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("defer: missing body".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "defer: missing body".into(),
+                        ))
+                    }
                 };
                 // Represent as expression statement for now
                 let handle = self.host.create_expr_stmt(body);
@@ -5710,7 +6477,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // errdefer - execute on scope exit if error
                 let body = match args.get("body") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("errdefer: missing body".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "errdefer: missing body".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_expr_stmt(body);
                 Ok(RuntimeValue::Node(handle))
@@ -5772,11 +6543,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // x orelse y - unwrap optional or use default
                 let lhs = match args.get("lhs").or(args.get("left")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("orelse: missing lhs".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "orelse: missing lhs".into(),
+                        ))
+                    }
                 };
                 let rhs = match args.get("rhs").or(args.get("right")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("orelse: missing rhs".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "orelse: missing rhs".into(),
+                        ))
+                    }
                 };
                 // Represent as binary op with special operator
                 let handle = self.host.create_binary_op("orelse", lhs, rhs);
@@ -5787,32 +6566,46 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // x catch y - unwrap error or use default/handler
                 let lhs = match args.get("lhs").or(args.get("left")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("catch: missing lhs".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "catch: missing lhs".into(),
+                        ))
+                    }
                 };
                 let rhs = match args.get("rhs").or(args.get("right")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("catch: missing rhs".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "catch: missing rhs".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_binary_op("catch", lhs, rhs);
                 Ok(RuntimeValue::Node(handle))
             }
 
             // ===== PATTERN MATCHING =====
-
             "match_expr" | "switch_expr" | "switch" => {
-                let scrutinee = match args.get("scrutinee").or(args.get("expr")).or(args.get("value")) {
+                let scrutinee = match args
+                    .get("scrutinee")
+                    .or(args.get("expr"))
+                    .or(args.get("value"))
+                {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("match_expr: missing scrutinee".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "match_expr: missing scrutinee".into(),
+                        ))
+                    }
                 };
                 let arms: Vec<NodeHandle> = match args.get("arms").or(args.get("cases")) {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_match_expr(scrutinee, arms);
@@ -5826,7 +6619,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let body = match args.get("body").or(args.get("result")) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("match_arm: missing body".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "match_arm: missing body".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_match_arm(pattern, body);
                 Ok(RuntimeValue::Node(handle))
@@ -5861,14 +6658,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => "Struct".to_string(),
                 };
                 let fields: Vec<NodeHandle> = match args.get("fields") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_struct_pattern(&name, fields);
@@ -5898,14 +6694,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => "Variant".to_string(),
                 };
                 let fields: Vec<NodeHandle> = match args.get("fields") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_enum_pattern(&name, &variant, fields);
@@ -5914,14 +6709,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "array_pattern" => {
                 let elements: Vec<NodeHandle> = match args.get("elements") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_array_pattern(elements);
@@ -5930,14 +6724,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "tuple_pattern" => {
                 let elements: Vec<NodeHandle> = match args.get("elements") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_tuple_pattern(elements);
@@ -5973,14 +6766,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "or_pattern" => {
                 let patterns: Vec<NodeHandle> = match args.get("patterns") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_or_pattern(patterns);
@@ -6002,14 +6794,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "slice_pattern" => {
                 let prefix: Vec<NodeHandle> = match args.get("prefix") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let middle = match args.get("middle").or(args.get("rest")) {
@@ -6017,14 +6808,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => None,
                 };
                 let suffix: Vec<NodeHandle> = match args.get("suffix") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_slice_pattern(prefix, middle, suffix);
@@ -6041,32 +6831,29 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             // ===== CLASS/OOP SUPPORT (Haxe) =====
-
             "class" => {
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => "AnonymousClass".to_string(),
                 };
                 let type_params: Vec<String> = match args.get("type_params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::String(s) => Some(s.clone()),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let members: Vec<NodeHandle> = match args.get("members") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let handle = self.host.create_class(&name, type_params, members);
@@ -6088,14 +6875,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => "public".to_string(),
                 };
                 let params: Vec<NodeHandle> = match args.get("params") {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
                 let return_type = match args.get("return_type") {
@@ -6104,9 +6890,20 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let body = match args.get("body") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("method: missing body".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "method: missing body".into(),
+                        ))
+                    }
                 };
-                let handle = self.host.create_method(&name, is_static, &visibility, params, return_type, body);
+                let handle = self.host.create_method(
+                    &name,
+                    is_static,
+                    &visibility,
+                    params,
+                    return_type,
+                    body,
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -6135,7 +6932,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 if module_name.is_empty() {
-                    return Err(crate::error::ZynPegError::CodeGenError("import: missing module_name".into()));
+                    return Err(crate::error::ZynPegError::CodeGenError(
+                        "import: missing module_name".into(),
+                    ));
                 }
 
                 let handle = self.host.create_import(&module_name);
@@ -6146,7 +6945,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // Trait declaration (e.g., "trait Display { ... }")
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("trait: missing name".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "trait: missing name".into(),
+                        ))
+                    }
                 };
 
                 // TODO: Handle type_params and items (methods/associated types)
@@ -6164,54 +6967,75 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => {
                         debug!("[GRAMMAR impl_abstract_inherent] type_name: {}", s);
                         s.clone()
-                    },
+                    }
                     Some(other) => {
                         debug!("[GRAMMAR impl_abstract_inherent] ERROR: type_name is not a string, it's: {:?}", other);
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: type_name is not a string".into()));
-                    },
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_abstract_inherent: type_name is not a string".into(),
+                        ));
+                    }
                     None => {
                         debug!("[GRAMMAR impl_abstract_inherent] ERROR: missing type_name");
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: missing type_name".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_abstract_inherent: missing type_name".into(),
+                        ));
                     }
                 };
 
                 let underlying_type = match args.get("underlying_type") {
                     Some(RuntimeValue::Node(h)) => {
-                        debug!("[GRAMMAR impl_abstract_inherent] underlying_type handle: {:?}", h);
+                        debug!(
+                            "[GRAMMAR impl_abstract_inherent] underlying_type handle: {:?}",
+                            h
+                        );
                         *h
-                    },
+                    }
                     Some(other) => {
                         debug!("[GRAMMAR impl_abstract_inherent] ERROR: underlying_type is not a node, it's: {:?}", other);
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: underlying_type is not a node".into()));
-                    },
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_abstract_inherent: underlying_type is not a node".into(),
+                        ));
+                    }
                     None => {
                         debug!("[GRAMMAR impl_abstract_inherent] ERROR: missing underlying_type");
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_abstract_inherent: missing underlying_type".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_abstract_inherent: missing underlying_type".into(),
+                        ));
                     }
                 };
 
                 let items: Vec<NodeHandle> = match args.get("items") {
                     Some(RuntimeValue::List(vals)) => {
-                        debug!("[GRAMMAR impl_abstract_inherent] items list has {} values", vals.len());
-                        vals.iter().filter_map(|v| {
-                            if let RuntimeValue::Node(h) = v {
-                                Some(*h)
-                            } else {
-                                None
-                            }
-                        }).collect()
-                    },
+                        debug!(
+                            "[GRAMMAR impl_abstract_inherent] items list has {} values",
+                            vals.len()
+                        );
+                        vals.iter()
+                            .filter_map(|v| {
+                                if let RuntimeValue::Node(h) = v {
+                                    Some(*h)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    }
                     Some(other) => {
-                        debug!("[GRAMMAR impl_abstract_inherent] items is not a list, it's: {:?}", other);
+                        debug!(
+                            "[GRAMMAR impl_abstract_inherent] items is not a list, it's: {:?}",
+                            other
+                        );
                         vec![]
-                    },
+                    }
                     None => {
                         debug!("[GRAMMAR impl_abstract_inherent] items arg is None");
                         vec![]
                     }
                 };
 
-                let handle = self.host.create_abstract_inherent_impl(&type_name, underlying_type, items);
+                let handle =
+                    self.host
+                        .create_abstract_inherent_impl(&type_name, underlying_type, items);
                 debug!("[GRAMMAR impl_abstract_inherent] Created inherent impl block with handle: {:?}", handle);
                 Ok(RuntimeValue::Node(handle))
             }
@@ -6224,14 +7048,21 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => {
                         debug!("[GRAMMAR impl_block] trait_name: {}", s);
                         s.clone()
-                    },
+                    }
                     Some(other) => {
-                        debug!("[GRAMMAR impl_block] ERROR: trait_name is not a string, it's: {:?}", other);
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: trait_name is not a string".into()));
-                    },
+                        debug!(
+                            "[GRAMMAR impl_block] ERROR: trait_name is not a string, it's: {:?}",
+                            other
+                        );
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_block: trait_name is not a string".into(),
+                        ));
+                    }
                     None => {
                         debug!("[GRAMMAR impl_block] ERROR: missing trait_name");
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing trait_name".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_block: missing trait_name".into(),
+                        ));
                     }
                 };
 
@@ -6239,7 +7070,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => {
                         debug!("[GRAMMAR impl_block] type_name string: {}", s);
                         s.clone()
-                    },
+                    }
                     Some(RuntimeValue::Node(h)) => {
                         // type_expr returns a Node, extract the type name from it
                         if let Some(name) = self.host.get_type_name(*h) {
@@ -6247,20 +7078,31 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                             name
                         } else {
                             debug!("[GRAMMAR impl_block] ERROR: could not extract type name from node {:?}", h);
-                            return Err(crate::error::ZynPegError::CodeGenError("impl_block: could not extract type name from node".into()));
+                            return Err(crate::error::ZynPegError::CodeGenError(
+                                "impl_block: could not extract type name from node".into(),
+                            ));
                         }
-                    },
+                    }
                     Some(RuntimeValue::Null) => {
                         debug!("[GRAMMAR impl_block] ERROR: type_name is Null");
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: type_name is Null".into()));
-                    },
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_block: type_name is Null".into(),
+                        ));
+                    }
                     Some(other) => {
-                        debug!("[GRAMMAR impl_block] ERROR: type_name is unexpected type: {:?}", other);
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: type_name is not a string or node".into()));
-                    },
+                        debug!(
+                            "[GRAMMAR impl_block] ERROR: type_name is unexpected type: {:?}",
+                            other
+                        );
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_block: type_name is not a string or node".into(),
+                        ));
+                    }
                     None => {
                         debug!("[GRAMMAR impl_block] ERROR: missing type_name");
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_block: missing type_name".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_block: missing type_name".into(),
+                        ));
                     }
                 };
 
@@ -6269,21 +7111,29 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) if s == "none" => {
                         debug!("[GRAMMAR impl_block] No trait type arguments");
                         vec![]
-                    },
+                    }
                     Some(RuntimeValue::List(vals)) => {
-                        debug!("[GRAMMAR impl_block] trait_args list with {} items", vals.len());
-                        vals.iter().filter_map(|v| {
-                            if let RuntimeValue::Node(h) = v {
-                                Some(*h)
-                            } else {
-                                None
-                            }
-                        }).collect()
-                    },
+                        debug!(
+                            "[GRAMMAR impl_block] trait_args list with {} items",
+                            vals.len()
+                        );
+                        vals.iter()
+                            .filter_map(|v| {
+                                if let RuntimeValue::Node(h) = v {
+                                    Some(*h)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    }
                     Some(other) => {
-                        debug!("[GRAMMAR impl_block] WARNING: trait_args is unexpected type: {:?}", other);
+                        debug!(
+                            "[GRAMMAR impl_block] WARNING: trait_args is unexpected type: {:?}",
+                            other
+                        );
                         vec![]
-                    },
+                    }
                     None => {
                         debug!("[GRAMMAR impl_block] No trait_args provided");
                         vec![]
@@ -6295,27 +7145,34 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let items: Vec<NodeHandle> = match args.get("items") {
                     Some(RuntimeValue::List(vals)) => {
                         debug!("[DEBUG impl_block] items list has {} values", vals.len());
-                        vals.iter().filter_map(|v| {
-                            debug!("[DEBUG impl_block] item value: {:?}", v);
-                            if let RuntimeValue::Node(h) = v {
-                                Some(*h)
-                            } else {
-                                None
-                            }
-                        }).collect()
-                    },
+                        vals.iter()
+                            .filter_map(|v| {
+                                debug!("[DEBUG impl_block] item value: {:?}", v);
+                                if let RuntimeValue::Node(h) = v {
+                                    Some(*h)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    }
                     Some(other) => {
                         debug!("[DEBUG impl_block] items is not a list, it's: {:?}", other);
                         vec![]
-                    },
+                    }
                     None => {
                         debug!("[DEBUG impl_block] items arg is None");
                         vec![]
                     }
                 };
 
-                let handle = self.host.create_impl_block(&trait_name, &for_type, trait_args, items);
-                debug!("[GRAMMAR impl_block] Created impl block with handle: {:?}", handle);
+                let handle = self
+                    .host
+                    .create_impl_block(&trait_name, &for_type, trait_args, items);
+                debug!(
+                    "[GRAMMAR impl_block] Created impl block with handle: {:?}",
+                    handle
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -6328,7 +7185,7 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => {
                         debug!("[GRAMMAR impl_inherent] type_name string: {}", s);
                         s.clone()
-                    },
+                    }
                     Some(RuntimeValue::List(vals)) => {
                         // For generic types like List<T>, extract the base name from the node
                         if let Some(RuntimeValue::Node(h)) = vals.first() {
@@ -6338,30 +7195,46 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                                 name
                             } else {
                                 debug!("[GRAMMAR impl_inherent] Could not get type name from node {:?}", h);
-                                return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: could not resolve type_name".into()));
+                                return Err(crate::error::ZynPegError::CodeGenError(
+                                    "impl_inherent: could not resolve type_name".into(),
+                                ));
                             }
                         } else {
                             debug!("[GRAMMAR impl_inherent] Empty list for type_name");
-                            return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: empty type_name list".into()));
+                            return Err(crate::error::ZynPegError::CodeGenError(
+                                "impl_inherent: empty type_name list".into(),
+                            ));
                         }
-                    },
+                    }
                     Some(RuntimeValue::Node(h)) => {
                         // Direct node - get type name from it
                         if let Some(name) = self.host.get_type_name(*h) {
-                            debug!("[GRAMMAR impl_inherent] type_name from direct node: {}", name);
+                            debug!(
+                                "[GRAMMAR impl_inherent] type_name from direct node: {}",
+                                name
+                            );
                             name
                         } else {
                             debug!("[GRAMMAR impl_inherent] Could not get type name from direct node {:?}", h);
-                            return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: could not resolve type_name from node".into()));
+                            return Err(crate::error::ZynPegError::CodeGenError(
+                                "impl_inherent: could not resolve type_name from node".into(),
+                            ));
                         }
-                    },
+                    }
                     Some(other) => {
-                        debug!("[GRAMMAR impl_inherent] ERROR: type_name is unexpected type: {:?}", other);
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: type_name is not a string".into()));
-                    },
+                        debug!(
+                            "[GRAMMAR impl_inherent] ERROR: type_name is unexpected type: {:?}",
+                            other
+                        );
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_inherent: type_name is not a string".into(),
+                        ));
+                    }
                     None => {
                         debug!("[GRAMMAR impl_inherent] ERROR: missing type_name");
-                        return Err(crate::error::ZynPegError::CodeGenError("impl_inherent: missing type_name".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "impl_inherent: missing type_name".into(),
+                        ));
                     }
                 };
 
@@ -6370,19 +7243,24 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let items: Vec<NodeHandle> = match args.get("items") {
                     Some(RuntimeValue::List(vals)) => {
                         debug!("[DEBUG impl_inherent] items list has {} values", vals.len());
-                        vals.iter().filter_map(|v| {
-                            debug!("[DEBUG impl_inherent] item value: {:?}", v);
-                            if let RuntimeValue::Node(h) = v {
-                                Some(*h)
-                            } else {
-                                None
-                            }
-                        }).collect()
-                    },
+                        vals.iter()
+                            .filter_map(|v| {
+                                debug!("[DEBUG impl_inherent] item value: {:?}", v);
+                                if let RuntimeValue::Node(h) = v {
+                                    Some(*h)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
+                    }
                     Some(other) => {
-                        debug!("[DEBUG impl_inherent] items is not a list, it's: {:?}", other);
+                        debug!(
+                            "[DEBUG impl_inherent] items is not a list, it's: {:?}",
+                            other
+                        );
                         vec![]
-                    },
+                    }
                     None => {
                         debug!("[DEBUG impl_inherent] items arg is None");
                         vec![]
@@ -6391,7 +7269,10 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
                 // Create inherent impl block - uses empty string for trait_name to indicate inherent impl
                 let handle = self.host.create_impl_block("", &type_name, vec![], items);
-                debug!("[GRAMMAR impl_inherent] Created inherent impl block with handle: {:?}", handle);
+                debug!(
+                    "[GRAMMAR impl_inherent] Created inherent impl block with handle: {:?}",
+                    handle
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -6403,7 +7284,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let text = match args.get("text") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => {
-                        return Err(crate::error::ZynPegError::CodeGenError("opaque_type: missing text".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "opaque_type: missing text".into(),
+                        ));
                     }
                 };
 
@@ -6413,14 +7296,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     if let Some(end) = text[start + 1..].find('"') {
                         text[start + 1..start + 1 + end].to_string()
                     } else {
-                        return Err(crate::error::ZynPegError::CodeGenError("opaque_type: malformed external_name".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "opaque_type: malformed external_name".into(),
+                        ));
                     }
                 } else {
-                    return Err(crate::error::ZynPegError::CodeGenError("opaque_type: missing external_name".into()));
+                    return Err(crate::error::ZynPegError::CodeGenError(
+                        "opaque_type: missing external_name".into(),
+                    ));
                 };
 
                 // Extract the identifier after "type"
-                let name = text.split_whitespace()
+                let name = text
+                    .split_whitespace()
                     .last()
                     .unwrap_or("Unknown")
                     .to_string();
@@ -6431,10 +7319,22 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let actual_name = external_name.trim_start_matches('$');
                 let actual_external_name = external_name.clone();
 
-                debug!("[DEBUG opaque_type] Using derived name='{}', external_name='{}'", actual_name, actual_external_name);
-                log::debug!("[opaque_type] Creating opaque type: name='{}', external_name='{}'", actual_name, actual_external_name);
-                let handle = self.host.create_opaque_type(actual_name, &actual_external_name);
-                log::debug!("[opaque_type] Created opaque type with handle: {:?}", handle);
+                debug!(
+                    "[DEBUG opaque_type] Using derived name='{}', external_name='{}'",
+                    actual_name, actual_external_name
+                );
+                log::debug!(
+                    "[opaque_type] Creating opaque type: name='{}', external_name='{}'",
+                    actual_name,
+                    actual_external_name
+                );
+                let handle = self
+                    .host
+                    .create_opaque_type(actual_name, &actual_external_name);
+                log::debug!(
+                    "[opaque_type] Created opaque type with handle: {:?}",
+                    handle
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -6446,30 +7346,48 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => {
-                        return Err(crate::error::ZynPegError::CodeGenError("struct_type: missing name".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "struct_type: missing name".into(),
+                        ));
                     }
                 };
 
                 let fields: Vec<NodeHandle> = match args.get("fields") {
                     Some(RuntimeValue::List(values)) => {
                         // Extract node handles from the list
-                        values.iter().filter_map(|v| {
-                            if let RuntimeValue::Node(handle) = v {
-                                Some(*handle)
-                            } else {
-                                None
-                            }
-                        }).collect()
+                        values
+                            .iter()
+                            .filter_map(|v| {
+                                if let RuntimeValue::Node(handle) = v {
+                                    Some(*handle)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
                     }
                     _ => {
-                        return Err(crate::error::ZynPegError::CodeGenError("struct_type: missing fields".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "struct_type: missing fields".into(),
+                        ));
                     }
                 };
 
-                debug!("[DEBUG struct_type] Creating struct type: name='{}', {} fields", name, fields.len());
-                log::debug!("[struct_type] Creating struct type: name='{}', {} fields", name, fields.len());
+                debug!(
+                    "[DEBUG struct_type] Creating struct type: name='{}', {} fields",
+                    name,
+                    fields.len()
+                );
+                log::debug!(
+                    "[struct_type] Creating struct type: name='{}', {} fields",
+                    name,
+                    fields.len()
+                );
                 let handle = self.host.create_struct_def(&name, fields);
-                log::debug!("[struct_type] Created struct type with handle: {:?}", handle);
+                log::debug!(
+                    "[struct_type] Created struct type with handle: {:?}",
+                    handle
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -6480,46 +7398,60 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     _ => {
-                        return Err(crate::error::ZynPegError::CodeGenError("abstract_type: missing name".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_type: missing name".into(),
+                        ));
                     }
                 };
 
                 let underlying_type = match args.get("underlying_type") {
                     Some(RuntimeValue::Node(h)) => *h,
                     _ => {
-                        return Err(crate::error::ZynPegError::CodeGenError("abstract_type: missing underlying_type".into()));
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_type: missing underlying_type".into(),
+                        ));
                     }
                 };
 
                 // Fields are optional
                 let fields: Vec<NodeHandle> = match args.get("fields") {
-                    Some(RuntimeValue::List(values)) => {
-                        values.iter().filter_map(|v| {
+                    Some(RuntimeValue::List(values)) => values
+                        .iter()
+                        .filter_map(|v| {
                             if let RuntimeValue::Node(handle) = v {
                                 Some(*handle)
                             } else {
                                 None
                             }
-                        }).collect()
-                    }
+                        })
+                        .collect(),
                     _ => vec![], // No fields
                 };
 
                 // Suffixes are optional (can be multiple)
                 // Debug what we're receiving
-                debug!("[DEBUG abstract_type] suffixes arg: {:?}", args.get("suffixes"));
+                debug!(
+                    "[DEBUG abstract_type] suffixes arg: {:?}",
+                    args.get("suffixes")
+                );
 
                 let suffixes = match args.get("suffixes") {
                     Some(RuntimeValue::List(values)) => {
-                        debug!("[DEBUG abstract_type] Got suffixes list with {} items", values.len());
-                        values.iter().filter_map(|v| {
-                            debug!("[DEBUG abstract_type] Suffix item: {:?}", v);
-                            if let RuntimeValue::String(s) = v {
-                                Some(s.clone())
-                            } else {
-                                None
-                            }
-                        }).collect()
+                        debug!(
+                            "[DEBUG abstract_type] Got suffixes list with {} items",
+                            values.len()
+                        );
+                        values
+                            .iter()
+                            .filter_map(|v| {
+                                debug!("[DEBUG abstract_type] Suffix item: {:?}", v);
+                                if let RuntimeValue::String(s) = v {
+                                    Some(s.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect()
                     }
                     _ => {
                         debug!("[DEBUG abstract_type] No suffixes list found");
@@ -6528,35 +7460,57 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 debug!("[DEBUG abstract_type] Creating abstract type: name='{}', {} fields, suffixes={:?}", name, fields.len(), suffixes);
-                log::debug!("[abstract_type] Creating abstract type: name='{}', {} fields, suffixes={:?}", name, fields.len(), suffixes);
-                let handle = self.host.create_abstract_def(&name, underlying_type, fields, suffixes);
-                log::debug!("[abstract_type] Created abstract type with handle: {:?}", handle);
+                log::debug!(
+                    "[abstract_type] Creating abstract type: name='{}', {} fields, suffixes={:?}",
+                    name,
+                    fields.len(),
+                    suffixes
+                );
+                let handle =
+                    self.host
+                        .create_abstract_def(&name, underlying_type, fields, suffixes);
+                log::debug!(
+                    "[abstract_type] Created abstract type with handle: {:?}",
+                    handle
+                );
                 Ok(RuntimeValue::Node(handle))
             }
 
             "abstract_with_single_suffix" => {
-                debug!("[DEBUG abstract_with_single_suffix] Handler called with args: {:?}", args);
+                debug!(
+                    "[DEBUG abstract_with_single_suffix] Handler called with args: {:?}",
+                    args
+                );
 
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_single_suffix: missing name".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_with_single_suffix: missing name".into(),
+                        ))
+                    }
                 };
 
                 let underlying_type = match args.get("underlying_type") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_single_suffix: missing underlying_type".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_with_single_suffix: missing underlying_type".into(),
+                        ))
+                    }
                 };
 
                 let fields: Vec<NodeHandle> = match args.get("fields") {
-                    Some(RuntimeValue::List(values)) => {
-                        values.iter().filter_map(|v| {
+                    Some(RuntimeValue::List(values)) => values
+                        .iter()
+                        .filter_map(|v| {
                             if let RuntimeValue::Node(handle) = v {
                                 Some(*handle)
                             } else {
                                 None
                             }
-                        }).collect()
-                    }
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -6567,45 +7521,68 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                             if let TypedExpression::Literal(TypedLiteral::String(s)) = &expr.node {
                                 s.resolve_global().unwrap_or_default()
                             } else {
-                                return Err(crate::error::ZynPegError::CodeGenError(format!("Expected string literal for suffix, got {:?}", expr.node)));
+                                return Err(crate::error::ZynPegError::CodeGenError(format!(
+                                    "Expected string literal for suffix, got {:?}",
+                                    expr.node
+                                )));
                             }
                         } else {
-                            return Err(crate::error::ZynPegError::CodeGenError("Failed to get string literal expression".into()));
+                            return Err(crate::error::ZynPegError::CodeGenError(
+                                "Failed to get string literal expression".into(),
+                            ));
                         }
                     }
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_single_suffix: missing or invalid suffix_literal".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_with_single_suffix: missing or invalid suffix_literal".into(),
+                        ))
+                    }
                 };
 
                 let suffix = suffix_str.trim_matches('"');
                 let suffixes = vec![suffix.to_string()];
 
-                let handle = self.host.create_abstract_def(&name, underlying_type, fields, suffixes);
+                let handle =
+                    self.host
+                        .create_abstract_def(&name, underlying_type, fields, suffixes);
                 Ok(RuntimeValue::Node(handle))
             }
 
             "abstract_with_multiple_suffixes" => {
-                debug!("[DEBUG abstract_with_multiple_suffixes] Handler called with args: {:?}", args);
+                debug!(
+                    "[DEBUG abstract_with_multiple_suffixes] Handler called with args: {:?}",
+                    args
+                );
 
                 let name = match args.get("name") {
                     Some(RuntimeValue::String(s)) => s.clone(),
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_multiple_suffixes: missing name".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_with_multiple_suffixes: missing name".into(),
+                        ))
+                    }
                 };
 
                 let underlying_type = match args.get("underlying_type") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_multiple_suffixes: missing underlying_type".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_with_multiple_suffixes: missing underlying_type".into(),
+                        ))
+                    }
                 };
 
                 let fields: Vec<NodeHandle> = match args.get("fields") {
-                    Some(RuntimeValue::List(values)) => {
-                        values.iter().filter_map(|v| {
+                    Some(RuntimeValue::List(values)) => values
+                        .iter()
+                        .filter_map(|v| {
                             if let RuntimeValue::Node(handle) = v {
                                 Some(*handle)
                             } else {
                                 None
                             }
-                        }).collect()
-                    }
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -6616,17 +7593,27 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                             if let TypedExpression::Literal(TypedLiteral::String(s)) = &expr.node {
                                 s.resolve_global().unwrap_or_default()
                             } else {
-                                return Err(crate::error::ZynPegError::CodeGenError(format!("Expected string literal for suffixes, got {:?}", expr.node)));
+                                return Err(crate::error::ZynPegError::CodeGenError(format!(
+                                    "Expected string literal for suffixes, got {:?}",
+                                    expr.node
+                                )));
                             }
                         } else {
-                            return Err(crate::error::ZynPegError::CodeGenError("Failed to get string literal expression".into()));
+                            return Err(crate::error::ZynPegError::CodeGenError(
+                                "Failed to get string literal expression".into(),
+                            ));
                         }
                     }
                     Some(RuntimeValue::String(s)) => {
                         // Direct string (for abstract types without suffix clause)
                         s.clone()
                     }
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("abstract_with_multiple_suffixes: missing or invalid suffixes_literal".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "abstract_with_multiple_suffixes: missing or invalid suffixes_literal"
+                                .into(),
+                        ))
+                    }
                 };
 
                 let suffixes_clean = suffixes_str.trim_matches('"');
@@ -6635,7 +7622,9 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     .map(|s| s.trim().to_string())
                     .collect();
 
-                let handle = self.host.create_abstract_def(&name, underlying_type, fields, suffixes);
+                let handle =
+                    self.host
+                        .create_abstract_def(&name, underlying_type, fields, suffixes);
                 Ok(RuntimeValue::Node(handle))
             }
 
@@ -6643,15 +7632,27 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 // Ternary conditional: condition ? then_expr : else_expr
                 let condition = match args.get("condition") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("ternary: missing condition".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "ternary: missing condition".into(),
+                        ))
+                    }
                 };
                 let then_expr = match args.get("then_expr") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("ternary: missing then_expr".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "ternary: missing then_expr".into(),
+                        ))
+                    }
                 };
                 let else_expr = match args.get("else_expr") {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("ternary: missing else_expr".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "ternary: missing else_expr".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_ternary(condition, then_expr, else_expr);
                 Ok(RuntimeValue::Node(handle))
@@ -6659,20 +7660,38 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "range" => {
                 // Range expression: start..end or start..=end
-                let start = args.get("start")
-                    .and_then(|v| if let RuntimeValue::Node(h) = v { Some(*h) } else { None });
-                let end = args.get("end")
-                    .and_then(|v| if let RuntimeValue::Node(h) = v { Some(*h) } else { None });
-                let inclusive = args.get("inclusive")
-                    .and_then(|v| if let RuntimeValue::Bool(b) = v { Some(*b) } else { None })
+                let start = args.get("start").and_then(|v| {
+                    if let RuntimeValue::Node(h) = v {
+                        Some(*h)
+                    } else {
+                        None
+                    }
+                });
+                let end = args.get("end").and_then(|v| {
+                    if let RuntimeValue::Node(h) = v {
+                        Some(*h)
+                    } else {
+                        None
+                    }
+                });
+                let inclusive = args
+                    .get("inclusive")
+                    .and_then(|v| {
+                        if let RuntimeValue::Bool(b) = v {
+                            Some(*b)
+                        } else {
+                            None
+                        }
+                    })
                     .unwrap_or(false);
                 let handle = self.host.create_range(start, end, inclusive);
                 Ok(RuntimeValue::Node(handle))
             }
 
-            _ => {
-                Err(crate::error::ZynPegError::CodeGenError(format!("Unknown node type: {}", node_type)))
-            }
+            _ => Err(crate::error::ZynPegError::CodeGenError(format!(
+                "Unknown node type: {}",
+                node_type
+            ))),
         }
     }
 
@@ -6734,11 +7753,19 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let left = match args.get(1) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("binary_op: missing left operand".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "binary_op: missing left operand".into(),
+                        ))
+                    }
                 };
                 let right = match args.get(2) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("binary_op: missing right operand".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "binary_op: missing right operand".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_binary_op(&op, left, right);
                 Ok(RuntimeValue::Node(handle))
@@ -6751,7 +7778,11 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
                 let operand = match args.get(1) {
                     Some(RuntimeValue::Node(h)) => *h,
-                    _ => return Err(crate::error::ZynPegError::CodeGenError("unary_op: missing operand".into())),
+                    _ => {
+                        return Err(crate::error::ZynPegError::CodeGenError(
+                            "unary_op: missing operand".into(),
+                        ))
+                    }
                 };
                 let handle = self.host.create_unary_op(&op, operand);
                 Ok(RuntimeValue::Node(handle))
@@ -6769,7 +7800,8 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
             }
 
             "block" => {
-                let statements: Vec<NodeHandle> = args.iter()
+                let statements: Vec<NodeHandle> = args
+                    .iter()
                     .filter_map(|a| match a {
                         RuntimeValue::Node(h) => Some(*h),
                         RuntimeValue::List(items) => {
@@ -6794,14 +7826,23 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
 
             "program" => {
                 let handle = self.host.create_program();
-                debug!("[GRAMMAR program] Adding {} declarations to program", args.len());
+                debug!(
+                    "[GRAMMAR program] Adding {} declarations to program",
+                    args.len()
+                );
                 // Add declarations from args
                 for (idx, arg) in args.iter().enumerate() {
                     if let RuntimeValue::Node(decl) = arg {
-                        debug!("[GRAMMAR program] Adding decl {} with handle: {:?}", idx, decl);
+                        debug!(
+                            "[GRAMMAR program] Adding decl {} with handle: {:?}",
+                            idx, decl
+                        );
                         self.host.program_add_decl(handle, *decl);
                     } else {
-                        debug!("[GRAMMAR program] Skipping non-node arg {} : {:?}", idx, arg);
+                        debug!(
+                            "[GRAMMAR program] Skipping non-node arg {} : {:?}",
+                            idx, arg
+                        );
                     }
                 }
                 Ok(RuntimeValue::Node(handle))
@@ -6826,14 +7867,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let params: Vec<NodeHandle> = match args.get(1) {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -6858,14 +7898,13 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                 };
 
                 let params: Vec<NodeHandle> = match args.get(1) {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -6885,21 +7924,21 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     Some(RuntimeValue::String(s)) => s.clone(),
                     Some(RuntimeValue::Node(h)) => {
                         // Try to extract the identifier name from the node
-                        self.host.get_identifier_name(*h)
+                        self.host
+                            .get_identifier_name(*h)
                             .unwrap_or_else(|| "anonymous_async".to_string())
-                    },
+                    }
                     _ => "anonymous_async".to_string(),
                 };
 
                 let params: Vec<NodeHandle> = match args.get(1) {
-                    Some(RuntimeValue::List(list)) => {
-                        list.iter()
-                            .filter_map(|v| match v {
-                                RuntimeValue::Node(h) => Some(*h),
-                                _ => None,
-                            })
-                            .collect()
-                    }
+                    Some(RuntimeValue::List(list)) => list
+                        .iter()
+                        .filter_map(|v| match v {
+                            RuntimeValue::Node(h) => Some(*h),
+                            _ => None,
+                        })
+                        .collect(),
                     _ => vec![],
                 };
 
@@ -6913,15 +7952,17 @@ impl<'a, H: AstHostFunctions> CommandInterpreter<'a, H> {
                     _ => self.host.create_primitive_type("i32"),
                 };
 
-                let handle = self.host.create_async_function(&name, params, return_type, body);
+                let handle = self
+                    .host
+                    .create_async_function(&name, params, return_type, body);
                 Ok(RuntimeValue::Node(handle))
             }
 
             // Add more host functions as needed...
-
-            _ => {
-                Err(crate::error::ZynPegError::CodeGenError(format!("Unknown host function: {}", func)))
-            }
+            _ => Err(crate::error::ZynPegError::CodeGenError(format!(
+                "Unknown host function: {}",
+                func
+            ))),
         }
     }
 }

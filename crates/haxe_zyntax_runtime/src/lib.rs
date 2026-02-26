@@ -12,8 +12,8 @@
 
 extern crate libc;
 
-use zyntax_plugin_macros::{runtime_plugin, runtime_export};
-use zyntax_compiler::zrtl::{DynamicValue, TypeId, TypeCategory};
+use zyntax_compiler::zrtl::{DynamicValue, TypeCategory, TypeId};
+use zyntax_plugin_macros::{runtime_export, runtime_plugin};
 
 // Declare this as the Haxe runtime plugin
 runtime_plugin! {
@@ -40,7 +40,7 @@ const HEADER_SIZE: isize = 1;
 /// - value: The string to print (length-prefixed Haxe string)
 /// - pos_info: Optional position info string (e.g., "Test.hx:10:")
 #[runtime_export("$haxe$trace")]
-pub extern "C" fn haxe_trace(value: *const i32, pos_info: *const i32) {
+pub unsafe extern "C" fn haxe_trace(value: *const i32, pos_info: *const i32) {
     unsafe {
         // Print position info if provided
         if !pos_info.is_null() {
@@ -77,13 +77,13 @@ pub extern "C" fn haxe_trace(value: *const i32, pos_info: *const i32) {
 /// Simple trace function - just prints the string with newline
 /// Used when no position info is available
 #[runtime_export("$haxe$trace$simple")]
-pub extern "C" fn haxe_trace_simple(value: *const i32) {
+pub unsafe extern "C" fn haxe_trace_simple(value: *const i32) {
     haxe_trace(value, core::ptr::null());
 }
 
 /// Trace an integer value directly
 #[runtime_export("$haxe$trace$int")]
-pub extern "C" fn haxe_trace_int(value: i32, pos_info: *const i32) {
+pub unsafe extern "C" fn haxe_trace_int(value: i32, pos_info: *const i32) {
     unsafe {
         print_pos_info(pos_info);
         libc::printf(b"%d\n\0".as_ptr() as *const i8, value);
@@ -92,7 +92,7 @@ pub extern "C" fn haxe_trace_int(value: i32, pos_info: *const i32) {
 
 /// Trace a float value directly
 #[runtime_export("$haxe$trace$float")]
-pub extern "C" fn haxe_trace_float(value: f64, pos_info: *const i32) {
+pub unsafe extern "C" fn haxe_trace_float(value: f64, pos_info: *const i32) {
     unsafe {
         print_pos_info(pos_info);
         libc::printf(b"%g\n\0".as_ptr() as *const i8, value);
@@ -101,7 +101,7 @@ pub extern "C" fn haxe_trace_float(value: f64, pos_info: *const i32) {
 
 /// Trace a boolean value directly
 #[runtime_export("$haxe$trace$bool")]
-pub extern "C" fn haxe_trace_bool(value: i32, pos_info: *const i32) {
+pub unsafe extern "C" fn haxe_trace_bool(value: i32, pos_info: *const i32) {
     unsafe {
         print_pos_info(pos_info);
         if value != 0 {
@@ -154,9 +154,9 @@ unsafe fn print_haxe_string(str_ptr: *const i32) {
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct HaxeString {
-    pub ptr: *mut u8,   // Pointer to string data (UTF-8)
-    pub len: usize,     // Length in bytes
-    pub cap: usize,     // Capacity in bytes
+    pub ptr: *mut u8, // Pointer to string data (UTF-8)
+    pub len: usize,   // Length in bytes
+    pub cap: usize,   // Capacity in bytes
 }
 
 /// Trace any Dynamic value - dispatches based on runtime type
@@ -168,7 +168,7 @@ pub struct HaxeString {
 /// - dynamic_ptr: Pointer to a DynamicValue struct
 /// - pos_info: Optional position info string (length-prefixed Haxe string)
 #[runtime_export("$haxe$trace$any")]
-pub extern "C" fn haxe_trace_any(dynamic_ptr: *const DynamicValue, pos_info: *const i32) {
+pub unsafe extern "C" fn haxe_trace_any(dynamic_ptr: *const DynamicValue, pos_info: *const i32) {
     unsafe {
         print_pos_info(pos_info);
 
@@ -229,30 +229,28 @@ pub extern "C" fn haxe_trace_any(dynamic_ptr: *const DynamicValue, pos_info: *co
                     }
                 }
             }
-            TypeCategory::UInt => {
-                match type_id {
-                    t if t == TypeId::U8 => {
-                        if let Some(&v) = dynamic.as_ref::<u8>() {
-                            libc::printf(b"%u\n\0".as_ptr() as *const i8, v as u32);
-                        }
-                    }
-                    t if t == TypeId::U16 => {
-                        if let Some(&v) = dynamic.as_ref::<u16>() {
-                            libc::printf(b"%u\n\0".as_ptr() as *const i8, v as u32);
-                        }
-                    }
-                    t if t == TypeId::U32 => {
-                        if let Some(&v) = dynamic.as_ref::<u32>() {
-                            libc::printf(b"%u\n\0".as_ptr() as *const i8, v);
-                        }
-                    }
-                    _ => {
-                        if let Some(&v) = dynamic.as_ref::<u64>() {
-                            libc::printf(b"%llu\n\0".as_ptr() as *const i8, v);
-                        }
+            TypeCategory::UInt => match type_id {
+                t if t == TypeId::U8 => {
+                    if let Some(&v) = dynamic.as_ref::<u8>() {
+                        libc::printf(b"%u\n\0".as_ptr() as *const i8, v as u32);
                     }
                 }
-            }
+                t if t == TypeId::U16 => {
+                    if let Some(&v) = dynamic.as_ref::<u16>() {
+                        libc::printf(b"%u\n\0".as_ptr() as *const i8, v as u32);
+                    }
+                }
+                t if t == TypeId::U32 => {
+                    if let Some(&v) = dynamic.as_ref::<u32>() {
+                        libc::printf(b"%u\n\0".as_ptr() as *const i8, v);
+                    }
+                }
+                _ => {
+                    if let Some(&v) = dynamic.as_ref::<u64>() {
+                        libc::printf(b"%llu\n\0".as_ptr() as *const i8, v);
+                    }
+                }
+            },
             TypeCategory::Float => {
                 if type_id == TypeId::F32 {
                     if let Some(&v) = dynamic.as_ref::<f32>() {
@@ -294,10 +292,7 @@ pub extern "C" fn haxe_trace_any(dynamic_ptr: *const DynamicValue, pos_info: *co
             }
             TypeCategory::Struct | TypeCategory::Class => {
                 // For struct/class, show address
-                libc::printf(
-                    b"<Object@%p>\n\0".as_ptr() as *const i8,
-                    dynamic.value_ptr,
-                );
+                libc::printf(b"<Object@%p>\n\0".as_ptr() as *const i8, dynamic.value_ptr);
             }
             TypeCategory::Enum => {
                 libc::printf(b"[Enum]\n\0".as_ptr() as *const i8);
@@ -313,10 +308,7 @@ pub extern "C" fn haxe_trace_any(dynamic_ptr: *const DynamicValue, pos_info: *co
             }
             _ => {
                 // Unknown type - print address
-                libc::printf(
-                    b"<Dynamic@%p>\n\0".as_ptr() as *const i8,
-                    dynamic.value_ptr,
-                );
+                libc::printf(b"<Dynamic@%p>\n\0".as_ptr() as *const i8, dynamic.value_ptr);
             }
         }
     }
@@ -324,7 +316,7 @@ pub extern "C" fn haxe_trace_any(dynamic_ptr: *const DynamicValue, pos_info: *co
 
 /// Trace any Dynamic value without position info
 #[runtime_export("$haxe$trace$any$simple")]
-pub extern "C" fn haxe_trace_any_simple(dynamic_ptr: *const DynamicValue) {
+pub unsafe extern "C" fn haxe_trace_any_simple(dynamic_ptr: *const DynamicValue) {
     haxe_trace_any(dynamic_ptr, core::ptr::null());
 }
 
@@ -335,8 +327,8 @@ pub extern "C" fn haxe_trace_any_simple(dynamic_ptr: *const DynamicValue) {
 // These exports allow this library to be loaded dynamically as a ZRTL plugin.
 // The `_zrtl_info` and `_zrtl_symbols` are required by the ZrtlPlugin loader.
 
-use zyntax_compiler::zrtl::{ZrtlInfo, ZrtlSymbol, ZRTL_VERSION};
 use std::ffi::c_char;
+use zyntax_compiler::zrtl::{ZrtlInfo, ZrtlSymbol, ZRTL_VERSION};
 
 /// Plugin info - required for ZRTL dynamic loading
 #[no_mangle]

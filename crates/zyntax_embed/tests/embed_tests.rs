@@ -8,8 +8,8 @@
 //! - LanguageGrammar operations
 
 use zyntax_embed::{
-    ZyntaxValue, ZyntaxRuntime, LanguageGrammar, NativeType, NativeSignature,
-    FromZyntax, IntoZyntax, ConversionError,
+    ConversionError, FromZyntax, IntoZyntax, LanguageGrammar, NativeSignature, NativeType,
+    ZyntaxRuntime, ZyntaxValue,
 };
 
 // ============================================================================
@@ -72,9 +72,9 @@ mod value_tests {
 
     #[test]
     fn test_float_accessors() {
-        let val = ZyntaxValue::Float(3.14);
+        let val = ZyntaxValue::Float(std::f64::consts::PI);
 
-        assert_eq!(val.as_float(), Some(3.14));
+        assert_eq!(val.as_float(), Some(std::f64::consts::PI));
         assert_eq!(val.as_int(), None);
         assert_eq!(val.as_str(), None);
     }
@@ -121,7 +121,10 @@ mod value_tests {
 
         assert_eq!(point.get_field("x"), Some(&ZyntaxValue::Int(10)));
         assert_eq!(point.get_field("y"), Some(&ZyntaxValue::Int(20)));
-        assert_eq!(point.get_field("name"), Some(&ZyntaxValue::String("origin".to_string())));
+        assert_eq!(
+            point.get_field("name"),
+            Some(&ZyntaxValue::String("origin".to_string()))
+        );
         assert_eq!(point.get_field("z"), None);
     }
 
@@ -131,7 +134,11 @@ mod value_tests {
         let none_val = ZyntaxValue::new_enum("Option", "None", None);
 
         match some_val {
-            ZyntaxValue::Enum { type_name, variant, data } => {
+            ZyntaxValue::Enum {
+                type_name,
+                variant,
+                data,
+            } => {
                 assert_eq!(type_name, "Option");
                 assert_eq!(variant, "Some");
                 assert!(data.is_some());
@@ -141,7 +148,11 @@ mod value_tests {
         }
 
         match none_val {
-            ZyntaxValue::Enum { type_name, variant, data } => {
+            ZyntaxValue::Enum {
+                type_name,
+                variant,
+                data,
+            } => {
                 assert_eq!(type_name, "Option");
                 assert_eq!(variant, "None");
                 assert!(data.is_none());
@@ -158,8 +169,14 @@ mod value_tests {
         assert_eq!(ZyntaxValue::UInt(0).type_category(), TypeCategory::UInt);
         assert_eq!(ZyntaxValue::Float(0.0).type_category(), TypeCategory::Float);
         assert_eq!(ZyntaxValue::Bool(true).type_category(), TypeCategory::Bool);
-        assert_eq!(ZyntaxValue::String("".into()).type_category(), TypeCategory::String);
-        assert_eq!(ZyntaxValue::Array(vec![]).type_category(), TypeCategory::Array);
+        assert_eq!(
+            ZyntaxValue::String("".into()).type_category(),
+            TypeCategory::String
+        );
+        assert_eq!(
+            ZyntaxValue::Array(vec![]).type_category(),
+            TypeCategory::Array
+        );
         assert_eq!(ZyntaxValue::Void.type_category(), TypeCategory::Void);
         assert_eq!(ZyntaxValue::Null.type_category(), TypeCategory::Void);
     }
@@ -225,11 +242,11 @@ mod value_tests {
         assert!(matches!(v, ZyntaxValue::UInt(64)));
 
         // Test From<f32>
-        let v: ZyntaxValue = 3.14f32.into();
+        let v: ZyntaxValue = std::f32::consts::PI.into();
         assert!(matches!(v, ZyntaxValue::Float(_)));
 
         // Test From<f64>
-        let v: ZyntaxValue = 3.14f64.into();
+        let v: ZyntaxValue = std::f64::consts::PI.into();
         assert!(matches!(v, ZyntaxValue::Float(_)));
 
         // Test From<String>
@@ -433,7 +450,7 @@ mod conversion_tests {
 
     #[test]
     fn test_f32_roundtrip() {
-        let original: f32 = 3.14;
+        let original: f32 = std::f32::consts::PI;
         let zyntax = original.into_zyntax();
         let back: f32 = f32::from_zyntax(zyntax).unwrap();
         assert!((original - back).abs() < 0.001);
@@ -515,35 +532,50 @@ mod conversion_tests {
     fn test_overflow_error_i8() {
         let big_val = ZyntaxValue::Int(1000); // > i8::MAX
         let result: Result<i8, _> = i8::from_zyntax(big_val);
-        assert!(matches!(result, Err(ConversionError::IntegerOverflow { .. })));
+        assert!(matches!(
+            result,
+            Err(ConversionError::IntegerOverflow { .. })
+        ));
     }
 
     #[test]
     fn test_overflow_error_i16() {
         let big_val = ZyntaxValue::Int(100000); // > i16::MAX
         let result: Result<i16, _> = i16::from_zyntax(big_val);
-        assert!(matches!(result, Err(ConversionError::IntegerOverflow { .. })));
+        assert!(matches!(
+            result,
+            Err(ConversionError::IntegerOverflow { .. })
+        ));
     }
 
     #[test]
     fn test_overflow_error_i32() {
         let big_val = ZyntaxValue::Int(i64::MAX);
         let result: Result<i32, _> = i32::from_zyntax(big_val);
-        assert!(matches!(result, Err(ConversionError::IntegerOverflow { .. })));
+        assert!(matches!(
+            result,
+            Err(ConversionError::IntegerOverflow { .. })
+        ));
     }
 
     #[test]
     fn test_overflow_error_u8() {
         let big_val = ZyntaxValue::Int(1000);
         let result: Result<u8, _> = u8::from_zyntax(big_val);
-        assert!(matches!(result, Err(ConversionError::IntegerOverflow { .. })));
+        assert!(matches!(
+            result,
+            Err(ConversionError::IntegerOverflow { .. })
+        ));
     }
 
     #[test]
     fn test_overflow_error_u8_negative() {
         let neg_val = ZyntaxValue::Int(-1);
         let result: Result<u8, _> = u8::from_zyntax(neg_val);
-        assert!(matches!(result, Err(ConversionError::IntegerOverflow { .. })));
+        assert!(matches!(
+            result,
+            Err(ConversionError::IntegerOverflow { .. })
+        ));
     }
 
     #[test]
@@ -698,7 +730,10 @@ mod grammar_tests {
         assert!(!pest.is_empty(), "Pest grammar should not be empty");
 
         // Should contain common PEG constructs
-        assert!(pest.contains("program"), "Pest grammar should have a 'program' rule");
+        assert!(
+            pest.contains("program"),
+            "Pest grammar should have a 'program' rule"
+        );
     }
 
     #[test]
@@ -711,20 +746,28 @@ mod grammar_tests {
             }
         };
 
-        let result = grammar.parse_to_json(r#"
+        let result = grammar.parse_to_json(
+            r#"
             fn add(a: i32, b: i32) i32 {
                 return a + b;
             }
-        "#);
+        "#,
+        );
 
         match result {
             Ok(json) => {
                 // Verify we got valid JSON
-                assert!(json.starts_with("{") || json.starts_with("["),
-                    "Result should be valid JSON, got: {}", &json[..100.min(json.len())]);
+                assert!(
+                    json.starts_with("{") || json.starts_with("["),
+                    "Result should be valid JSON, got: {}",
+                    &json[..100.min(json.len())]
+                );
 
                 // Should contain function declaration
-                assert!(json.contains("add"), "JSON should contain function name 'add'");
+                assert!(
+                    json.contains("add"),
+                    "JSON should contain function name 'add'"
+                );
             }
             Err(e) => {
                 eprintln!("Parse error (may be expected): {}", e);
@@ -905,11 +948,14 @@ mod native_calling_tests {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn add(a: i32, b: i32) i32 {
     return a + b;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -932,11 +978,14 @@ fn add(a: i32, b: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn multiply(a: i32, b: i32) i32 {
     return a * b;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -959,11 +1008,14 @@ fn multiply(a: i32, b: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn subtract(a: i32, b: i32) i32 {
     return a - b;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -986,11 +1038,14 @@ fn subtract(a: i32, b: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn square(x: i32) i32 {
     return x * x;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1013,18 +1068,24 @@ fn square(x: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn sum3(a: i32, b: i32, c: i32) i32 {
     return a + b + c;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
             return;
         }
 
-        let sig = NativeSignature::new(&[NativeType::I32, NativeType::I32, NativeType::I32], NativeType::I32);
+        let sig = NativeSignature::new(
+            &[NativeType::I32, NativeType::I32, NativeType::I32],
+            NativeType::I32,
+        );
         let result = runtime.call_function("sum3", &[10.into(), 20.into(), 12.into()], &sig);
 
         match result {
@@ -1040,11 +1101,14 @@ fn sum3(a: i32, b: i32, c: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn sum4(a: i32, b: i32, c: i32, d: i32) i32 {
     return a + b + c + d;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1052,10 +1116,16 @@ fn sum4(a: i32, b: i32, c: i32, d: i32) i32 {
         }
 
         let sig = NativeSignature::new(
-            &[NativeType::I32, NativeType::I32, NativeType::I32, NativeType::I32],
-            NativeType::I32
+            &[
+                NativeType::I32,
+                NativeType::I32,
+                NativeType::I32,
+                NativeType::I32,
+            ],
+            NativeType::I32,
         );
-        let result = runtime.call_function("sum4", &[10.into(), 10.into(), 10.into(), 12.into()], &sig);
+        let result =
+            runtime.call_function("sum4", &[10.into(), 10.into(), 10.into(), 12.into()], &sig);
 
         match result {
             Ok(val) => assert_eq!(val.as_i32().unwrap(), 42),
@@ -1070,11 +1140,14 @@ fn sum4(a: i32, b: i32, c: i32, d: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn add(a: i32, b: i32) i32 {
     return a + b;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1134,11 +1207,14 @@ mod zig_execution_tests {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn compute(x: i32) i32 {
     return x * 2 + 10 - 3;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1161,14 +1237,17 @@ fn compute(x: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn abs(x: i32) i32 {
     if (x < 0) {
         return -x;
     }
     return x;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1199,7 +1278,9 @@ fn abs(x: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn sum_to(n: i32) i32 {
     var result: i32 = 0;
     var i: i32 = 1;
@@ -1209,7 +1290,8 @@ fn sum_to(n: i32) i32 {
     }
     return result;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1232,14 +1314,17 @@ fn sum_to(n: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn max(a: i32, b: i32) i32 {
     if (a > b) {
         return a;
     }
     return b;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1268,7 +1353,9 @@ fn max(a: i32, b: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn double(x: i32) i32 {
     return x * 2;
 }
@@ -1280,7 +1367,8 @@ fn triple(x: i32) i32 {
 fn add_one(x: i32) i32 {
     return x + 1;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1321,11 +1409,14 @@ fn add_one(x: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn negate(x: i32) i32 {
     return -x;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1354,11 +1445,14 @@ fn negate(x: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn answer() i32 {
     return 42;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1408,7 +1502,9 @@ mod extern_function_tests {
         };
 
         // Load module with explicit exports
-        let result = runtime.load_module_with_exports("zig", r#"
+        let result = runtime.load_module_with_exports(
+            "zig",
+            r#"
 fn add(a: i32, b: i32) i32 {
     return a + b;
 }
@@ -1416,7 +1512,9 @@ fn add(a: i32, b: i32) i32 {
 fn internal_helper(x: i32) i32 {
     return x * 2;
 }
-        "#, &["add"]);
+        "#,
+            &["add"],
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1445,11 +1543,14 @@ fn internal_helper(x: i32) i32 {
         };
 
         // Load module without exports
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn multiply(a: i32, b: i32) i32 {
     return a * b;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1478,11 +1579,14 @@ fn multiply(a: i32, b: i32) i32 {
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 fn real_function(x: i32) i32 {
     return x;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1491,7 +1595,10 @@ fn real_function(x: i32) i32 {
 
         // Try to export nonexistent function
         let result = runtime.export_function("nonexistent_function");
-        assert!(result.is_err(), "Exporting nonexistent function should fail");
+        assert!(
+            result.is_err(),
+            "Exporting nonexistent function should fail"
+        );
     }
 
     #[test]
@@ -1502,11 +1609,15 @@ fn real_function(x: i32) i32 {
         };
 
         // Load and export a function
-        let result = runtime.load_module_with_exports("zig", r#"
+        let result = runtime.load_module_with_exports(
+            "zig",
+            r#"
 fn shared_name(x: i32) i32 {
     return x * 2;
 }
-        "#, &["shared_name"]);
+        "#,
+            &["shared_name"],
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1534,11 +1645,15 @@ fn shared_name(x: i32) i32 {
         };
 
         // Module A: Export helper function
-        let result = runtime.load_module_with_exports("zig", r#"
+        let result = runtime.load_module_with_exports(
+            "zig",
+            r#"
 fn helper(x: i32) i32 {
     return x * 2;
 }
-        "#, &["helper"]);
+        "#,
+            &["helper"],
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module A load failed: {}", e);
@@ -1546,13 +1661,16 @@ fn helper(x: i32) i32 {
         }
 
         // Module B: Declare extern and use it
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn helper(x: i32) i32;
 
 fn use_helper(x: i32) i32 {
     return helper(x) + 1;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module B load failed: {}", e);
@@ -1577,7 +1695,9 @@ fn use_helper(x: i32) i32 {
         };
 
         // Module 1: Math utilities
-        let result = runtime.load_module_with_exports("zig", r#"
+        let result = runtime.load_module_with_exports(
+            "zig",
+            r#"
 fn add(a: i32, b: i32) i32 {
     return a + b;
 }
@@ -1585,7 +1705,9 @@ fn add(a: i32, b: i32) i32 {
 fn sub(a: i32, b: i32) i32 {
     return a - b;
 }
-        "#, &["add", "sub"]);
+        "#,
+            &["add", "sub"],
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module 1 load failed: {}", e);
@@ -1593,14 +1715,17 @@ fn sub(a: i32, b: i32) i32 {
         }
 
         // Module 2: Uses math utilities
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn add(a: i32, b: i32) i32;
 extern fn sub(a: i32, b: i32) i32;
 
 fn compute(a: i32, b: i32, c: i32) i32 {
     return add(sub(a, b), c);
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module 2 load failed: {}", e);
@@ -1610,7 +1735,7 @@ fn compute(a: i32, b: i32, c: i32) i32 {
         // Test the composed function
         let sig = NativeSignature::new(
             &[NativeType::I32, NativeType::I32, NativeType::I32],
-            NativeType::I32
+            NativeType::I32,
         );
         let result = runtime.call_function("compute", &[100.into(), 58.into(), 0.into()], &sig);
 
@@ -1669,7 +1794,10 @@ mod host_function_tests {
         let mut runtime = match ZyntaxRuntime::with_symbols(symbols) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("Skipping test: could not create runtime with symbols: {}", e);
+                eprintln!(
+                    "Skipping test: could not create runtime with symbols: {}",
+                    e
+                );
                 return None;
             }
         };
@@ -1689,9 +1817,7 @@ mod host_function_tests {
 
     #[test]
     fn test_call_host_double() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_double", host_double as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_double", host_double as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
@@ -1699,13 +1825,16 @@ mod host_function_tests {
         };
 
         // Zig code that calls the host function
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_double(x: i32) i32;
 
 fn use_host(x: i32) i32 {
     return host_double(x);
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1723,22 +1852,23 @@ fn use_host(x: i32) i32 {
 
     #[test]
     fn test_call_host_add() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_add", host_add as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_add", host_add as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_add(a: i32, b: i32) i32;
 
 fn use_host_add(a: i32, b: i32) i32 {
     return host_add(a, b);
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1756,22 +1886,23 @@ fn use_host_add(a: i32, b: i32) i32 {
 
     #[test]
     fn test_call_host_no_params() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_get_magic", host_get_magic as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_get_magic", host_get_magic as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_get_magic() i32;
 
 fn get_magic() i32 {
     return host_get_magic();
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1789,22 +1920,23 @@ fn get_magic() i32 {
 
     #[test]
     fn test_call_host_three_params() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_sum3", host_sum3 as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_sum3", host_sum3 as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_sum3(a: i32, b: i32, c: i32) i32;
 
 fn call_sum3(a: i32, b: i32, c: i32) i32 {
     return host_sum3(a, b, c);
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1813,7 +1945,7 @@ fn call_sum3(a: i32, b: i32, c: i32) i32 {
 
         let sig = NativeSignature::new(
             &[NativeType::I32, NativeType::I32, NativeType::I32],
-            NativeType::I32
+            NativeType::I32,
         );
         let result = runtime.call_function("call_sum3", &[10.into(), 20.into(), 12.into()], &sig);
 
@@ -1825,9 +1957,7 @@ fn call_sum3(a: i32, b: i32, c: i32) i32 {
 
     #[test]
     fn test_host_function_in_expression() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_double", host_double as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_double", host_double as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
@@ -1835,13 +1965,16 @@ fn call_sum3(a: i32, b: i32, c: i32) i32 {
         };
 
         // Use host function as part of a larger expression
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_double(x: i32) i32;
 
 fn compute(x: i32) i32 {
     return host_double(x) + 1;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1870,14 +2003,17 @@ fn compute(x: i32) i32 {
         };
 
         // Use multiple host functions together
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_double(x: i32) i32;
 extern fn host_add(a: i32, b: i32) i32;
 
 fn compute(x: i32, y: i32) i32 {
     return host_add(host_double(x), y);
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1895,22 +2031,23 @@ fn compute(x: i32, y: i32) i32 {
 
     #[test]
     fn test_host_function_factorial() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_factorial", host_factorial as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_factorial", host_factorial as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
             None => return,
         };
 
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_factorial(n: i32) i32;
 
 fn get_factorial(n: i32) i32 {
     return host_factorial(n);
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1936,9 +2073,7 @@ fn get_factorial(n: i32) i32 {
 
     #[test]
     fn test_host_function_in_loop() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_add", host_add as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_add", host_add as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
@@ -1946,7 +2081,9 @@ fn get_factorial(n: i32) i32 {
         };
 
         // Call host function multiple times in a loop
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_add(a: i32, b: i32) i32;
 
 fn sum_n_times(value: i32, n: i32) i32 {
@@ -1958,7 +2095,8 @@ fn sum_n_times(value: i32, n: i32) i32 {
     }
     return result;
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -1976,9 +2114,7 @@ fn sum_n_times(value: i32, n: i32) i32 {
 
     #[test]
     fn test_host_and_local_functions_mixed() {
-        let symbols: &[(&str, *const u8)] = &[
-            ("host_double", host_double as *const u8),
-        ];
+        let symbols: &[(&str, *const u8)] = &[("host_double", host_double as *const u8)];
 
         let mut runtime = match setup_runtime_with_hosts(symbols) {
             Some(r) => r,
@@ -1986,7 +2122,9 @@ fn sum_n_times(value: i32, n: i32) i32 {
         };
 
         // Mix host and local functions
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_double(x: i32) i32;
 
 fn local_triple(x: i32) i32 {
@@ -1996,7 +2134,8 @@ fn local_triple(x: i32) i32 {
 fn mixed_compute(x: i32) i32 {
     return host_double(local_triple(x));
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);
@@ -2025,7 +2164,9 @@ fn mixed_compute(x: i32) i32 {
         };
 
         // Call different host functions based on condition
-        let result = runtime.load_module("zig", r#"
+        let result = runtime.load_module(
+            "zig",
+            r#"
 extern fn host_double(x: i32) i32;
 extern fn host_add(a: i32, b: i32) i32;
 
@@ -2035,7 +2176,8 @@ fn conditional_host(x: i32, use_double: i32) i32 {
     }
     return host_add(x, 1);
 }
-        "#);
+        "#,
+        );
 
         if let Err(e) = &result {
             eprintln!("Skipping test: module load failed: {}", e);

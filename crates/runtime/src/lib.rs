@@ -14,7 +14,7 @@
 
 extern crate libc;
 
-use zyntax_plugin_macros::{runtime_plugin, runtime_export};
+use zyntax_plugin_macros::{runtime_export, runtime_plugin};
 
 // Declare this as the standard library runtime plugin
 runtime_plugin! {
@@ -74,21 +74,19 @@ pub extern "C" fn print_cstr(ptr: *const u8) {
 
 /// Print a string with known length
 #[runtime_export("print_str")]
-pub extern "C" fn print_str(ptr: *const u8, len: i32) {
+pub unsafe extern "C" fn print_str(ptr: *const u8, len: i32) {
     if ptr.is_null() || len < 0 {
         return;
     }
-    unsafe {
-        for i in 0..len {
-            libc::putchar(*ptr.offset(i as isize) as i32);
-        }
-        libc::fflush(core::ptr::null_mut());
+    for i in 0..len {
+        libc::putchar(*ptr.offset(i as isize) as i32);
     }
+    libc::fflush(core::ptr::null_mut());
 }
 
 /// Print a string with newline
 #[runtime_export("println_str")]
-pub extern "C" fn println_str(ptr: *const u8, len: i32) {
+pub unsafe extern "C" fn println_str(ptr: *const u8, len: i32) {
     print_str(ptr, len);
     print_newline();
 }
@@ -99,4 +97,3 @@ pub extern "C" fn println_i32(value: i32) {
     print_i32(value);
     print_newline();
 }
-

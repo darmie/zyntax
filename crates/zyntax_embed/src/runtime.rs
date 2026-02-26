@@ -3,21 +3,22 @@
 //! This module provides a high-level API for compiling and executing Zyntax code
 //! from Rust, with automatic value conversion and async/await support.
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use crate::convert::FromZyntax;
 use crate::error::{ConversionError, ZyntaxError};
 use crate::grammar::{GrammarError, LanguageGrammar};
 use crate::value::ZyntaxValue;
-use crate::convert::FromZyntax;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use zyntax_compiler::{
-    CompilationConfig, CompilerError,
     cranelift_backend::CraneliftBackend,
     hir::{HirId, HirModule},
-    zrtl::DynamicValue,
-    tiered_backend::{TieredBackend, TieredConfig, TieredStatistics, OptimizationTier},
     lowering::AstLowering, // For lower_program trait method
     runtime::{Executor, Waker as RuntimeWaker},
+    tiered_backend::{OptimizationTier, TieredBackend, TieredConfig, TieredStatistics},
+    zrtl::DynamicValue,
+    CompilationConfig,
+    CompilerError,
 };
 
 /// Result type for runtime operations
@@ -118,11 +119,15 @@ impl NativeSignature {
 
     /// Create a signature from an HIR function signature
     pub fn from_hir_signature(sig: &zyntax_compiler::hir::HirFunctionSignature) -> Self {
-        let params: Vec<NativeType> = sig.params.iter()
+        let params: Vec<NativeType> = sig
+            .params
+            .iter()
             .map(|p| NativeType::from_hir_type(&p.ty))
             .collect();
 
-        let ret = sig.returns.first()
+        let ret = sig
+            .returns
+            .first()
             .map(|ty| NativeType::from_hir_type(ty))
             .unwrap_or(NativeType::Void);
 
@@ -147,12 +152,16 @@ impl NativeSignature {
         let params: Option<Vec<_>> = if params_str.is_empty() {
             Some(vec![])
         } else {
-            params_str.split(',')
+            params_str
+                .split(',')
                 .map(|p| Self::parse_type(p.trim()))
                 .collect()
         };
 
-        Some(Self { params: params?, ret })
+        Some(Self {
+            params: params?,
+            ret,
+        })
     }
 
     fn parse_type(s: &str) -> Option<NativeType> {
@@ -180,7 +189,8 @@ unsafe fn call_native_with_signature(
 ) -> RuntimeResult<ZyntaxValue> {
     // Convert arguments to native values on the stack
     // We use a union-like approach with i64 as the largest type
-    let native_args: Vec<i64> = args.iter()
+    let native_args: Vec<i64> = args
+        .iter()
         .zip(&signature.params)
         .map(|(arg, ty)| value_to_native(arg, *ty))
         .collect::<Result<Vec<_>, _>>()?;
@@ -192,15 +202,69 @@ unsafe fn call_native_with_signature(
         0 => call_0(ptr, signature.ret),
         1 => call_1(ptr, native_args[0], signature.ret),
         2 => call_2(ptr, native_args[0], native_args[1], signature.ret),
-        3 => call_3(ptr, native_args[0], native_args[1], native_args[2], signature.ret),
-        4 => call_4(ptr, native_args[0], native_args[1], native_args[2], native_args[3], signature.ret),
-        5 => call_5(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], signature.ret),
-        6 => call_6(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], signature.ret),
-        7 => call_7(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6], signature.ret),
-        8 => call_8(ptr, native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6], native_args[7], signature.ret),
-        n => return Err(RuntimeError::Execution(format!(
-            "Unsupported argument count: {}. Maximum is 8.", n
-        ))),
+        3 => call_3(
+            ptr,
+            native_args[0],
+            native_args[1],
+            native_args[2],
+            signature.ret,
+        ),
+        4 => call_4(
+            ptr,
+            native_args[0],
+            native_args[1],
+            native_args[2],
+            native_args[3],
+            signature.ret,
+        ),
+        5 => call_5(
+            ptr,
+            native_args[0],
+            native_args[1],
+            native_args[2],
+            native_args[3],
+            native_args[4],
+            signature.ret,
+        ),
+        6 => call_6(
+            ptr,
+            native_args[0],
+            native_args[1],
+            native_args[2],
+            native_args[3],
+            native_args[4],
+            native_args[5],
+            signature.ret,
+        ),
+        7 => call_7(
+            ptr,
+            native_args[0],
+            native_args[1],
+            native_args[2],
+            native_args[3],
+            native_args[4],
+            native_args[5],
+            native_args[6],
+            signature.ret,
+        ),
+        8 => call_8(
+            ptr,
+            native_args[0],
+            native_args[1],
+            native_args[2],
+            native_args[3],
+            native_args[4],
+            native_args[5],
+            native_args[6],
+            native_args[7],
+            signature.ret,
+        ),
+        n => {
+            return Err(RuntimeError::Execution(format!(
+                "Unsupported argument count: {}. Maximum is 8.",
+                n
+            )))
+        }
     };
 
     // Convert result back to ZyntaxValue
@@ -216,7 +280,8 @@ fn value_to_native(value: &ZyntaxValue, ty: NativeType) -> RuntimeResult<i64> {
         (ZyntaxValue::Float(f), NativeType::F64) => Ok(f.to_bits() as i64),
         (ZyntaxValue::Bool(b), NativeType::Bool) => Ok(if *b { 1 } else { 0 }),
         _ => Err(RuntimeError::Execution(format!(
-            "Cannot convert {:?} to {:?}", value, ty
+            "Cannot convert {:?} to {:?}",
+            value, ty
         ))),
     }
 }
@@ -387,7 +452,15 @@ unsafe fn call_4(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, ret: Native
     }
 }
 
-unsafe fn call_5(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, ret: NativeType) -> i64 {
+unsafe fn call_5(
+    ptr: *const u8,
+    a0: i64,
+    a1: i64,
+    a2: i64,
+    a3: i64,
+    a4: i64,
+    ret: NativeType,
+) -> i64 {
     match ret {
         NativeType::I32 => {
             let f: extern "C" fn(i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
@@ -417,7 +490,16 @@ unsafe fn call_5(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, re
     }
 }
 
-unsafe fn call_6(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, ret: NativeType) -> i64 {
+unsafe fn call_6(
+    ptr: *const u8,
+    a0: i64,
+    a1: i64,
+    a2: i64,
+    a3: i64,
+    a4: i64,
+    a5: i64,
+    ret: NativeType,
+) -> i64 {
     match ret {
         NativeType::I32 => {
             let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
@@ -447,26 +529,41 @@ unsafe fn call_6(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5
     }
 }
 
-unsafe fn call_7(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, ret: NativeType) -> i64 {
+unsafe fn call_7(
+    ptr: *const u8,
+    a0: i64,
+    a1: i64,
+    a2: i64,
+    a3: i64,
+    a4: i64,
+    a5: i64,
+    a6: i64,
+    ret: NativeType,
+) -> i64 {
     match ret {
         NativeType::I32 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i32 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6) as i64
         }
         NativeType::I64 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i64 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6)
         }
         NativeType::F32 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> f32 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6).to_bits() as i64
         }
         NativeType::F64 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> f64 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6).to_bits() as i64
         }
         NativeType::Bool => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> i8 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6) as i64
         }
         NativeType::Void | NativeType::Ptr => {
@@ -477,26 +574,42 @@ unsafe fn call_7(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5
     }
 }
 
-unsafe fn call_8(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, a7: i64, ret: NativeType) -> i64 {
+unsafe fn call_8(
+    ptr: *const u8,
+    a0: i64,
+    a1: i64,
+    a2: i64,
+    a3: i64,
+    a4: i64,
+    a5: i64,
+    a6: i64,
+    a7: i64,
+    ret: NativeType,
+) -> i64 {
     match ret {
         NativeType::I32 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i32 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i32 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6, a7) as i64
         }
         NativeType::I64 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i64 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i64 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6, a7)
         }
         NativeType::F32 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> f32 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> f32 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6, a7).to_bits() as i64
         }
         NativeType::F64 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> f64 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> f64 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6, a7).to_bits() as i64
         }
         NativeType::Bool => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i8 = std::mem::transmute(ptr);
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> i8 =
+                std::mem::transmute(ptr);
             f(a0, a1, a2, a3, a4, a5, a6, a7) as i64
         }
         NativeType::Void | NativeType::Ptr => {
@@ -514,9 +627,14 @@ unsafe fn call_8(ptr: *const u8, a0: i64, a1: i64, a2: i64, a3: i64, a4: i64, a5
 ///
 /// # Safety
 /// The caller must ensure the function pointer has the correct signature.
-unsafe fn call_with_signature(ptr: *const u8, args: &[DynamicValue], signature: &NativeSignature) -> *const u8 {
+unsafe fn call_with_signature(
+    ptr: *const u8,
+    args: &[DynamicValue],
+    signature: &NativeSignature,
+) -> *const u8 {
     // Convert DynamicValue to i64 for the native call
-    let native_args: Vec<i64> = args.iter()
+    let native_args: Vec<i64> = args
+        .iter()
         .zip(&signature.params)
         .map(|(arg, _ty)| dynamic_to_i64(arg))
         .collect();
@@ -542,26 +660,67 @@ unsafe fn call_with_signature(ptr: *const u8, args: &[DynamicValue], signature: 
         }
         4 => {
             let f: extern "C" fn(i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
-            f(native_args[0], native_args[1], native_args[2], native_args[3])
+            f(
+                native_args[0],
+                native_args[1],
+                native_args[2],
+                native_args[3],
+            )
         }
         5 => {
             let f: extern "C" fn(i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
-            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4])
+            f(
+                native_args[0],
+                native_args[1],
+                native_args[2],
+                native_args[3],
+                native_args[4],
+            )
         }
         6 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
-            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5])
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64) -> *const u8 =
+                std::mem::transmute(ptr);
+            f(
+                native_args[0],
+                native_args[1],
+                native_args[2],
+                native_args[3],
+                native_args[4],
+                native_args[5],
+            )
         }
         7 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
-            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6])
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64) -> *const u8 =
+                std::mem::transmute(ptr);
+            f(
+                native_args[0],
+                native_args[1],
+                native_args[2],
+                native_args[3],
+                native_args[4],
+                native_args[5],
+                native_args[6],
+            )
         }
         8 => {
-            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> *const u8 = std::mem::transmute(ptr);
-            f(native_args[0], native_args[1], native_args[2], native_args[3], native_args[4], native_args[5], native_args[6], native_args[7])
+            let f: extern "C" fn(i64, i64, i64, i64, i64, i64, i64, i64) -> *const u8 =
+                std::mem::transmute(ptr);
+            f(
+                native_args[0],
+                native_args[1],
+                native_args[2],
+                native_args[3],
+                native_args[4],
+                native_args[5],
+                native_args[6],
+                native_args[7],
+            )
         }
         _ => {
-            log::error!("Unsupported argument count: {}. Maximum is 8.", native_args.len());
+            log::error!(
+                "Unsupported argument count: {}. Maximum is 8.",
+                native_args.len()
+            );
             std::ptr::null()
         }
     }
@@ -592,8 +751,6 @@ fn dynamic_to_i64(value: &DynamicValue) -> i64 {
     0
 }
 
-
-
 /// Simple callback type for resolving imports
 ///
 /// Called during compilation when an import statement is encountered.
@@ -610,11 +767,9 @@ pub type ImportResolverCallback = Box<dyn Fn(&str) -> Result<Option<String>, Str
 
 // Re-export the full ImportResolver trait from the compiler for advanced use cases
 pub use zyntax_compiler::{
-    ImportResolver as ImportResolverTrait, ImportContext, ImportManager,
-    ImportError, ResolvedImport, ExportedSymbol, SymbolKind, ModuleArchitecture,
-    ChainedResolver, BuiltinResolver,
+    BuiltinResolver, ChainedResolver, ExportedSymbol, ImportContext, ImportError, ImportManager,
+    ImportResolver as ImportResolverTrait, ModuleArchitecture, ResolvedImport, SymbolKind,
 };
-
 
 /// A compiled Zyntax runtime ready for execution
 ///
@@ -794,7 +949,8 @@ impl ZyntaxRuntime {
         source: &str,
     ) -> RuntimeResult<()> {
         // Parse source to TypedAST with plugin signatures for proper extern declarations
-        let typed_program = grammar.parse_with_signatures(source, "source.zynml", &self.plugin_signatures)
+        let typed_program = grammar
+            .parse_with_signatures(source, "source.zynml", &self.plugin_signatures)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
         // Lower to HIR with grammar builtins
@@ -819,16 +975,22 @@ impl ZyntaxRuntime {
         mut program: zyntax_typed_ast::TypedProgram,
         builtins: indexmap::IndexMap<String, String>,
     ) -> RuntimeResult<HirModule> {
-        use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
-        use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry, TypedDeclaration, type_registry::*};
+        use zyntax_compiler::lowering::{LoweringConfig, LoweringContext};
+        use zyntax_typed_ast::{
+            type_registry::*, AstArena, InternedString, TypeRegistry, TypedDeclaration,
+        };
 
         // Rebuild type registry from declarations (TypeRegistry is not serializable)
         // Scan for struct definitions (TypedDeclaration::Class) and register them
         // IMPORTANT: Only register types that don't already exist (abstract types are pre-registered by parser)
         for decl_node in &program.declarations {
             let decl_kind = match &decl_node.node {
-                TypedDeclaration::Function(f) => format!("Function({})", f.name.resolve_global().unwrap_or_default()),
-                TypedDeclaration::Class(c) => format!("Class({})", c.name.resolve_global().unwrap_or_default()),
+                TypedDeclaration::Function(f) => {
+                    format!("Function({})", f.name.resolve_global().unwrap_or_default())
+                }
+                TypedDeclaration::Class(c) => {
+                    format!("Class({})", c.name.resolve_global().unwrap_or_default())
+                }
                 TypedDeclaration::Impl(_) => "Impl".to_string(),
                 TypedDeclaration::Variable(_) => "Variable".to_string(),
                 TypedDeclaration::Import(_) => "Import".to_string(),
@@ -844,17 +1006,21 @@ impl ZyntaxRuntime {
                 // Check if this is a struct (no methods, just fields)
                 // Create TypeDefinition and register it
                 if let zyntax_typed_ast::Type::Named { id, .. } = &decl_node.ty {
-                    let field_defs: Vec<FieldDef> = class.fields.iter().map(|f| FieldDef {
-                        name: f.name,
-                        ty: f.ty.clone(),
-                        visibility: f.visibility,
-                        mutability: f.mutability,
-                        is_static: f.is_static,
-                        span: f.span,
-                        getter: None,
-                        setter: None,
-                        is_synthetic: false,
-                    }).collect();
+                    let field_defs: Vec<FieldDef> = class
+                        .fields
+                        .iter()
+                        .map(|f| FieldDef {
+                            name: f.name,
+                            ty: f.ty.clone(),
+                            visibility: f.visibility,
+                            mutability: f.mutability,
+                            is_static: f.is_static,
+                            span: f.span,
+                            getter: None,
+                            setter: None,
+                            is_synthetic: false,
+                        })
+                        .collect();
 
                     let type_def = TypeDefinition {
                         id: *id,
@@ -899,16 +1065,19 @@ impl ZyntaxRuntime {
         program.type_registry = type_registry;
 
         // Register impl blocks before lowering
-        zyntax_compiler::register_impl_blocks(&mut program)
-            .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
+        zyntax_compiler::register_impl_blocks(&mut program).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e))
+        })?;
 
         // Generate automatic trait implementations for abstract types
-        zyntax_compiler::generate_abstract_trait_impls(&mut program)
-            .map_err(|e| RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e)))?;
+        zyntax_compiler::generate_abstract_trait_impls(&mut program).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e))
+        })?;
 
         // Register the generated impl blocks
-        zyntax_compiler::register_impl_blocks(&mut program)
-            .map_err(|e| RuntimeError::Execution(format!("Failed to register generated impl blocks: {:?}", e)))?;
+        zyntax_compiler::register_impl_blocks(&mut program).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to register generated impl blocks: {:?}", e))
+        })?;
 
         // Wrap program's type registry in Arc for sharing (it now includes registered traits and impls)
         let type_registry_arc = std::sync::Arc::new(program.type_registry.clone());
@@ -962,7 +1131,8 @@ impl ZyntaxRuntime {
         let mut imports_to_process = Vec::new();
         for decl in &program.declarations {
             if let TypedDeclaration::Import(import) = &decl.node {
-                let module_name = import.module_path
+                let module_name = import
+                    .module_path
                     .first()
                     .and_then(|s| s.resolve_global())
                     .unwrap_or_else(|| "unknown".to_string());
@@ -973,7 +1143,8 @@ impl ZyntaxRuntime {
         // Process each import
         for module_name in imports_to_process {
             // Skip if already processed (circular import detection)
-            let already_processed = PROCESSED_IMPORTS.with(|set| set.borrow().contains(&module_name));
+            let already_processed =
+                PROCESSED_IMPORTS.with(|set| set.borrow().contains(&module_name));
             if already_processed {
                 log::debug!("Skipping already processed import: {}", module_name);
                 continue;
@@ -984,13 +1155,16 @@ impl ZyntaxRuntime {
 
             // Try to resolve the import using our import resolvers
             if let Ok(Some(source)) = self.resolve_import(&module_name) {
-
                 // Find a grammar to parse the imported module
                 // Try each registered grammar until one succeeds
                 // Pass plugin signatures to ensure proper extern function declarations
                 let mut parsed_program = None;
                 for (_lang_name, grammar) in &self.grammars {
-                    match grammar.parse_with_signatures(&source, &module_name, &self.plugin_signatures) {
+                    match grammar.parse_with_signatures(
+                        &source,
+                        &module_name,
+                        &self.plugin_signatures,
+                    ) {
                         Ok(imported_program) => {
                             parsed_program = Some(imported_program);
                             break;
@@ -1000,7 +1174,6 @@ impl ZyntaxRuntime {
                 }
 
                 if let Some(mut imported_program) = parsed_program {
-
                     // IMPORTANT: Recursively process imports from the imported module FIRST
                     // This ensures transitive dependencies (e.g., tensor -> prelude) are loaded
                     // before we process the imported module's declarations
@@ -1012,14 +1185,26 @@ impl ZyntaxRuntime {
 
                     // Register struct types from Class declarations in the imported module
                     // This ensures structs are available before impl block processing
-                    if let Err(e) = self.register_struct_declarations(&imported_program, type_registry) {
-                        log::warn!("Failed to register struct declarations from '{}': {}", module_name, e);
+                    if let Err(e) =
+                        self.register_struct_declarations(&imported_program, type_registry)
+                    {
+                        log::warn!(
+                            "Failed to register struct declarations from '{}': {}",
+                            module_name,
+                            e
+                        );
                     }
 
                     // Process extern declarations from the imported module
                     // to register opaque types in the type registry
-                    if let Err(e) = self.process_extern_declarations_mut(&imported_program, type_registry) {
-                        log::warn!("Failed to process extern declarations from '{}': {}", module_name, e);
+                    if let Err(e) =
+                        self.process_extern_declarations_mut(&imported_program, type_registry)
+                    {
+                        log::warn!(
+                            "Failed to process extern declarations from '{}': {}",
+                            module_name,
+                            e
+                        );
                     }
 
                     // Merge declarations from imported module into main program
@@ -1032,7 +1217,10 @@ impl ZyntaxRuntime {
 
                     log::debug!("Merged declarations from '{}'", module_name);
                 } else {
-                    log::warn!("Failed to parse imported module '{}' with any registered grammar", module_name);
+                    log::warn!(
+                        "Failed to parse imported module '{}' with any registered grammar",
+                        module_name
+                    );
                 }
             } else {
                 log::warn!("Could not resolve import: {}", module_name);
@@ -1052,14 +1240,18 @@ impl ZyntaxRuntime {
         program: &mut zyntax_typed_ast::TypedProgram,
         type_registry: &zyntax_typed_ast::TypeRegistry,
     ) {
-        use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedNode};
         use zyntax_typed_ast::type_registry::Type;
+        use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedNode};
         use zyntax_typed_ast::InternedString;
 
-        log::debug!("Resolving unresolved types in program with {} declarations", program.declarations.len());
+        log::debug!(
+            "Resolving unresolved types in program with {} declarations",
+            program.declarations.len()
+        );
 
         // Build a map of function names to return types from declarations
-        let mut function_returns: std::collections::HashMap<InternedString, Type> = std::collections::HashMap::new();
+        let mut function_returns: std::collections::HashMap<InternedString, Type> =
+            std::collections::HashMap::new();
         for decl in program.declarations.iter() {
             match &decl.node {
                 TypedDeclaration::Function(func) => {
@@ -1069,10 +1261,9 @@ impl ZyntaxRuntime {
                     // Add methods from impl blocks with mangled names (TypeName$method)
                     // Extract type name from for_type
                     let type_name_opt = match &impl_block.for_type {
-                        Type::Named { id, .. } => {
-                            type_registry.get_type_by_id(*id)
-                                .and_then(|td| td.name.resolve_global())
-                        }
+                        Type::Named { id, .. } => type_registry
+                            .get_type_by_id(*id)
+                            .and_then(|td| td.name.resolve_global()),
                         Type::Unresolved(name) => name.resolve_global(),
                         Type::Extern { name, .. } => {
                             // Strip $ prefix if present
@@ -1088,14 +1279,21 @@ impl ZyntaxRuntime {
                             let mangled_name = format!("{}${}", type_name, method_name);
                             let mangled_interned = InternedString::new_global(&mangled_name);
                             function_returns.insert(mangled_interned, method.return_type.clone());
-                            log::debug!("[RESOLVE_TYPES] Added impl method '{}' with return type {:?}", mangled_name, method.return_type);
+                            log::debug!(
+                                "[RESOLVE_TYPES] Added impl method '{}' with return type {:?}",
+                                mangled_name,
+                                method.return_type
+                            );
                         }
                     }
                 }
                 _ => {}
             }
         }
-        log::debug!("Built function_returns map with {} entries", function_returns.len());
+        log::debug!(
+            "Built function_returns map with {} entries",
+            function_returns.len()
+        );
 
         // Walk all declarations and resolve types
         for decl in &mut program.declarations {
@@ -1107,7 +1305,10 @@ impl ZyntaxRuntime {
     fn resolve_in_declaration(
         decl: &mut zyntax_typed_ast::typed_ast::TypedDeclaration,
         type_registry: &zyntax_typed_ast::TypeRegistry,
-        function_returns: &std::collections::HashMap<zyntax_typed_ast::InternedString, zyntax_typed_ast::type_registry::Type>,
+        function_returns: &std::collections::HashMap<
+            zyntax_typed_ast::InternedString,
+            zyntax_typed_ast::type_registry::Type,
+        >,
     ) {
         use zyntax_typed_ast::typed_ast::TypedDeclaration;
 
@@ -1151,7 +1352,10 @@ impl ZyntaxRuntime {
     fn resolve_in_block(
         block: &mut zyntax_typed_ast::typed_ast::TypedBlock,
         type_registry: &zyntax_typed_ast::TypeRegistry,
-        function_returns: &std::collections::HashMap<zyntax_typed_ast::InternedString, zyntax_typed_ast::type_registry::Type>,
+        function_returns: &std::collections::HashMap<
+            zyntax_typed_ast::InternedString,
+            zyntax_typed_ast::type_registry::Type,
+        >,
     ) {
         use zyntax_typed_ast::typed_ast::TypedStatement;
 
@@ -1161,9 +1365,14 @@ impl ZyntaxRuntime {
     }
 
     fn resolve_in_stmt(
-        stmt: &mut zyntax_typed_ast::typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedStatement>,
+        stmt: &mut zyntax_typed_ast::typed_ast::TypedNode<
+            zyntax_typed_ast::typed_ast::TypedStatement,
+        >,
         type_registry: &zyntax_typed_ast::TypeRegistry,
-        function_returns: &std::collections::HashMap<zyntax_typed_ast::InternedString, zyntax_typed_ast::type_registry::Type>,
+        function_returns: &std::collections::HashMap<
+            zyntax_typed_ast::InternedString,
+            zyntax_typed_ast::type_registry::Type,
+        >,
     ) {
         use zyntax_typed_ast::typed_ast::TypedStatement;
 
@@ -1180,10 +1389,21 @@ impl ZyntaxRuntime {
                 if let Some(init) = &mut let_stmt.initializer {
                     Self::resolve_in_expr(init, type_registry, function_returns);
                     // If let_stmt.ty is Any/Unknown, use the initializer's type
-                    if matches!(let_stmt.ty, zyntax_typed_ast::type_registry::Type::Any | zyntax_typed_ast::type_registry::Type::Unknown) {
-                        if !matches!(init.ty, zyntax_typed_ast::type_registry::Type::Any | zyntax_typed_ast::type_registry::Type::Unknown) {
+                    if matches!(
+                        let_stmt.ty,
+                        zyntax_typed_ast::type_registry::Type::Any
+                            | zyntax_typed_ast::type_registry::Type::Unknown
+                    ) {
+                        if !matches!(
+                            init.ty,
+                            zyntax_typed_ast::type_registry::Type::Any
+                                | zyntax_typed_ast::type_registry::Type::Unknown
+                        ) {
                             let_stmt.ty = init.ty.clone();
-                            log::debug!("[RESOLVE_TYPES] Propagated initializer type to let binding: {:?}", let_stmt.ty);
+                            log::debug!(
+                                "[RESOLVE_TYPES] Propagated initializer type to let binding: {:?}",
+                                let_stmt.ty
+                            );
                         }
                     }
                 }
@@ -1195,12 +1415,17 @@ impl ZyntaxRuntime {
     }
 
     fn resolve_in_expr(
-        expr: &mut zyntax_typed_ast::typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        expr: &mut zyntax_typed_ast::typed_ast::TypedNode<
+            zyntax_typed_ast::typed_ast::TypedExpression,
+        >,
         type_registry: &zyntax_typed_ast::TypeRegistry,
-        function_returns: &std::collections::HashMap<zyntax_typed_ast::InternedString, zyntax_typed_ast::type_registry::Type>,
+        function_returns: &std::collections::HashMap<
+            zyntax_typed_ast::InternedString,
+            zyntax_typed_ast::type_registry::Type,
+        >,
     ) {
-        use zyntax_typed_ast::typed_ast::TypedExpression;
         use zyntax_typed_ast::type_registry::Type;
+        use zyntax_typed_ast::typed_ast::TypedExpression;
 
         // Resolve the expression's type annotation
         Self::resolve_in_type(&mut expr.ty, type_registry);
@@ -1226,13 +1451,20 @@ impl ZyntaxRuntime {
                 // If the callee is a Path expression (e.g., Tensor::arange), convert to Variable with mangled name
                 if let TypedExpression::Path(path) = &call.callee.node {
                     // Convert path segments to mangled function name
-                    let segments: Vec<String> = path.segments.iter()
+                    let segments: Vec<String> = path
+                        .segments
+                        .iter()
                         .filter_map(|s| s.resolve_global())
                         .collect();
-                    let mangled_name = segments.join("$");  // "Tensor$arange"
-                    let mangled_interned = zyntax_typed_ast::InternedString::new_global(&mangled_name);
+                    let mangled_name = segments.join("$"); // "Tensor$arange"
+                    let mangled_interned =
+                        zyntax_typed_ast::InternedString::new_global(&mangled_name);
 
-                    log::debug!("[RESOLVE_TYPES] Converting Path {:?} to Variable '{}'", segments, mangled_name);
+                    log::debug!(
+                        "[RESOLVE_TYPES] Converting Path {:?} to Variable '{}'",
+                        segments,
+                        mangled_name
+                    );
 
                     // Look up return type from function_returns using mangled name
                     if let Some(return_type) = function_returns.get(&mangled_interned) {
@@ -1240,7 +1472,11 @@ impl ZyntaxRuntime {
                         Self::resolve_in_type(&mut resolved_return_type, type_registry);
                         if !matches!(resolved_return_type, Type::Any | Type::Unknown) {
                             expr.ty = resolved_return_type;
-                            log::debug!("[RESOLVE_TYPES] Path call '{}' resolved to return type {:?}", mangled_name, expr.ty);
+                            log::debug!(
+                                "[RESOLVE_TYPES] Path call '{}' resolved to return type {:?}",
+                                mangled_name,
+                                expr.ty
+                            );
                         }
                     }
 
@@ -1404,8 +1640,11 @@ impl ZyntaxRuntime {
             Type::Unresolved(name) => {
                 // First try type aliases
                 if let Some(resolved) = type_registry.resolve_alias(*name) {
-                    log::debug!("Resolved type '{}' from alias to {:?}",
-                        name.resolve_global().unwrap_or_default(), resolved);
+                    log::debug!(
+                        "Resolved type '{}' from alias to {:?}",
+                        name.resolve_global().unwrap_or_default(),
+                        resolved
+                    );
                     *ty = resolved.clone();
                 }
                 // Then try looking up by name in the type definitions (for structs, enums, etc.)
@@ -1417,12 +1656,17 @@ impl ZyntaxRuntime {
                         variance: vec![],
                         nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
                     };
-                    log::debug!("Resolved type '{}' from Unresolved to Named({:?})",
-                        name.resolve_global().unwrap_or_default(), type_def.id);
+                    log::debug!(
+                        "Resolved type '{}' from Unresolved to Named({:?})",
+                        name.resolve_global().unwrap_or_default(),
+                        type_def.id
+                    );
                     *ty = resolved;
                 } else {
-                    log::warn!("Could not resolve type '{}'",
-                        name.resolve_global().unwrap_or_default());
+                    log::warn!(
+                        "Could not resolve type '{}'",
+                        name.resolve_global().unwrap_or_default()
+                    );
                 }
             }
             // Recursively resolve nested types
@@ -1432,7 +1676,11 @@ impl ZyntaxRuntime {
             Type::Array { element_type, .. } => {
                 Self::resolve_in_type(element_type, type_registry);
             }
-            Type::Function { params, return_type, .. } => {
+            Type::Function {
+                params,
+                return_type,
+                ..
+            } => {
                 for param in params {
                     Self::resolve_in_type(&mut param.ty, type_registry);
                 }
@@ -1458,21 +1706,20 @@ impl ZyntaxRuntime {
         program: &zyntax_typed_ast::TypedProgram,
         type_registry: &mut zyntax_typed_ast::TypeRegistry,
     ) -> RuntimeResult<()> {
-        use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedExtern};
         use zyntax_typed_ast::type_registry::{Type, TypeDefinition, TypeKind, TypeMetadata};
+        use zyntax_typed_ast::typed_ast::{TypedDeclaration, TypedExtern};
         use zyntax_typed_ast::TypeId;
 
         // Collect all extern struct declarations
         for decl in &program.declarations {
             if let TypedDeclaration::Extern(extern_decl) = &decl.node {
                 if let TypedExtern::Struct(extern_struct) = extern_decl {
-
                     // Create TypeDefinition for the extern/opaque type
                     let type_id = TypeId::next();
                     let type_def = TypeDefinition {
                         id: type_id,
                         name: extern_struct.name,
-                        kind: TypeKind::Atomic,  // Extern types are atomic/opaque
+                        kind: TypeKind::Atomic, // Extern types are atomic/opaque
                         type_params: vec![],
                         constraints: vec![],
                         fields: vec![],
@@ -1508,8 +1755,10 @@ impl ZyntaxRuntime {
         program: &zyntax_typed_ast::TypedProgram,
         type_registry: &mut zyntax_typed_ast::TypeRegistry,
     ) -> RuntimeResult<()> {
+        use zyntax_typed_ast::type_registry::{
+            FieldDef, TypeDefinition, TypeKind, TypeMetadata, TypeParam, Variance, Visibility,
+        };
         use zyntax_typed_ast::typed_ast::TypedDeclaration;
-        use zyntax_typed_ast::type_registry::{TypeDefinition, TypeKind, TypeMetadata, FieldDef, TypeParam, Visibility, Variance};
         use zyntax_typed_ast::TypeId;
 
         // Process all Class declarations (structs are represented as Class)
@@ -1521,30 +1770,38 @@ impl ZyntaxRuntime {
                 }
 
                 // Convert TypedTypeParam to TypeParam
-                let type_params: Vec<TypeParam> = class_decl.type_params.iter().map(|tp| {
-                    TypeParam {
-                        name: tp.name,
-                        bounds: vec![], // Simplified - could convert bounds if needed
-                        variance: Variance::Invariant,
-                        default: tp.default.clone(),
-                        span: tp.span,
-                    }
-                }).collect();
+                let type_params: Vec<TypeParam> = class_decl
+                    .type_params
+                    .iter()
+                    .map(|tp| {
+                        TypeParam {
+                            name: tp.name,
+                            bounds: vec![], // Simplified - could convert bounds if needed
+                            variance: Variance::Invariant,
+                            default: tp.default.clone(),
+                            span: tp.span,
+                        }
+                    })
+                    .collect();
 
                 // Convert TypedField to FieldDef
-                let fields: Vec<FieldDef> = class_decl.fields.iter().map(|f| {
-                    FieldDef {
-                        name: f.name,
-                        ty: f.ty.clone(),
-                        visibility: Visibility::Public, // Simplified
-                        mutability: f.mutability.clone(),
-                        is_static: false,
-                        span: f.span,
-                        getter: None,
-                        setter: None,
-                        is_synthetic: false,
-                    }
-                }).collect();
+                let fields: Vec<FieldDef> = class_decl
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        FieldDef {
+                            name: f.name,
+                            ty: f.ty.clone(),
+                            visibility: Visibility::Public, // Simplified
+                            mutability: f.mutability.clone(),
+                            is_static: false,
+                            span: f.span,
+                            getter: None,
+                            setter: None,
+                            is_synthetic: false,
+                        }
+                    })
+                    .collect();
 
                 // Create TypeDefinition for the struct
                 let type_id = TypeId::next();
@@ -1574,7 +1831,8 @@ impl ZyntaxRuntime {
 
     /// Get a function pointer by name
     pub fn get_function_ptr(&self, name: &str) -> Option<*const u8> {
-        self.function_ids.get(name)
+        self.function_ids
+            .get(name)
             .and_then(|id| self.backend.get_function_ptr(*id))
     }
 
@@ -1599,7 +1857,8 @@ impl ZyntaxRuntime {
     /// For void functions, it uses a void-returning call. For native (i32, i64) functions,
     /// use `call_native` with a signature instead.
     pub fn call_raw(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxValue> {
-        let ptr = self.get_function_ptr(name)
+        let ptr = self
+            .get_function_ptr(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
         // Check if this is a void function using the stored signature
@@ -1615,10 +1874,8 @@ impl ZyntaxRuntime {
         }
 
         // Convert arguments to DynamicValues
-        let dynamic_args: Vec<DynamicValue> = args.iter()
-            .cloned()
-            .map(|v| v.into_dynamic())
-            .collect();
+        let dynamic_args: Vec<DynamicValue> =
+            args.iter().cloned().map(|v| v.into_dynamic()).collect();
 
         // Call the function using the variadic caller helper
         // SAFETY: We trust the caller has provided the correct function pointer
@@ -1656,21 +1913,22 @@ impl ZyntaxRuntime {
         args: &[ZyntaxValue],
         signature: &NativeSignature,
     ) -> RuntimeResult<ZyntaxValue> {
-        let ptr = self.get_function_ptr(name)
+        let ptr = self
+            .get_function_ptr(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
         // Validate argument count
         if args.len() != signature.params.len() {
             return Err(RuntimeError::Execution(format!(
                 "Function '{}' expects {} arguments, got {}",
-                name, signature.params.len(), args.len()
+                name,
+                signature.params.len(),
+                args.len()
             )));
         }
 
         // SAFETY: We trust the caller has provided the correct signature
-        unsafe {
-            call_native_with_signature(ptr, args, signature)
-        }
+        unsafe { call_native_with_signature(ptr, args, signature) }
     }
 
     /// Call an async function, returning a Promise
@@ -1693,11 +1951,14 @@ impl ZyntaxRuntime {
         // The async function directly returns *Promise<T>
         if let Some(func_ptr) = self.get_function_ptr(name) {
             // Look up the stored signature for this function
-            let signature = self.function_signatures.get(name)
+            let signature = self
+                .function_signatures
+                .get(name)
                 .cloned()
                 .unwrap_or_else(|| {
                     // Fallback: infer signature from args (legacy behavior)
-                    let params: Vec<NativeType> = args.iter()
+                    let params: Vec<NativeType> = args
+                        .iter()
                         .map(|arg| match arg {
                             ZyntaxValue::Int(_) => NativeType::I64,
                             ZyntaxValue::Float(_) => NativeType::F64,
@@ -1708,15 +1969,18 @@ impl ZyntaxRuntime {
                             _ => NativeType::Ptr, // All other types (Array, Struct, Map, etc.)
                         })
                         .collect();
-                    NativeSignature { params, ret: NativeType::Ptr }
+                    NativeSignature {
+                        params,
+                        ret: NativeType::Ptr,
+                    }
                 });
 
-            let dynamic_args: Vec<DynamicValue> = args.iter()
-                .cloned()
-                .map(|v| v.into_dynamic())
-                .collect();
+            let dynamic_args: Vec<DynamicValue> =
+                args.iter().cloned().map(|v| v.into_dynamic()).collect();
 
-            return Ok(ZyntaxPromise::from_async_call(func_ptr, dynamic_args, &signature));
+            return Ok(unsafe {
+                ZyntaxPromise::from_async_call(func_ptr, dynamic_args, &signature)
+            });
         }
 
         // Fall back to legacy _new/_poll naming convention
@@ -1724,45 +1988,59 @@ impl ZyntaxRuntime {
             let constructor_name = format!("{}_new", name);
             let poll_name = format!("{}_poll", name);
 
-            let init_ptr = self.get_function_ptr(&constructor_name)
-                .ok_or_else(|| RuntimeError::FunctionNotFound(format!(
+            let init_ptr = self.get_function_ptr(&constructor_name).ok_or_else(|| {
+                RuntimeError::FunctionNotFound(format!(
                     "Async constructor '{}' not found (for async function '{}')",
                     constructor_name, name
-                )))?;
+                ))
+            })?;
 
-            let poll_ptr = self.get_function_ptr(&poll_name)
-                .ok_or_else(|| RuntimeError::FunctionNotFound(format!(
+            let poll_ptr = self.get_function_ptr(&poll_name).ok_or_else(|| {
+                RuntimeError::FunctionNotFound(format!(
                     "Async poll function '{}' not found (for async function '{}')",
                     poll_name, name
-                )))?;
+                ))
+            })?;
 
-            let dynamic_args: Vec<DynamicValue> = args.iter()
-                .cloned()
-                .map(|v| v.into_dynamic())
-                .collect();
+            let dynamic_args: Vec<DynamicValue> =
+                args.iter().cloned().map(|v| v.into_dynamic()).collect();
 
-            return Ok(ZyntaxPromise::with_poll_fn(init_ptr, poll_ptr, dynamic_args));
+            return Ok(ZyntaxPromise::with_poll_fn(
+                init_ptr,
+                poll_ptr,
+                dynamic_args,
+            ));
         }
 
         Err(RuntimeError::FunctionNotFound(format!(
-            "Async function '{}' not found (tried both new Promise ABI and legacy _new/_poll)", name
+            "Async function '{}' not found (tried both new Promise ABI and legacy _new/_poll)",
+            name
         )))
     }
 
     /// Register an external function that can be called from Zyntax code
     pub fn register_function(&mut self, name: &str, ptr: *const u8, arg_count: usize) {
-        self.external_functions.insert(name.to_string(), ExternalFunction {
-            name: name.to_string(),
-            ptr,
-            arg_count,
-        });
+        self.external_functions.insert(
+            name.to_string(),
+            ExternalFunction {
+                name: name.to_string(),
+                ptr,
+                arg_count,
+            },
+        );
         // Also register with the backend so Cranelift can resolve the symbol during JIT linking
         self.backend.register_runtime_symbol(name, ptr);
     }
 
     /// Hot-reload a function with new code
-    pub fn hot_reload(&mut self, name: &str, function: &zyntax_compiler::HirFunction) -> RuntimeResult<()> {
-        let id = self.function_ids.get(name)
+    pub fn hot_reload(
+        &mut self,
+        name: &str,
+        function: &zyntax_compiler::HirFunction,
+    ) -> RuntimeResult<()> {
+        let id = self
+            .function_ids
+            .get(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
         self.backend.hot_reload_function(*id, function)?;
@@ -1790,7 +2068,7 @@ impl ZyntaxRuntime {
     /// runtime.load_plugin("./my_runtime.zrtl")?;
     /// ```
     pub fn load_plugin<P: AsRef<std::path::Path>>(&mut self, path: P) -> RuntimeResult<()> {
-        use zyntax_compiler::zrtl::{ZrtlPlugin, ZrtlError};
+        use zyntax_compiler::zrtl::{ZrtlError, ZrtlPlugin};
 
         let plugin = ZrtlPlugin::load(path).map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
@@ -1801,12 +2079,14 @@ impl ZyntaxRuntime {
 
             // Store signature if available
             if let Some(sig) = symbol_info.sig {
-                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+                self.plugin_signatures
+                    .insert(symbol_info.name.to_string(), sig);
             }
         }
 
         // Register symbol signatures for auto-boxing support in backend
-        self.backend.register_symbol_signatures(plugin.symbols_with_signatures());
+        self.backend
+            .register_symbol_signatures(plugin.symbols_with_signatures());
 
         // Rebuild the JIT module to include the new symbols
         self.backend.rebuild_with_accumulated_symbols()?;
@@ -1821,11 +2101,15 @@ impl ZyntaxRuntime {
     /// # Returns
     ///
     /// The number of plugins loaded successfully.
-    pub fn load_plugins_from_directory<P: AsRef<std::path::Path>>(&mut self, dir: P) -> RuntimeResult<usize> {
+    pub fn load_plugins_from_directory<P: AsRef<std::path::Path>>(
+        &mut self,
+        dir: P,
+    ) -> RuntimeResult<usize> {
         use zyntax_compiler::zrtl::ZrtlRegistry;
 
         let mut registry = ZrtlRegistry::new();
-        let count = registry.load_directory(&dir)
+        let count = registry
+            .load_directory(&dir)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
         // Register all collected symbols AND their signatures
@@ -1834,7 +2118,8 @@ impl ZyntaxRuntime {
 
             // Store signature if available
             if let Some(sig) = symbol_info.sig {
-                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+                self.plugin_signatures
+                    .insert(symbol_info.name.to_string(), sig);
             }
         }
 
@@ -1972,7 +2257,8 @@ impl ZyntaxRuntime {
             } else {
                 log::debug!(
                     "Grammar builtin '{}' -> '{}' not found in external functions (yet)",
-                    alias, target
+                    alias,
+                    target
                 );
             }
         }
@@ -2135,15 +2421,13 @@ impl ZyntaxRuntime {
         exports: &[&str],
         filename: Option<&str>,
     ) -> RuntimeResult<Vec<String>> {
-        let grammar = self
-            .grammars
-            .get(language)
-            .cloned()
-            .ok_or_else(|| RuntimeError::Execution(format!(
+        let grammar = self.grammars.get(language).cloned().ok_or_else(|| {
+            RuntimeError::Execution(format!(
                 "Unknown language '{}'. Registered languages: {:?}",
                 language,
                 self.languages()
-            )))?;
+            ))
+        })?;
 
         // Parse source to TypedAST with plugin signatures for proper extern declarations
         let typed_program = if let Some(fname) = filename {
@@ -2194,20 +2478,23 @@ impl ZyntaxRuntime {
     /// * `name` - The function name to export
     pub fn export_function(&mut self, name: &str) -> RuntimeResult<()> {
         // Get the function pointer from our function_ids map
-        let ptr = self.get_function_ptr(name)
+        let ptr = self
+            .get_function_ptr(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
         // Check for conflict and warn
         if let Some(existing) = self.backend.check_export_conflict(name) {
             log::warn!(
                 "Symbol conflict: '{}' is already exported at {:?}. Overwriting.",
-                name, existing
+                name,
+                existing
             );
             // Use overwrite method to replace
             self.backend.export_function_ptr_overwrite(name, ptr);
         } else {
             // No conflict, use regular export
-            self.backend.export_function_ptr(name, ptr)
+            self.backend
+                .export_function_ptr(name, ptr)
                 .map_err(|e| RuntimeError::Execution(e.to_string()))?;
         }
 
@@ -2240,31 +2527,26 @@ impl ZyntaxRuntime {
         let path = path.as_ref();
 
         // Get the file extension
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .ok_or_else(|| RuntimeError::Execution(format!(
-                "File '{}' has no extension",
-                path.display()
-            )))?;
+        let extension = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+            RuntimeError::Execution(format!("File '{}' has no extension", path.display()))
+        })?;
 
         // Look up the language for this extension
         let language = self
             .language_for_extension(extension)
-            .ok_or_else(|| RuntimeError::Execution(format!(
-                "No grammar registered for extension '.{}'. Registered extensions: {:?}",
-                extension,
-                self.extension_map.keys().collect::<Vec<_>>()
-            )))?
+            .ok_or_else(|| {
+                RuntimeError::Execution(format!(
+                    "No grammar registered for extension '.{}'. Registered extensions: {:?}",
+                    extension,
+                    self.extension_map.keys().collect::<Vec<_>>()
+                ))
+            })?
             .to_string();
 
         // Read the source file
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| RuntimeError::Execution(format!(
-                "Failed to read '{}': {}",
-                path.display(),
-                e
-            )))?;
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to read '{}': {}", path.display(), e))
+        })?;
 
         // Use the file path as the filename for diagnostics
         let filename = path.to_string_lossy();
@@ -2297,7 +2579,10 @@ impl ZyntaxRuntime {
     /// # Returns
     ///
     /// The names of functions defined in the module.
-    pub fn compile_typed_program(&mut self, program: zyntax_typed_ast::TypedProgram) -> RuntimeResult<Vec<String>> {
+    pub fn compile_typed_program(
+        &mut self,
+        program: zyntax_typed_ast::TypedProgram,
+    ) -> RuntimeResult<Vec<String>> {
         // Lower to HIR (no builtins available when compiling directly)
         let hir_module = self.lower_typed_program(program, indexmap::IndexMap::new())?;
 
@@ -2434,7 +2719,8 @@ impl TieredRuntime {
 
     /// Get a function pointer by name
     pub fn get_function_ptr(&self, name: &str) -> Option<*const u8> {
-        self.function_ids.get(name)
+        self.function_ids
+            .get(name)
             .and_then(|id| self.backend.get_function_pointer(*id))
     }
 
@@ -2449,13 +2735,17 @@ impl TieredRuntime {
 
     /// Call a function and get the raw ZyntaxValue result
     pub fn call_raw(&self, name: &str, args: &[ZyntaxValue]) -> RuntimeResult<ZyntaxValue> {
-        let func_id = self.function_ids.get(name)
+        let func_id = self
+            .function_ids
+            .get(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
         // Record the call for profiling
         self.backend.record_call(*func_id);
 
-        let ptr = self.backend.get_function_pointer(*func_id)
+        let ptr = self
+            .backend
+            .get_function_pointer(*func_id)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
         // Check if this is a void function using the stored signature
@@ -2471,10 +2761,8 @@ impl TieredRuntime {
         }
 
         // Convert arguments to DynamicValues
-        let dynamic_args: Vec<DynamicValue> = args.iter()
-            .cloned()
-            .map(|v| v.into_dynamic())
-            .collect();
+        let dynamic_args: Vec<DynamicValue> =
+            args.iter().cloned().map(|v| v.into_dynamic()).collect();
 
         // Call the function using the variadic caller helper
         // SAFETY: We trust the caller has provided the correct function pointer
@@ -2497,15 +2785,20 @@ impl TieredRuntime {
         // The async function directly returns Promise<T> = {state_machine_ptr, poll_fn_ptr}
         if let Some(func_id) = self.function_ids.get(name) {
             self.backend.record_call(*func_id);
-            let func_ptr = self.backend.get_function_pointer(*func_id)
+            let func_ptr = self
+                .backend
+                .get_function_pointer(*func_id)
                 .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
             // Look up the stored signature for this function
-            let signature = self.function_signatures.get(name)
+            let signature = self
+                .function_signatures
+                .get(name)
                 .cloned()
                 .unwrap_or_else(|| {
                     // Fallback: infer signature from args (legacy behavior)
-                    let params: Vec<NativeType> = args.iter()
+                    let params: Vec<NativeType> = args
+                        .iter()
                         .map(|arg| match arg {
                             ZyntaxValue::Int(_) => NativeType::I64,
                             ZyntaxValue::Float(_) => NativeType::F64,
@@ -2516,37 +2809,43 @@ impl TieredRuntime {
                             _ => NativeType::Ptr, // All other types (Array, Struct, Map, etc.)
                         })
                         .collect();
-                    NativeSignature { params, ret: NativeType::Ptr }
+                    NativeSignature {
+                        params,
+                        ret: NativeType::Ptr,
+                    }
                 });
 
-            let dynamic_args: Vec<DynamicValue> = args.iter()
-                .cloned()
-                .map(|v| v.into_dynamic())
-                .collect();
+            let dynamic_args: Vec<DynamicValue> =
+                args.iter().cloned().map(|v| v.into_dynamic()).collect();
 
             // Call the function - it returns a Promise struct
-            return Ok(ZyntaxPromise::from_async_call(func_ptr, dynamic_args, &signature));
+            return Ok(unsafe {
+                ZyntaxPromise::from_async_call(func_ptr, dynamic_args, &signature)
+            });
         }
 
         // Fall back to legacy _new/_poll naming convention for backwards compatibility
         let new_name = format!("{}_new", name);
         let poll_name = format!("{}_poll", name);
 
-        if let (Some(new_id), Some(poll_id)) =
-            (self.function_ids.get(&new_name), self.function_ids.get(&poll_name))
-        {
+        if let (Some(new_id), Some(poll_id)) = (
+            self.function_ids.get(&new_name),
+            self.function_ids.get(&poll_name),
+        ) {
             self.backend.record_call(*new_id);
             self.backend.record_call(*poll_id);
 
-            let new_ptr = self.backend.get_function_pointer(*new_id)
+            let new_ptr = self
+                .backend
+                .get_function_pointer(*new_id)
                 .ok_or_else(|| RuntimeError::FunctionNotFound(new_name.clone()))?;
-            let poll_ptr = self.backend.get_function_pointer(*poll_id)
+            let poll_ptr = self
+                .backend
+                .get_function_pointer(*poll_id)
                 .ok_or_else(|| RuntimeError::FunctionNotFound(poll_name.clone()))?;
 
-            let dynamic_args: Vec<DynamicValue> = args.iter()
-                .cloned()
-                .map(|v| v.into_dynamic())
-                .collect();
+            let dynamic_args: Vec<DynamicValue> =
+                args.iter().cloned().map(|v| v.into_dynamic()).collect();
 
             return Ok(ZyntaxPromise::with_poll_fn(new_ptr, poll_ptr, dynamic_args));
         }
@@ -2560,7 +2859,9 @@ impl TieredRuntime {
     ///
     /// Useful for pre-warming hot paths or testing.
     pub fn optimize_function(&mut self, name: &str, tier: OptimizationTier) -> RuntimeResult<()> {
-        let func_id = self.function_ids.get(name)
+        let func_id = self
+            .function_ids
+            .get(name)
             .ok_or_else(|| RuntimeError::FunctionNotFound(name.to_string()))?;
 
         self.backend.optimize_function(*func_id, tier)?;
@@ -2608,11 +2909,13 @@ impl TieredRuntime {
         // Register all symbols from the plugin as runtime symbols
         // AND collect their signatures for type checking
         for symbol_info in plugin.symbols_with_signatures() {
-            self.backend.register_runtime_symbol(symbol_info.name, symbol_info.ptr);
+            self.backend
+                .register_runtime_symbol(symbol_info.name, symbol_info.ptr);
 
             // Store signature if available
             if let Some(sig) = symbol_info.sig {
-                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+                self.plugin_signatures
+                    .insert(symbol_info.name.to_string(), sig);
             }
         }
 
@@ -2626,20 +2929,26 @@ impl TieredRuntime {
     /// # Returns
     ///
     /// The number of plugins loaded successfully.
-    pub fn load_plugins_from_directory<P: AsRef<std::path::Path>>(&mut self, dir: P) -> RuntimeResult<usize> {
+    pub fn load_plugins_from_directory<P: AsRef<std::path::Path>>(
+        &mut self,
+        dir: P,
+    ) -> RuntimeResult<usize> {
         use zyntax_compiler::zrtl::ZrtlRegistry;
 
         let mut registry = ZrtlRegistry::new();
-        let count = registry.load_directory(&dir)
+        let count = registry
+            .load_directory(&dir)
             .map_err(|e| RuntimeError::Execution(e.to_string()))?;
 
         // Register all collected symbols AND their signatures
         for symbol_info in registry.collect_symbols_with_signatures() {
-            self.backend.register_runtime_symbol(symbol_info.name, symbol_info.ptr);
+            self.backend
+                .register_runtime_symbol(symbol_info.name, symbol_info.ptr);
 
             // Store signature if available
             if let Some(sig) = symbol_info.sig {
-                self.plugin_signatures.insert(symbol_info.name.to_string(), sig);
+                self.plugin_signatures
+                    .insert(symbol_info.name.to_string(), sig);
             }
         }
 
@@ -2736,15 +3045,13 @@ impl TieredRuntime {
     ///
     /// See `ZyntaxRuntime::load_module` for full documentation.
     pub fn load_module(&mut self, language: &str, source: &str) -> RuntimeResult<Vec<String>> {
-        let grammar = self
-            .grammars
-            .get(language)
-            .cloned()
-            .ok_or_else(|| RuntimeError::Execution(format!(
+        let grammar = self.grammars.get(language).cloned().ok_or_else(|| {
+            RuntimeError::Execution(format!(
                 "Unknown language '{}'. Registered languages: {:?}",
                 language,
                 self.languages()
-            )))?;
+            ))
+        })?;
 
         // Parse source to TypedAST with plugin signatures for proper extern declarations
         let typed_program = grammar
@@ -2777,28 +3084,23 @@ impl TieredRuntime {
     pub fn load_module_file<P: AsRef<Path>>(&mut self, path: P) -> RuntimeResult<Vec<String>> {
         let path = path.as_ref();
 
-        let extension = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .ok_or_else(|| RuntimeError::Execution(format!(
-                "File '{}' has no extension",
-                path.display()
-            )))?;
+        let extension = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+            RuntimeError::Execution(format!("File '{}' has no extension", path.display()))
+        })?;
 
         let language = self
             .language_for_extension(extension)
-            .ok_or_else(|| RuntimeError::Execution(format!(
-                "No grammar registered for extension '.{}'",
-                extension
-            )))?
+            .ok_or_else(|| {
+                RuntimeError::Execution(format!(
+                    "No grammar registered for extension '.{}'",
+                    extension
+                ))
+            })?
             .to_string();
 
-        let source = std::fs::read_to_string(path)
-            .map_err(|e| RuntimeError::Execution(format!(
-                "Failed to read '{}': {}",
-                path.display(),
-                e
-            )))?;
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to read '{}': {}", path.display(), e))
+        })?;
 
         self.load_module(&language, &source)
     }
@@ -2809,8 +3111,10 @@ impl TieredRuntime {
         mut program: zyntax_typed_ast::TypedProgram,
         builtins: indexmap::IndexMap<String, String>,
     ) -> RuntimeResult<HirModule> {
-        use zyntax_compiler::lowering::{LoweringContext, LoweringConfig};
-        use zyntax_typed_ast::{AstArena, InternedString, TypeRegistry, TypedDeclaration, type_registry::*};
+        use zyntax_compiler::lowering::{LoweringConfig, LoweringContext};
+        use zyntax_typed_ast::{
+            type_registry::*, AstArena, InternedString, TypeRegistry, TypedDeclaration,
+        };
 
         // Rebuild type registry from declarations (TypeRegistry is not serializable)
         // Scan for struct definitions (TypedDeclaration::Class) and register them
@@ -2819,17 +3123,21 @@ impl TieredRuntime {
                 // Check if this is a struct (no methods, just fields)
                 // Create TypeDefinition and register it
                 if let zyntax_typed_ast::Type::Named { id, .. } = &decl_node.ty {
-                    let field_defs: Vec<FieldDef> = class.fields.iter().map(|f| FieldDef {
-                        name: f.name,
-                        ty: f.ty.clone(),
-                        visibility: f.visibility,
-                        mutability: f.mutability,
-                        is_static: f.is_static,
-                        span: f.span,
-                        getter: None,
-                        setter: None,
-                        is_synthetic: false,
-                    }).collect();
+                    let field_defs: Vec<FieldDef> = class
+                        .fields
+                        .iter()
+                        .map(|f| FieldDef {
+                            name: f.name,
+                            ty: f.ty.clone(),
+                            visibility: f.visibility,
+                            mutability: f.mutability,
+                            is_static: f.is_static,
+                            span: f.span,
+                            getter: None,
+                            setter: None,
+                            is_synthetic: false,
+                        })
+                        .collect();
 
                     let type_def = TypeDefinition {
                         id: *id,
@@ -2852,16 +3160,19 @@ impl TieredRuntime {
         }
 
         // Register impl blocks before lowering
-        zyntax_compiler::register_impl_blocks(&mut program)
-            .map_err(|e| RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e)))?;
+        zyntax_compiler::register_impl_blocks(&mut program).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to register impl blocks: {:?}", e))
+        })?;
 
         // Generate automatic trait implementations for abstract types
-        zyntax_compiler::generate_abstract_trait_impls(&mut program)
-            .map_err(|e| RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e)))?;
+        zyntax_compiler::generate_abstract_trait_impls(&mut program).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to generate abstract trait impls: {:?}", e))
+        })?;
 
         // Register the generated impl blocks
-        zyntax_compiler::register_impl_blocks(&mut program)
-            .map_err(|e| RuntimeError::Execution(format!("Failed to register generated impl blocks: {:?}", e)))?;
+        zyntax_compiler::register_impl_blocks(&mut program).map_err(|e| {
+            RuntimeError::Execution(format!("Failed to register generated impl blocks: {:?}", e))
+        })?;
 
         let arena = AstArena::new();
         let module_name = InternedString::new_global("main");
@@ -3023,7 +3334,11 @@ impl ZyntaxPromise {
     ///
     /// Uses the provided signature to properly invoke the function with the correct
     /// number and types of arguments.
-    pub fn from_async_call(func_ptr: *const u8, args: Vec<DynamicValue>, signature: &NativeSignature) -> Self {
+    pub unsafe fn from_async_call(
+        func_ptr: *const u8,
+        args: Vec<DynamicValue>,
+        signature: &NativeSignature,
+    ) -> Self {
         let task_id = NEXT_TASK_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // Call the function to get the Promise pointer using signature-based dynamic dispatch
@@ -3045,10 +3360,18 @@ impl ZyntaxPromise {
         Self {
             state: Arc::new(Mutex::new(PromiseInner {
                 init_fn: func_ptr, // Keep for reference
-                poll_fn: if poll_fn.is_null() { None } else { Some(poll_fn) },
+                poll_fn: if poll_fn.is_null() {
+                    None
+                } else {
+                    Some(poll_fn)
+                },
                 args,
                 state: PromiseState::Pending,
-                state_machine: if state_machine.is_null() { None } else { Some(state_machine) },
+                state_machine: if state_machine.is_null() {
+                    None
+                } else {
+                    Some(state_machine)
+                },
                 ready_queue: Arc::new(Mutex::new(std::collections::VecDeque::new())),
                 task_id,
                 poll_count: 0,
@@ -3128,7 +3451,10 @@ impl ZyntaxPromise {
                         // Pending - state remains unchanged
                     } else if result < 0 {
                         // Negative value indicates failure
-                        inner.state = PromiseState::Failed(format!("Async operation failed with code {}", result));
+                        inner.state = PromiseState::Failed(format!(
+                            "Async operation failed with code {}",
+                            result
+                        ));
                     } else {
                         // Ready with value
                         // For i64/i32 returns, the value is in the result directly
@@ -3171,7 +3497,8 @@ impl ZyntaxPromise {
                     1 => {
                         // Single argument (common case: async fn foo(x: i32) ...)
                         // Allocate space for state machine, pass it as first arg (sret), original arg as second
-                        let arg0 = inner.args[0].get_i32()
+                        let arg0 = inner.args[0]
+                            .get_i32()
                             .map(|i| i as i64)
                             .or_else(|| inner.args[0].get_i64())
                             .unwrap_or(0i64);
@@ -3191,7 +3518,8 @@ impl ZyntaxPromise {
                 };
 
                 if state_machine.is_null() {
-                    inner.state = PromiseState::Failed("Failed to create async state machine".to_string());
+                    inner.state =
+                        PromiseState::Failed("Failed to create async state machine".to_string());
                     return inner.state.clone();
                 }
 
@@ -3217,7 +3545,8 @@ impl ZyntaxPromise {
             drop(inner);
             let mut inner = self.state.lock().unwrap();
             inner.state = PromiseState::Failed(format!(
-                "Async operation timed out after {} polls", max_polls
+                "Async operation timed out after {} polls",
+                max_polls
             ));
             return inner.state.clone();
         }
@@ -3330,7 +3659,8 @@ impl ZyntaxPromise {
         loop {
             if start.elapsed() > timeout {
                 return Err(RuntimeError::Promise(format!(
-                    "Async operation timed out after {:?}", timeout
+                    "Async operation timed out after {:?}",
+                    timeout
                 )));
             }
             match self.poll() {
@@ -3381,26 +3711,24 @@ impl ZyntaxPromise {
         let target = new_promise.state.clone();
 
         // Spawn a thread to wait for completion and run the callback
-        std::thread::spawn(move || {
-            loop {
-                let source_state = source.lock().unwrap().state.clone();
-                match source_state {
-                    PromiseState::Ready(value) => {
-                        let result = f(value);
-                        target.lock().unwrap().state = PromiseState::Ready(result);
-                        break;
-                    }
-                    PromiseState::Failed(err) => {
-                        target.lock().unwrap().state = PromiseState::Failed(err);
-                        break;
-                    }
-                    PromiseState::Cancelled => {
-                        target.lock().unwrap().state = PromiseState::Cancelled;
-                        break;
-                    }
-                    PromiseState::Pending => {
-                        std::thread::yield_now();
-                    }
+        std::thread::spawn(move || loop {
+            let source_state = source.lock().unwrap().state.clone();
+            match source_state {
+                PromiseState::Ready(value) => {
+                    let result = f(value);
+                    target.lock().unwrap().state = PromiseState::Ready(result);
+                    break;
+                }
+                PromiseState::Failed(err) => {
+                    target.lock().unwrap().state = PromiseState::Failed(err);
+                    break;
+                }
+                PromiseState::Cancelled => {
+                    target.lock().unwrap().state = PromiseState::Cancelled;
+                    break;
+                }
+                PromiseState::Pending => {
+                    std::thread::yield_now();
                 }
             }
         });
@@ -3569,7 +3897,8 @@ impl PromiseAll {
     pub fn poll_with_limit(&mut self, max_polls: usize) -> PromiseAllState {
         if self.poll_count >= max_polls {
             return PromiseAllState::Failed(format!(
-                "PromiseAll timed out after {} polls", max_polls
+                "PromiseAll timed out after {} polls",
+                max_polls
             ));
         }
         self.poll()
@@ -3603,7 +3932,8 @@ impl PromiseAll {
         loop {
             if start.elapsed() > timeout {
                 return Err(RuntimeError::Promise(format!(
-                    "PromiseAll timed out after {:?}", timeout
+                    "PromiseAll timed out after {:?}",
+                    timeout
                 )));
             }
             match self.poll() {
@@ -3724,7 +4054,8 @@ impl PromiseRace {
                 }
                 PromiseRaceState::Failed(index, err) => {
                     return Err(RuntimeError::Promise(format!(
-                        "Promise {} failed: {}", index, err
+                        "Promise {} failed: {}",
+                        index, err
                     )));
                 }
             }
@@ -3740,7 +4071,8 @@ impl PromiseRace {
         loop {
             if start.elapsed() > timeout {
                 return Err(RuntimeError::Promise(format!(
-                    "PromiseRace timed out after {:?}", timeout
+                    "PromiseRace timed out after {:?}",
+                    timeout
                 )));
             }
             match self.poll() {
@@ -3752,7 +4084,8 @@ impl PromiseRace {
                 }
                 PromiseRaceState::Failed(index, err) => {
                     return Err(RuntimeError::Promise(format!(
-                        "Promise {} failed: {}", index, err
+                        "Promise {} failed: {}",
+                        index, err
                     )));
                 }
             }
@@ -3835,7 +4168,8 @@ impl PromiseAllSettled {
             match promise.poll() {
                 PromiseState::Pending => {
                     all_settled = false;
-                    results.push(SettledResult::Rejected("pending".to_string())); // Placeholder
+                    results.push(SettledResult::Rejected("pending".to_string()));
+                    // Placeholder
                 }
                 PromiseState::Ready(value) => {
                     results.push(SettledResult::Fulfilled(value));
@@ -3875,7 +4209,8 @@ impl PromiseAllSettled {
         loop {
             if start.elapsed() > timeout {
                 return Err(RuntimeError::Promise(format!(
-                    "PromiseAllSettled timed out after {:?}", timeout
+                    "PromiseAllSettled timed out after {:?}",
+                    timeout
                 )));
             }
             if let Some(results) = self.poll() {
@@ -3939,29 +4274,94 @@ unsafe fn call_dynamic_function(
             f(args[0].clone(), args[1].clone(), args[2].clone())
         }
         4 => {
-            let f: extern "C" fn(DynamicValue, DynamicValue, DynamicValue, DynamicValue) -> DynamicValue =
-                std::mem::transmute(ptr);
-            f(args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone())
+            let f: extern "C" fn(
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+            ) -> DynamicValue = std::mem::transmute(ptr);
+            f(
+                args[0].clone(),
+                args[1].clone(),
+                args[2].clone(),
+                args[3].clone(),
+            )
         }
         5 => {
-            let f: extern "C" fn(DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue) -> DynamicValue =
-                std::mem::transmute(ptr);
-            f(args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone(), args[4].clone())
+            let f: extern "C" fn(
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+            ) -> DynamicValue = std::mem::transmute(ptr);
+            f(
+                args[0].clone(),
+                args[1].clone(),
+                args[2].clone(),
+                args[3].clone(),
+                args[4].clone(),
+            )
         }
         6 => {
-            let f: extern "C" fn(DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue) -> DynamicValue =
-                std::mem::transmute(ptr);
-            f(args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone(), args[4].clone(), args[5].clone())
+            let f: extern "C" fn(
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+            ) -> DynamicValue = std::mem::transmute(ptr);
+            f(
+                args[0].clone(),
+                args[1].clone(),
+                args[2].clone(),
+                args[3].clone(),
+                args[4].clone(),
+                args[5].clone(),
+            )
         }
         7 => {
-            let f: extern "C" fn(DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue) -> DynamicValue =
-                std::mem::transmute(ptr);
-            f(args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone(), args[4].clone(), args[5].clone(), args[6].clone())
+            let f: extern "C" fn(
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+            ) -> DynamicValue = std::mem::transmute(ptr);
+            f(
+                args[0].clone(),
+                args[1].clone(),
+                args[2].clone(),
+                args[3].clone(),
+                args[4].clone(),
+                args[5].clone(),
+                args[6].clone(),
+            )
         }
         8 => {
-            let f: extern "C" fn(DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue, DynamicValue) -> DynamicValue =
-                std::mem::transmute(ptr);
-            f(args[0].clone(), args[1].clone(), args[2].clone(), args[3].clone(), args[4].clone(), args[5].clone(), args[6].clone(), args[7].clone())
+            let f: extern "C" fn(
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+                DynamicValue,
+            ) -> DynamicValue = std::mem::transmute(ptr);
+            f(
+                args[0].clone(),
+                args[1].clone(),
+                args[2].clone(),
+                args[3].clone(),
+                args[4].clone(),
+                args[5].clone(),
+                args[6].clone(),
+                args[7].clone(),
+            )
         }
         n => {
             return Err(RuntimeError::Execution(
@@ -3976,7 +4376,10 @@ unsafe fn call_dynamic_function(
 impl std::future::Future for ZyntaxPromise {
     type Output = RuntimeResult<ZyntaxValue>;
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
         // Store the waker for later notification
         {
             let mut inner = self.state.lock().unwrap();
@@ -3987,7 +4390,9 @@ impl std::future::Future for ZyntaxPromise {
         match ZyntaxPromise::poll(&self) {
             PromiseState::Ready(value) => std::task::Poll::Ready(Ok(value)),
             PromiseState::Failed(err) => std::task::Poll::Ready(Err(RuntimeError::Promise(err))),
-            PromiseState::Cancelled => std::task::Poll::Ready(Err(RuntimeError::Promise("Promise was cancelled".to_string()))),
+            PromiseState::Cancelled => std::task::Poll::Ready(Err(RuntimeError::Promise(
+                "Promise was cancelled".to_string(),
+            ))),
             PromiseState::Pending => std::task::Poll::Pending,
         }
     }

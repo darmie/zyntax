@@ -94,85 +94,76 @@
 //! let custom_tag = zrtl_tag!(Struct, 42);
 //! ```
 
-pub mod type_system;
-pub mod dynamic_box;
-pub mod generic_box;
-pub mod string;
 pub mod array;
-pub mod plugin;
 pub mod async_support;
 pub mod closure;
+pub mod dynamic_box;
+pub mod generic_box;
+pub mod plugin;
+pub mod string;
+pub mod type_system;
 
 // Re-export main types at crate root
-pub use type_system::{TypeCategory, TypeFlags, TypeTag, PrimitiveSize};
-pub use dynamic_box::{DynamicBox, DropFn};
+pub use array::{ArrayConstPtr, ArrayIterator, ArrayPtr, OwnedArray};
+pub use dynamic_box::{DropFn, DynamicBox};
 pub use generic_box::{GenericBox, GenericTypeArgs, MAX_TYPE_ARGS};
-pub use string::{OwnedString, StringPtr, StringConstPtr, StringView};
-pub use array::{OwnedArray, ArrayPtr, ArrayConstPtr, ArrayIterator};
 pub use plugin::{
-    ZrtlSymbol, ZrtlInfo, ZrtlSymbolEntry, ZrtlTyped, TypeInfo, ZRTL_VERSION,
-    ZrtlSymbolSig, ZrtlSigFlags, MAX_PARAMS,
+    TypeInfo, ZrtlInfo, ZrtlSigFlags, ZrtlSymbol, ZrtlSymbolEntry, ZrtlSymbolSig, ZrtlTyped,
+    MAX_PARAMS, ZRTL_VERSION,
 };
+pub use string::{OwnedString, StringConstPtr, StringPtr, StringView};
+pub use type_system::{PrimitiveSize, TypeCategory, TypeFlags, TypeTag};
 
 // Re-export async types
 pub use async_support::{
-    ZrtlPromise, PollResult, PromiseError,
-    AsyncState, StateMachineHeader,
-    PromiseAll, PromiseRace, PromiseAllSettled, SettledResult,
-    FutureAdapter, YieldOnce, Timer,
-    noop_waker, noop_context, yield_once, sleep, next_task_id,
+    next_task_id, noop_context, noop_waker, sleep, yield_once, AsyncState, FutureAdapter,
+    PollResult, PromiseAll, PromiseAllSettled, PromiseError, PromiseRace, SettledResult,
+    StateMachineHeader, Timer, YieldOnce, ZrtlPromise,
 };
 
 // Re-export closure types
 pub use closure::{
-    ZrtlClosure, ZrtlOnceClosure, ClosureResult, ThreadEntry, RawClosureFn,
-    zrtl_closure_from_fn, zrtl_closure_call, zrtl_closure_clone,
-    zrtl_closure_free, zrtl_closure_is_null,
-    zrtl_closure_from_raw, zrtl_closure_from_raw_noenv,
+    zrtl_closure_call, zrtl_closure_clone, zrtl_closure_free, zrtl_closure_from_fn,
+    zrtl_closure_from_raw, zrtl_closure_from_raw_noenv, zrtl_closure_is_null, ClosureResult,
+    RawClosureFn, ThreadEntry, ZrtlClosure, ZrtlOnceClosure,
 };
 
 // Re-export string functions
 pub use string::{
-    string_new, string_empty, string_free, string_copy,
-    string_length, string_data, string_equals, string_as_str, string_as_bytes,
-    string_alloc_size, STRING_HEADER_SIZE,
+    string_alloc_size, string_as_bytes, string_as_str, string_copy, string_data, string_empty,
+    string_equals, string_free, string_length, string_new, STRING_HEADER_SIZE,
 };
 
 // Re-export array functions
 pub use array::{
-    array_new, array_free, array_push, array_get, array_set,
-    array_capacity, array_length, array_data, array_as_slice,
-    array_alloc_size, ARRAY_HEADER_SIZE, ARRAY_HEADER_BYTES,
+    array_alloc_size, array_as_slice, array_capacity, array_data, array_free, array_get,
+    array_length, array_new, array_push, array_set, ARRAY_HEADER_BYTES, ARRAY_HEADER_SIZE,
 };
 
 /// Prelude module for convenient imports
 pub mod prelude {
-    pub use crate::type_system::{TypeCategory, TypeFlags, TypeTag};
+    pub use crate::array::OwnedArray;
+    pub use crate::async_support::{
+        sleep, yield_once, AsyncState, PollResult, PromiseAll, PromiseAllSettled, PromiseError,
+        PromiseRace, SettledResult, StateMachineHeader, ZrtlPromise,
+    };
+    pub use crate::closure::{ClosureResult, ThreadEntry, ZrtlClosure, ZrtlOnceClosure};
     pub use crate::dynamic_box::DynamicBox;
     pub use crate::generic_box::{GenericBox, GenericTypeArgs};
+    pub use crate::plugin::{TypeInfo, ZrtlTyped};
     pub use crate::string::OwnedString;
-    pub use crate::array::OwnedArray;
-    pub use crate::plugin::{ZrtlTyped, TypeInfo};
-    pub use crate::async_support::{
-        ZrtlPromise, PollResult, PromiseError,
-        AsyncState, StateMachineHeader,
-        PromiseAll, PromiseRace, PromiseAllSettled, SettledResult,
-        yield_once, sleep,
-    };
-    pub use crate::closure::{
-        ZrtlClosure, ZrtlOnceClosure, ClosureResult, ThreadEntry,
-    };
-    pub use crate::zrtl_tag;
+    pub use crate::type_system::{TypeCategory, TypeFlags, TypeTag};
     pub use crate::zrtl_plugin;
     pub use crate::zrtl_symbol;
+    pub use crate::zrtl_tag;
     // Test framework macros
     pub use crate::zrtl_assert;
     pub use crate::zrtl_assert_eq;
+    pub use crate::zrtl_assert_err;
     pub use crate::zrtl_assert_ne;
-    pub use crate::zrtl_assert_some;
     pub use crate::zrtl_assert_none;
     pub use crate::zrtl_assert_ok;
-    pub use crate::zrtl_assert_err;
+    pub use crate::zrtl_assert_some;
 }
 
 #[cfg(test)]
@@ -181,7 +172,11 @@ mod tests {
 
     #[test]
     fn test_type_tag_roundtrip() {
-        let tag = TypeTag::new(TypeCategory::Struct, 123, TypeFlags::NULLABLE | TypeFlags::BOXED);
+        let tag = TypeTag::new(
+            TypeCategory::Struct,
+            123,
+            TypeFlags::NULLABLE | TypeFlags::BOXED,
+        );
 
         assert_eq!(tag.category(), TypeCategory::Struct);
         assert_eq!(tag.type_id(), 123);
@@ -194,8 +189,8 @@ mod tests {
         let b = DynamicBox::owned_i32(42);
         assert_eq!(b.as_i32(), Some(42));
 
-        let b = DynamicBox::owned_f64(3.14);
-        assert_eq!(b.as_f64(), Some(3.14));
+        let b = DynamicBox::owned_f64(std::f64::consts::PI);
+        assert_eq!(b.as_f64(), Some(std::f64::consts::PI));
     }
 
     #[test]

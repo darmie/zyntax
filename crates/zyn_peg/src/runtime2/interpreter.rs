@@ -9,22 +9,23 @@
 //! For production use, the code generator (`codegen::ParserGenerator`) should
 //! be used instead as it produces more efficient compiled code.
 
-use crate::grammar::{GrammarIR, RuleIR, PatternIR, ActionIR, ExprIR, CharClass, RuleModifier};
-use super::state::{ParserState, ParseResult, ParsedValue, ParseFailure};
-use std::collections::HashMap;
+use super::state::{ParseFailure, ParseResult, ParsedValue, ParserState};
+use crate::grammar::{ActionIR, CharClass, ExprIR, GrammarIR, PatternIR, RuleIR, RuleModifier};
 use log::{debug, trace};
+use std::collections::HashMap;
+use zyntax_typed_ast::typed_ast::{TypedCatch, TypedTry};
 use zyntax_typed_ast::{
-    TypedNode, TypedStatement, TypedExpression, TypedLiteral, TypedBlock,
-    TypedDeclaration, TypedFunction, TypedLet, TypedLetPattern, TypedCall, TypedMethodCall, TypedProgram,
-    TypedIf, TypedWhile, TypedFor, TypedMatch, TypedMatchArm, TypedUnary, TypedFieldAccess, TypedIndex,
-    TypedRange, TypedStructLiteral, TypedFieldInit, TypedPattern,
-    TypedParameter, TypedVariant, TypedVariantFields, TypedTypeAlias, ParameterKind,
-    TypedInterface, TypedExtern, TypedExternStruct, TypedTypeParam,
-    TypedAnnotation, TypedAnnotationArg, TypedAnnotationValue,
-    TypedLambda, TypedLambdaBody, TypedLambdaParam, TypedImportModifier, TypedPath,
-    UnaryOp,
-    typed_node, Span,
-    type_registry::{Type, PrimitiveType, Mutability, Visibility, CallingConvention, NullabilityKind, ConstValue},
+    type_registry::{
+        CallingConvention, ConstValue, Mutability, NullabilityKind, PrimitiveType, Type, Visibility,
+    },
+    typed_node, ParameterKind, Span, TypedAnnotation, TypedAnnotationArg, TypedAnnotationValue,
+    TypedBlock, TypedCall, TypedDeclaration, TypedExpression, TypedExtern, TypedExternStruct,
+    TypedFieldAccess, TypedFieldInit, TypedFor, TypedFunction, TypedIf, TypedImportModifier,
+    TypedIndex, TypedInterface, TypedLambda, TypedLambdaBody, TypedLambdaParam, TypedLet,
+    TypedLetPattern, TypedLiteral, TypedLiteralPattern, TypedMatch, TypedMatchArm, TypedMethodCall,
+    TypedNode, TypedParameter, TypedPath, TypedPattern, TypedProgram, TypedRange, TypedStatement,
+    TypedStructLiteral, TypedTypeAlias, TypedTypeParam, TypedUnary, TypedVariable, TypedVariant,
+    TypedVariantFields, TypedWhile, UnaryOp,
 };
 
 /// Runtime interpreter for GrammarIR
@@ -41,7 +42,10 @@ impl<'g> GrammarInterpreter<'g> {
         for (i, name) in grammar.rules.keys().enumerate() {
             rule_id_map.insert(name.clone(), i);
         }
-        GrammarInterpreter { grammar, rule_id_map }
+        GrammarInterpreter {
+            grammar,
+            rule_id_map,
+        }
     }
 
     /// Parse input using a specific rule
@@ -77,7 +81,11 @@ impl<'g> GrammarInterpreter<'g> {
         // This converts exponential backtracking to O(n * grammar_size) parsing.
         // InProgress entries detect left-recursive rule cycles.
         use crate::runtime2::memo::MemoEntry;
-        let memo_rule_id = self.rule_id_map.get(&rule.name).copied().unwrap_or(usize::MAX);
+        let memo_rule_id = self
+            .rule_id_map
+            .get(&rule.name)
+            .copied()
+            .unwrap_or(usize::MAX);
         if let Some(entry) = state.check_memo(memo_rule_id) {
             return match entry.clone() {
                 MemoEntry::Success { value, end_pos } => {
@@ -107,9 +115,20 @@ impl<'g> GrammarInterpreter<'g> {
         state.clear_bindings();
 
         // Execute pattern
-        let result = self.execute_pattern(&rule.pattern, state, rule.modifier == Some(RuleModifier::Atomic));
-        trace!("execute_rule: {} at pos {} -> {:?}", rule.name, start_pos,
-               match &result { ParseResult::Success(_, p) => format!("ok@{}", p), ParseResult::Failure(f) => format!("fail: {:?}", f) });
+        let result = self.execute_pattern(
+            &rule.pattern,
+            state,
+            rule.modifier == Some(RuleModifier::Atomic),
+        );
+        trace!(
+            "execute_rule: {} at pos {} -> {:?}",
+            rule.name,
+            start_pos,
+            match &result {
+                ParseResult::Success(_, p) => format!("ok@{}", p),
+                ParseResult::Failure(f) => format!("fail: {:?}", f),
+            }
+        );
 
         let final_result = match result {
             ParseResult::Success(value, pos) => {
@@ -169,7 +188,8 @@ impl<'g> GrammarInterpreter<'g> {
         match action {
             ActionIR::PassThrough { binding } => {
                 // Simply return the bound value
-                state.get_binding(binding)
+                state
+                    .get_binding(binding)
                     .cloned()
                     .ok_or_else(|| format!("binding '{}' not found", binding))
             }
@@ -183,7 +203,8 @@ impl<'g> GrammarInterpreter<'g> {
             }
 
             ActionIR::Match { binding, cases } => {
-                let value = state.get_binding(binding)
+                let value = state
+                    .get_binding(binding)
                     .ok_or_else(|| format!("binding '{}' not found", binding))?;
 
                 let text = match value {
@@ -199,7 +220,11 @@ impl<'g> GrammarInterpreter<'g> {
                 Err(format!("no match case for '{}'", text))
             }
 
-            ActionIR::Conditional { condition, then_action, else_action } => {
+            ActionIR::Conditional {
+                condition,
+                then_action,
+                else_action,
+            } => {
                 let cond_val = self.eval_expr(condition, state)?;
                 let is_true = match cond_val {
                     ParsedValue::Bool(b) => b,
@@ -216,7 +241,10 @@ impl<'g> GrammarInterpreter<'g> {
                 }
             }
 
-            ActionIR::LegacyJson { return_type, json_content } => {
+            ActionIR::LegacyJson {
+                return_type,
+                json_content,
+            } => {
                 // Legacy JSON actions are not executed - they require codegen
                 Err(format!(
                     "legacy JSON action for '{}' requires code generation, not runtime interpretation",
@@ -238,24 +266,14 @@ impl<'g> GrammarInterpreter<'g> {
         let parts: Vec<&str> = type_path.split("::").collect();
 
         match parts.as_slice() {
-            ["TypedStatement", variant] => {
-                self.construct_statement(variant, fields, state, span)
-            }
-            ["TypedExpression", variant] => {
-                self.construct_expression(variant, fields, state, span)
-            }
+            ["TypedStatement", variant] => self.construct_statement(variant, fields, state, span),
+            ["TypedExpression", variant] => self.construct_expression(variant, fields, state, span),
             ["TypedDeclaration", variant] => {
                 self.construct_declaration(variant, fields, state, span)
             }
-            ["TypedProgram"] => {
-                self.construct_program(fields, state, span)
-            }
-            ["TypedBlock"] => {
-                self.construct_block(fields, state, span)
-            }
-            ["Type", variant] => {
-                self.construct_type(variant, fields, state, span)
-            }
+            ["TypedProgram"] => self.construct_program(fields, state, span),
+            ["TypedBlock"] => self.construct_block(fields, state, span),
+            ["Type", variant] => self.construct_type(variant, fields, state, span),
             ["Box", "new"] | ["Box"] => {
                 // Box::new(expr) - just return the inner expression
                 // Fields should have a single entry for the inner value
@@ -274,30 +292,15 @@ impl<'g> GrammarInterpreter<'g> {
                     Ok(ParsedValue::Optional(None))
                 }
             }
-            ["TypedLiteral", variant] => {
-                self.construct_literal(variant, fields, state)
-            }
-            ["TypedField"] => {
-                self.construct_field(fields, state, span)
-            }
-            ["TypedVariant"] => {
-                self.construct_variant(fields, state, span)
-            }
-            ["TypedParameter"] => {
-                self.construct_parameter(fields, state, span)
-            }
-            ["TypedFieldInit"] => {
-                self.construct_field_init(fields, state, span)
-            }
-            ["TypedMatchArm"] => {
-                self.construct_match_arm(fields, state, span)
-            }
-            ["TypedPattern", variant] => {
-                self.construct_pattern(variant, fields, state, span)
-            }
-            ["TypedAnnotation"] => {
-                self.construct_annotation(fields, state, span)
-            }
+            ["TypedLiteral", variant] => self.construct_literal(variant, fields, state),
+            ["TypedField"] => self.construct_field(fields, state, span),
+            ["TypedVariant"] => self.construct_variant(fields, state, span),
+            ["TypedParameter"] => self.construct_parameter(fields, state, span),
+            ["TypedFieldInit"] => self.construct_field_init(fields, state, span),
+            ["TypedMatchArm"] => self.construct_match_arm(fields, state, span),
+            ["TypedCatch"] => self.construct_catch(fields, state, span),
+            ["TypedPattern", variant] => self.construct_pattern(variant, fields, state, span),
+            ["TypedAnnotation"] => self.construct_annotation(fields, state, span),
             ["TypedAnnotationArg", variant] => {
                 self.construct_annotation_arg(variant, fields, state, span)
             }
@@ -305,20 +308,16 @@ impl<'g> GrammarInterpreter<'g> {
                 self.construct_annotation_value(variant, fields, state, span)
             }
             // Effect types
-            ["TypedEffectOp"] => {
-                self.construct_effect_op(fields, state, span)
-            }
-            ["TypedEffectHandlerImpl"] => {
-                self.construct_effect_handler_impl(fields, state, span)
-            }
+            ["TypedEffectOp"] => self.construct_effect_op(fields, state, span),
+            ["TypedEffectHandlerImpl"] => self.construct_effect_handler_impl(fields, state, span),
             // Postfix suffix types for fold operations
-            ["SuffixField"] | ["SuffixMethod"] | ["SuffixCall"] | ["SuffixIndex"] | ["SuffixSlice"] => {
-                self.construct_suffix(type_path, fields, state)
-            }
+            ["SuffixField"]
+            | ["SuffixMethod"]
+            | ["SuffixCall"]
+            | ["SuffixIndex"]
+            | ["SuffixSlice"] => self.construct_suffix(type_path, fields, state),
             // Lambda parameter
-            ["TypedLambdaParam"] => {
-                self.construct_lambda_param(fields, state, span)
-            }
+            ["TypedLambdaParam"] => self.construct_lambda_param(fields, state, span),
             _ => Err(format!("unknown type path: {}", type_path)),
         }
     }
@@ -351,11 +350,10 @@ impl<'g> GrammarInterpreter<'g> {
         let statements = if let Some(expr) = self.get_field("statements", fields) {
             let val = self.eval_expr(expr, state)?;
             match val {
-                ParsedValue::List(items) => {
-                    items.into_iter()
-                        .map(|item| self.parsed_value_to_stmt(item))
-                        .collect::<Result<Vec<_>, _>>()?
-                }
+                ParsedValue::List(items) => items
+                    .into_iter()
+                    .map(|item| self.parsed_value_to_stmt(item))
+                    .collect::<Result<Vec<_>, _>>()?,
                 ParsedValue::Statement(s) => vec![*s],
                 ParsedValue::None => vec![],
                 _ => vec![],
@@ -380,11 +378,17 @@ impl<'g> GrammarInterpreter<'g> {
                 let name = self.get_field_as_interned("name", fields, state)?;
                 let type_annotation = self.get_field_optional("type_annotation", fields, state)?;
                 let initializer = self.get_field_optional_expr("initializer", fields, state)?;
-                let is_mutable = self.get_field_as_bool("is_mutable", fields, state).unwrap_or(false);
+                let is_mutable = self
+                    .get_field_as_bool("is_mutable", fields, state)
+                    .unwrap_or(false);
 
                 // Use Type::Any when no type annotation is provided - let the compiler infer from initializer
                 let ty = type_annotation.unwrap_or(Type::Any);
-                let mutability = if is_mutable { Mutability::Mutable } else { Mutability::Immutable };
+                let mutability = if is_mutable {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Immutable
+                };
 
                 TypedStatement::Let(TypedLet {
                     name,
@@ -447,7 +451,10 @@ impl<'g> GrammarInterpreter<'g> {
 
                 // Create a binding pattern for the variable
                 let pattern = typed_node(
-                    TypedPattern::Identifier { name: variable, mutability: Mutability::Immutable },
+                    TypedPattern::Identifier {
+                        name: variable,
+                        mutability: Mutability::Immutable,
+                    },
                     Type::Any,
                     span,
                 );
@@ -462,9 +469,7 @@ impl<'g> GrammarInterpreter<'g> {
                 let value = self.get_field_optional_expr("value", fields, state)?;
                 TypedStatement::Break(value.map(Box::new))
             }
-            "Continue" => {
-                TypedStatement::Continue
-            }
+            "Continue" => TypedStatement::Continue,
             "LetPattern" => {
                 let pattern = self.get_field_as_pattern("pattern", fields, state)?;
                 let initializer = self.get_field_as_expr("initializer", fields, state)?;
@@ -482,6 +487,29 @@ impl<'g> GrammarInterpreter<'g> {
                 TypedStatement::Match(TypedMatch {
                     scrutinee: Box::new(scrutinee),
                     arms,
+                })
+            }
+            "Try" => {
+                let body = self.get_field_as_block("body", fields, state)?;
+                let catch_clauses = if self.get_field("catches", fields).is_some() {
+                    self.get_field_as_catch_list("catches", fields, state)?
+                } else if self.get_field("catch_clauses", fields).is_some() {
+                    self.get_field_as_catch_list("catch_clauses", fields, state)?
+                } else {
+                    vec![]
+                };
+                let finally_block = self
+                    .get_field_optional_block("finally", fields, state)?
+                    .or_else(|| {
+                        self.get_field_optional_block("finally_block", fields, state)
+                            .ok()
+                            .flatten()
+                    });
+
+                TypedStatement::Try(TypedTry {
+                    body,
+                    catch_clauses,
+                    finally_block,
                 })
             }
             _ => return Err(format!("unknown TypedStatement variant: {}", variant)),
@@ -580,7 +608,9 @@ impl<'g> GrammarInterpreter<'g> {
             "Range" => {
                 let start = self.get_field_optional_expr("start", fields, state)?;
                 let end = self.get_field_optional_expr("end", fields, state)?;
-                let inclusive = self.get_field_as_bool("inclusive", fields, state).unwrap_or(false);
+                let inclusive = self
+                    .get_field_as_bool("inclusive", fields, state)
+                    .unwrap_or(false);
 
                 TypedExpression::Range(TypedRange {
                     start: start.map(Box::new),
@@ -610,15 +640,27 @@ impl<'g> GrammarInterpreter<'g> {
                 };
                 match value {
                     ParsedValue::Literal(lit) => TypedExpression::Literal(lit),
-                    ParsedValue::Int(i) => TypedExpression::Literal(TypedLiteral::Integer(i as i128)),
+                    ParsedValue::Int(i) => {
+                        TypedExpression::Literal(TypedLiteral::Integer(i as i128))
+                    }
                     ParsedValue::Float(f) => TypedExpression::Literal(TypedLiteral::Float(f)),
                     ParsedValue::Bool(b) => TypedExpression::Literal(TypedLiteral::Bool(b)),
                     ParsedValue::Text(s) => {
                         let interned = state.intern(&s);
                         TypedExpression::Literal(TypedLiteral::String(interned))
                     }
-                    _ => return Err(format!("Literal value must be a literal type, got: {:?}", value)),
+                    _ => {
+                        return Err(format!(
+                            "Literal value must be a literal type, got: {:?}",
+                            value
+                        ))
+                    }
                 }
+            }
+            "SuffixedLiteral" | "DurationLiteral" => {
+                let value = self.get_field_as_string("text", fields, state)?;
+                let interned = state.intern(&value);
+                TypedExpression::Literal(TypedLiteral::String(interned))
             }
             "Ternary" | "If" => {
                 // Ternary expression: condition ? then_expr : else_expr
@@ -687,9 +729,7 @@ impl<'g> GrammarInterpreter<'g> {
                 // Path expression: Type::method or module::function
                 let segments = self.get_field_as_interned_list("segments", fields, state)?;
 
-                TypedExpression::Path(TypedPath {
-                    segments,
-                })
+                TypedExpression::Path(TypedPath { segments })
             }
             "Array" => {
                 // Array literal: [1, 2, 3]
@@ -708,9 +748,13 @@ impl<'g> GrammarInterpreter<'g> {
         // Determine the type based on the expression variant
         // Default to I64 for integers (64-bit system) and F64 for floats
         let ty = match &expr {
-            TypedExpression::Literal(TypedLiteral::Integer(_)) => Type::Primitive(PrimitiveType::I64),
+            TypedExpression::Literal(TypedLiteral::Integer(_)) => {
+                Type::Primitive(PrimitiveType::I64)
+            }
             TypedExpression::Literal(TypedLiteral::Float(_)) => Type::Primitive(PrimitiveType::F64),
-            TypedExpression::Literal(TypedLiteral::String(_)) => Type::Primitive(PrimitiveType::String),
+            TypedExpression::Literal(TypedLiteral::String(_)) => {
+                Type::Primitive(PrimitiveType::String)
+            }
             TypedExpression::Literal(TypedLiteral::Bool(_)) => Type::Primitive(PrimitiveType::Bool),
             // Call and Variable expressions need type inference from callee/declaration
             // Use Type::Any to signal that lowering should infer the type
@@ -721,7 +765,9 @@ impl<'g> GrammarInterpreter<'g> {
             _ => Type::Primitive(PrimitiveType::Unit),
         };
 
-        Ok(ParsedValue::Expression(Box::new(typed_node(expr, ty, span))))
+        Ok(ParsedValue::Expression(Box::new(typed_node(
+            expr, ty, span,
+        ))))
     }
 
     /// Construct a TypedDeclaration variant
@@ -736,7 +782,8 @@ impl<'g> GrammarInterpreter<'g> {
             "Function" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
                 let params = self.get_field_as_param_list("params", fields, state)?;
-                let return_type = self.get_field_optional("return_type", fields, state)?
+                let return_type = self
+                    .get_field_optional("return_type", fields, state)?
                     .unwrap_or(Type::Primitive(PrimitiveType::Unit));
                 let body = self.get_field_optional_block("body", fields, state)?;
 
@@ -758,22 +805,30 @@ impl<'g> GrammarInterpreter<'g> {
             }
             "Variable" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
-                let ty = self.get_field_optional("type_annotation", fields, state)?
+                let ty = self
+                    .get_field_optional("type_annotation", fields, state)?
                     .unwrap_or(Type::Any);
                 let initializer = self.get_field_optional_expr("initializer", fields, state)?;
-                let is_mutable = self.get_field_as_bool("is_mutable", fields, state).unwrap_or(false);
+                let is_mutable = self
+                    .get_field_as_bool("is_mutable", fields, state)
+                    .unwrap_or(false);
 
                 TypedDeclaration::Variable(zyntax_typed_ast::TypedVariable {
                     name,
                     ty,
-                    mutability: if is_mutable { Mutability::Mutable } else { Mutability::Immutable },
+                    mutability: if is_mutable {
+                        Mutability::Mutable
+                    } else {
+                        Mutability::Immutable
+                    },
                     initializer: initializer.map(Box::new),
                     visibility: Visibility::Public,
                 })
             }
             "TypeAlias" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
-                let target = self.get_field_optional("target", fields, state)?
+                let target = self
+                    .get_field_optional("target", fields, state)?
                     .unwrap_or(Type::Any);
 
                 TypedDeclaration::TypeAlias(TypedTypeAlias {
@@ -848,7 +903,8 @@ impl<'g> GrammarInterpreter<'g> {
                         TypedDeclaration::Function(func) => {
                             // Convert TypedFunction to TypedMethod
                             let self_name = state.intern("self");
-                            let method_params: Vec<zyntax_typed_ast::TypedMethodParam> = func.params
+                            let method_params: Vec<zyntax_typed_ast::TypedMethodParam> = func
+                                .params
                                 .into_iter()
                                 .map(|p| {
                                     let is_self = p.name == self_name;
@@ -917,7 +973,8 @@ impl<'g> GrammarInterpreter<'g> {
             }
             "AnnotatedFunction" => {
                 // An annotated function: merge annotations into the function
-                let annotations = self.get_field_as_annotation_list("annotations", fields, state)?;
+                let annotations =
+                    self.get_field_as_annotation_list("annotations", fields, state)?;
                 let func_decl = self.get_field_as_declaration("function", fields, state)?;
 
                 // Extract function and add annotations
@@ -926,7 +983,9 @@ impl<'g> GrammarInterpreter<'g> {
                         func.annotations = annotations;
                         TypedDeclaration::Function(func)
                     }
-                    _ => return Err("AnnotatedFunction requires a Function declaration".to_string()),
+                    _ => {
+                        return Err("AnnotatedFunction requires a Function declaration".to_string())
+                    }
                 }
             }
             "Effect" => {
@@ -960,11 +1019,13 @@ impl<'g> GrammarInterpreter<'g> {
             }
             "ExternStruct" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
-                let type_params = self.get_field_as_type_param_list("type_params", fields, state)?;
+                let type_params =
+                    self.get_field_as_type_param_list("type_params", fields, state)?;
 
                 // Runtime prefix is $TypeName to match ZRTL symbol convention
                 let name_str = name.resolve_global().unwrap_or_default();
-                let runtime_prefix = zyntax_typed_ast::InternedString::new_global(&format!("${}", name_str));
+                let runtime_prefix =
+                    zyntax_typed_ast::InternedString::new_global(&format!("${}", name_str));
 
                 TypedDeclaration::Extern(TypedExtern::Struct(TypedExternStruct {
                     name,
@@ -1016,7 +1077,8 @@ impl<'g> GrammarInterpreter<'g> {
             "Primitive" => {
                 // Parse primitive type from name
                 let name = self.get_field_as_interned("name", fields, state)?;
-                let name_str = name.resolve_global()
+                let name_str = name
+                    .resolve_global()
                     .ok_or_else(|| "cannot resolve interned string".to_string())?;
                 // Handle special "type" keyword differently (it's a meta-type)
                 if name_str == "type" {
@@ -1091,14 +1153,16 @@ impl<'g> GrammarInterpreter<'g> {
             }
             "Function" => {
                 // Function type: (params) => return_type
-                let param_types = self.get_field_as_type_list_optional("params", fields, state)?
+                let param_types = self
+                    .get_field_as_type_list_optional("params", fields, state)?
                     .unwrap_or_default();
                 let return_type = self.get_field_as_type("return_type", fields, state)?;
 
                 // Convert plain types to ParamInfo
                 use zyntax_typed_ast::type_registry::ParamInfo;
-                let params: Vec<ParamInfo> = param_types.into_iter().map(|ty| {
-                    ParamInfo {
+                let params: Vec<ParamInfo> = param_types
+                    .into_iter()
+                    .map(|ty| ParamInfo {
                         name: None,
                         ty,
                         is_optional: false,
@@ -1108,8 +1172,8 @@ impl<'g> GrammarInterpreter<'g> {
                         is_out: false,
                         is_ref: false,
                         is_inout: false,
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 Type::Function {
                     params,
@@ -1150,7 +1214,12 @@ impl<'g> GrammarInterpreter<'g> {
                     match self.eval_expr(expr, state)? {
                         ParsedValue::Bool(b) => b,
                         ParsedValue::Text(s) => s == "true",
-                        other => return Err(format!("Bool value must be bool or text, got: {:?}", other)),
+                        other => {
+                            return Err(format!(
+                                "Bool value must be bool or text, got: {:?}",
+                                other
+                            ))
+                        }
                     }
                 } else {
                     false
@@ -1183,7 +1252,8 @@ impl<'g> GrammarInterpreter<'g> {
         span: Span,
     ) -> Result<ParsedValue, String> {
         let name = self.get_field_as_interned("name", fields, state)?;
-        let ty = self.get_field_optional("ty", fields, state)?
+        let ty = self
+            .get_field_optional("ty", fields, state)?
             .unwrap_or(Type::Any);
 
         Ok(ParsedValue::Field(zyntax_typed_ast::TypedField {
@@ -1210,7 +1280,9 @@ impl<'g> GrammarInterpreter<'g> {
         let variant_fields = if let Some(expr) = self.get_field("fields", fields) {
             let val = self.eval_expr(expr, state)?;
             match val {
-                ParsedValue::Text(s) if s == "Unit" || s == "TypedVariantFields::Unit" => TypedVariantFields::Unit,
+                ParsedValue::Text(s) if s == "Unit" || s == "TypedVariantFields::Unit" => {
+                    TypedVariantFields::Unit
+                }
                 ParsedValue::None => TypedVariantFields::Unit,
                 _ => TypedVariantFields::Unit, // TODO: handle named and tuple fields
             }
@@ -1253,16 +1325,75 @@ impl<'g> GrammarInterpreter<'g> {
         let body = self.get_field_as_block("body", fields, state)?;
 
         // Convert block to expression (Block expression)
-        let body_expr = typed_node(
-            TypedExpression::Block(body),
-            Type::Any,
-            span,
-        );
+        let body_expr = typed_node(TypedExpression::Block(body), Type::Any, span);
 
         Ok(ParsedValue::MatchArm(TypedMatchArm {
             pattern: Box::new(pattern),
             guard: None,
             body: Box::new(body_expr),
+        }))
+    }
+
+    /// Construct a TypedCatch clause for try/catch statements
+    fn construct_catch<'a>(
+        &self,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+        span: Span,
+    ) -> Result<ParsedValue, String> {
+        let body = self.get_field_as_block("body", fields, state)?;
+
+        let binding = if let Some(expr) = self.get_field("binding", fields) {
+            match self.eval_expr(expr, state)? {
+                ParsedValue::Optional(None) | ParsedValue::None => None,
+                ParsedValue::Optional(Some(inner)) => match *inner {
+                    ParsedValue::Interned(s) => Some(s),
+                    ParsedValue::Text(s) => Some(state.intern(&s)),
+                    _ => None,
+                },
+                ParsedValue::Interned(s) => Some(s),
+                ParsedValue::Text(s) => Some(state.intern(&s)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let error_type = if let Some(expr) = self.get_field("error_type", fields) {
+            match self.eval_expr(expr, state)? {
+                ParsedValue::Interned(s) => Some(s),
+                ParsedValue::Text(s) => Some(state.intern(&s)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        let pattern = if let Some(name) = binding {
+            typed_node(
+                TypedPattern::Identifier {
+                    name,
+                    mutability: Mutability::Immutable,
+                },
+                Type::Any,
+                span,
+            )
+        } else if let Some(err) = error_type {
+            typed_node(
+                TypedPattern::Constructor {
+                    constructor: Type::Unresolved(err),
+                    pattern: Box::new(typed_node(TypedPattern::Wildcard, Type::Any, span)),
+                },
+                Type::Any,
+                span,
+            )
+        } else {
+            typed_node(TypedPattern::Wildcard, Type::Any, span)
+        };
+
+        Ok(ParsedValue::Catch(TypedCatch {
+            pattern: Box::new(pattern),
+            body,
         }))
     }
 
@@ -1277,16 +1408,30 @@ impl<'g> GrammarInterpreter<'g> {
         let pattern = match variant {
             "Identifier" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
-                let is_mutable = self.get_field_as_bool("is_mutable", fields, state).unwrap_or(false);
-                let mutability = if is_mutable { Mutability::Mutable } else { Mutability::Immutable };
+                let is_mutable = self
+                    .get_field_as_bool("is_mutable", fields, state)
+                    .unwrap_or(false);
+                let mutability = if is_mutable {
+                    Mutability::Mutable
+                } else {
+                    Mutability::Immutable
+                };
                 TypedPattern::Identifier { name, mutability }
             }
-            "Wildcard" => {
-                TypedPattern::Wildcard
-            }
+            "Wildcard" => TypedPattern::Wildcard,
             "Tuple" => {
                 let elements = self.get_field_as_pattern_list("elements", fields, state)?;
                 TypedPattern::Tuple(elements)
+            }
+            "Literal" => {
+                let value = if let Some(expr) = self.get_field("value", fields) {
+                    self.eval_expr(expr, state)?
+                } else if let Some((_, expr)) = fields.first() {
+                    self.eval_expr(expr, state)?
+                } else {
+                    return Err("Literal pattern requires a value".to_string());
+                };
+                TypedPattern::Literal(self.parsed_value_to_literal_pattern(value, state)?)
             }
             "Constructor" => {
                 let name = self.get_field_as_interned("name", fields, state)?;
@@ -1405,7 +1550,8 @@ impl<'g> GrammarInterpreter<'g> {
         let name = self.get_field_as_interned("name", fields, state)?;
         // TODO: Parse type_params when generic effect op support is needed
         let params = self.get_field_as_param_list("params", fields, state)?;
-        let return_type = self.get_field_optional("return_type", fields, state)?
+        let return_type = self
+            .get_field_optional("return_type", fields, state)?
             .unwrap_or(Type::Primitive(PrimitiveType::Unit));
 
         Ok(ParsedValue::EffectOp(zyntax_typed_ast::TypedEffectOp {
@@ -1427,18 +1573,21 @@ impl<'g> GrammarInterpreter<'g> {
         let op_name = self.get_field_as_interned("op_name", fields, state)?;
         // TODO: Parse type_params when generic handler impl support is needed
         let params = self.get_field_as_param_list("params", fields, state)?;
-        let return_type = self.get_field_optional("return_type", fields, state)?
+        let return_type = self
+            .get_field_optional("return_type", fields, state)?
             .unwrap_or(Type::Primitive(PrimitiveType::Unit));
         let body = self.get_field_optional_block("body", fields, state)?;
 
-        Ok(ParsedValue::EffectHandlerImpl(zyntax_typed_ast::TypedEffectHandlerImpl {
-            op_name,
-            type_params: vec![],
-            params,
-            return_type,
-            body,
-            span,
-        }))
+        Ok(ParsedValue::EffectHandlerImpl(
+            zyntax_typed_ast::TypedEffectHandlerImpl {
+                op_name,
+                type_params: vec![],
+                params,
+                return_type,
+                body,
+                span,
+            },
+        ))
     }
 
     /// Construct a TypedParameter (function parameter)
@@ -1449,7 +1598,8 @@ impl<'g> GrammarInterpreter<'g> {
         span: Span,
     ) -> Result<ParsedValue, String> {
         let name = self.get_field_as_interned("name", fields, state)?;
-        let ty = self.get_field_optional("ty", fields, state)?
+        let ty = self
+            .get_field_optional("ty", fields, state)?
             .unwrap_or(Type::Any);
 
         // Check for kind
@@ -1464,7 +1614,8 @@ impl<'g> GrammarInterpreter<'g> {
         };
 
         // Parse default_value if present
-        let default_value = self.get_field_optional_expr("default_value", fields, state)?
+        let default_value = self
+            .get_field_optional_expr("default_value", fields, state)?
             .map(|expr| Box::new(expr));
 
         Ok(ParsedValue::Parameter(TypedParameter {
@@ -1488,10 +1639,7 @@ impl<'g> GrammarInterpreter<'g> {
         let name = self.get_field_as_interned("name", fields, state)?;
         let ty = self.get_field_optional("ty", fields, state)?;
 
-        Ok(ParsedValue::LambdaParam(TypedLambdaParam {
-            name,
-            ty,
-        }))
+        Ok(ParsedValue::LambdaParam(TypedLambdaParam { name, ty }))
     }
 
     /// Get a field value as a Type
@@ -1517,34 +1665,31 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<Vec<Type>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
 
         match val {
-            ParsedValue::List(items) => {
-                items.into_iter()
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| match item {
+                    ParsedValue::Type(ty) => Ok(ty),
+                    other => Err(format!("expected Type, got {:?}", other)),
+                })
+                .collect(),
+            ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => items
+                    .into_iter()
                     .map(|item| match item {
                         ParsedValue::Type(ty) => Ok(ty),
                         other => Err(format!("expected Type, got {:?}", other)),
                     })
-                    .collect()
-            }
-            ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
-            ParsedValue::Optional(Some(inner)) => {
-                match *inner {
-                    ParsedValue::List(items) => {
-                        items.into_iter()
-                            .map(|item| match item {
-                                ParsedValue::Type(ty) => Ok(ty),
-                                other => Err(format!("expected Type, got {:?}", other)),
-                            })
-                            .collect()
-                    }
-                    ParsedValue::Type(ty) => Ok(vec![ty]),
-                    other => Err(format!("expected Type list, got {:?}", other)),
-                }
-            }
+                    .collect(),
+                ParsedValue::Type(ty) => Ok(vec![ty]),
+                other => Err(format!("expected Type list, got {:?}", other)),
+            },
             ParsedValue::Type(ty) => Ok(vec![ty]),
             other => Err(format!("field '{}' is not a type list: {:?}", name, other)),
         }
@@ -1564,7 +1709,8 @@ impl<'g> GrammarInterpreter<'g> {
 
         match val {
             ParsedValue::List(items) => {
-                let types: Result<Vec<Type>, String> = items.into_iter()
+                let types: Result<Vec<Type>, String> = items
+                    .into_iter()
                     .map(|item| match item {
                         ParsedValue::Type(ty) => Ok(ty),
                         other => Err(format!("expected Type, got {:?}", other)),
@@ -1573,21 +1719,20 @@ impl<'g> GrammarInterpreter<'g> {
                 Ok(Some(types?))
             }
             ParsedValue::Optional(None) | ParsedValue::None => Ok(None),
-            ParsedValue::Optional(Some(inner)) => {
-                match *inner {
-                    ParsedValue::List(items) => {
-                        let types: Result<Vec<Type>, String> = items.into_iter()
-                            .map(|item| match item {
-                                ParsedValue::Type(ty) => Ok(ty),
-                                other => Err(format!("expected Type, got {:?}", other)),
-                            })
-                            .collect();
-                        Ok(Some(types?))
-                    }
-                    ParsedValue::Type(ty) => Ok(Some(vec![ty])),
-                    other => Err(format!("expected Type list, got {:?}", other)),
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => {
+                    let types: Result<Vec<Type>, String> = items
+                        .into_iter()
+                        .map(|item| match item {
+                            ParsedValue::Type(ty) => Ok(ty),
+                            other => Err(format!("expected Type, got {:?}", other)),
+                        })
+                        .collect();
+                    Ok(Some(types?))
                 }
-            }
+                ParsedValue::Type(ty) => Ok(Some(vec![ty])),
+                other => Err(format!("expected Type list, got {:?}", other)),
+            },
             ParsedValue::Type(ty) => Ok(Some(vec![ty])),
             other => Err(format!("field '{}' is not a type list: {:?}", name, other)),
         }
@@ -1615,7 +1760,8 @@ impl<'g> GrammarInterpreter<'g> {
                     return Err("parse_int() requires exactly 1 argument".to_string());
                 }
                 let text = self.eval_expr_as_string(&args[0], state)?;
-                let value: i64 = text.parse()
+                let value: i64 = text
+                    .parse()
                     .map_err(|_| format!("cannot parse '{}' as integer", text))?;
                 Ok(ParsedValue::Int(value))
             }
@@ -1624,7 +1770,8 @@ impl<'g> GrammarInterpreter<'g> {
                     return Err("parse_float() requires exactly 1 argument".to_string());
                 }
                 let text = self.eval_expr_as_string(&args[0], state)?;
-                let value: f64 = text.parse()
+                let value: f64 = text
+                    .parse()
                     .map_err(|_| format!("cannot parse '{}' as float", text))?;
                 Ok(ParsedValue::Float(value))
             }
@@ -1645,7 +1792,8 @@ impl<'g> GrammarInterpreter<'g> {
                 // The text is bound to __text__ for atomic rules
                 if args.is_empty() {
                     // Return the captured text from atomic rule
-                    Ok(state.get_binding("__text__")
+                    Ok(state
+                        .get_binding("__text__")
                         .cloned()
                         .unwrap_or(ParsedValue::Text(String::new())))
                 } else {
@@ -1679,7 +1827,7 @@ impl<'g> GrammarInterpreter<'g> {
                         }
                     }
                     ParsedValue::Optional(None) => {} // Empty rest, just return [first]
-                    ParsedValue::None => {} // Empty rest
+                    ParsedValue::None => {}           // Empty rest
                     other => result.push(other),
                 }
                 Ok(ParsedValue::List(result))
@@ -1720,7 +1868,9 @@ impl<'g> GrammarInterpreter<'g> {
                 // Returns nested Binary expressions folded left-to-right
                 // e.g., fold_left_ops(a, [["+", b], ["-", c]]) -> Binary(Binary(a, +, b), -, c)
                 if args.len() != 2 {
-                    return Err("fold_left_ops() requires exactly 2 arguments (first, rest)".to_string());
+                    return Err(
+                        "fold_left_ops() requires exactly 2 arguments (first, rest)".to_string()
+                    );
                 }
                 let first = self.eval_expr(&args[0], state)?;
                 let rest = self.eval_expr(&args[1], state)?;
@@ -1729,12 +1879,10 @@ impl<'g> GrammarInterpreter<'g> {
                 let rest_list = match rest {
                     ParsedValue::List(items) => items,
                     ParsedValue::Optional(None) | ParsedValue::None => vec![],
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::List(items) => items,
-                            other => vec![other],
-                        }
-                    }
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => items,
+                        other => vec![other],
+                    },
                     other => vec![other],
                 };
 
@@ -1765,7 +1913,9 @@ impl<'g> GrammarInterpreter<'g> {
                     // Get operator string
                     let op_str = match op_val {
                         ParsedValue::Text(s) => s.clone(),
-                        ParsedValue::Interned(s) => s.resolve_global().unwrap_or_else(|| "+".to_string()),
+                        ParsedValue::Interned(s) => {
+                            s.resolve_global().unwrap_or_else(|| "+".to_string())
+                        }
                         other => {
                             log::warn!("[fold_left_ops] Unexpected operator value: {:?}", other);
                             "+".to_string()
@@ -1801,7 +1951,9 @@ impl<'g> GrammarInterpreter<'g> {
                 // suffixes: list of suffix operations, each with a "kind" field
                 // Returns the folded TypedExpression
                 if args.len() != 2 {
-                    return Err("fold_postfix() requires exactly 2 arguments (base, suffixes)".to_string());
+                    return Err(
+                        "fold_postfix() requires exactly 2 arguments (base, suffixes)".to_string(),
+                    );
                 }
                 let base = self.eval_expr(&args[0], state)?;
                 let suffixes = self.eval_expr(&args[1], state)?;
@@ -1810,12 +1962,10 @@ impl<'g> GrammarInterpreter<'g> {
                 let suffix_list = match suffixes {
                     ParsedValue::List(items) => items,
                     ParsedValue::Optional(None) | ParsedValue::None => vec![],
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::List(items) => items,
-                            other => vec![other],
-                        }
-                    }
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => items,
+                        other => vec![other],
+                    },
                     other => vec![other],
                 };
 
@@ -1837,7 +1987,9 @@ impl<'g> GrammarInterpreter<'g> {
                 // e.g., fold_concat(["a", "b", "c"]) -> concat(concat("a", "b"), "c")
                 // Used by f-string desugaring
                 if args.len() != 1 {
-                    return Err("fold_concat() requires exactly 1 argument (parts list)".to_string());
+                    return Err(
+                        "fold_concat() requires exactly 1 argument (parts list)".to_string()
+                    );
                 }
                 let parts = self.eval_expr(&args[0], state)?;
 
@@ -1845,12 +1997,10 @@ impl<'g> GrammarInterpreter<'g> {
                 let parts_list = match parts {
                     ParsedValue::List(items) => items,
                     ParsedValue::Optional(None) | ParsedValue::None => vec![],
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::List(items) => items,
-                            other => vec![other],
-                        }
-                    }
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => items,
+                        other => vec![other],
+                    },
                     other => vec![other],
                 };
 
@@ -1868,7 +2018,8 @@ impl<'g> GrammarInterpreter<'g> {
 
                 if parts_list.len() == 1 {
                     // Just return the single part as an expression
-                    return self.parsed_value_to_expr(parts_list.into_iter().next().unwrap(), state)
+                    return self
+                        .parsed_value_to_expr(parts_list.into_iter().next().unwrap(), state)
                         .map(|e| ParsedValue::Expression(Box::new(e)));
                 }
 
@@ -1918,8 +2069,7 @@ impl<'g> GrammarInterpreter<'g> {
                 match kind.as_str() {
                     "SuffixField" => {
                         // Field access: acc.field
-                        let field = fields.get("field")
-                            .ok_or("SuffixField missing 'field'")?;
+                        let field = fields.get("field").ok_or("SuffixField missing 'field'")?;
 
                         // Convert acc to TypedExpression
                         let acc_expr = self.parsed_value_to_expr(acc, state)?;
@@ -1928,7 +2078,12 @@ impl<'g> GrammarInterpreter<'g> {
                         let field_name = match field.as_ref() {
                             ParsedValue::Interned(s) => *s,
                             ParsedValue::Text(s) => state.intern(s),
-                            other => return Err(format!("SuffixField field must be interned, got {:?}", other)),
+                            other => {
+                                return Err(format!(
+                                    "SuffixField field must be interned, got {:?}",
+                                    other
+                                ))
+                            }
                         };
 
                         Ok(ParsedValue::Expression(Box::new(typed_node(
@@ -1942,7 +2097,8 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                     "SuffixMethod" => {
                         // Method call: acc.method(args)
-                        let method = fields.get("method")
+                        let method = fields
+                            .get("method")
                             .ok_or("SuffixMethod missing 'method'")?;
                         let args_val = fields.get("args");
 
@@ -1953,14 +2109,18 @@ impl<'g> GrammarInterpreter<'g> {
                         let method_name = match method.as_ref() {
                             ParsedValue::Interned(s) => *s,
                             ParsedValue::Text(s) => state.intern(s),
-                            other => return Err(format!("SuffixMethod method must be interned, got {:?}", other)),
+                            other => {
+                                return Err(format!(
+                                    "SuffixMethod method must be interned, got {:?}",
+                                    other
+                                ))
+                            }
                         };
 
                         // Get args as expression list
                         let args = match args_val {
-                            Some(expr_val) => {
-                                self.parsed_value_list_to_expr_vec(expr_val.as_ref().clone(), state)?
-                            }
+                            Some(expr_val) => self
+                                .parsed_value_list_to_expr_vec(expr_val.as_ref().clone(), state)?,
                             None => vec![],
                         };
 
@@ -1985,9 +2145,8 @@ impl<'g> GrammarInterpreter<'g> {
 
                         // Get args as expression list
                         let args = match args_val {
-                            Some(expr_val) => {
-                                self.parsed_value_list_to_expr_vec(expr_val.as_ref().clone(), state)?
-                            }
+                            Some(expr_val) => self
+                                .parsed_value_list_to_expr_vec(expr_val.as_ref().clone(), state)?,
                             None => vec![],
                         };
 
@@ -2004,14 +2163,14 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                     "SuffixIndex" => {
                         // Index access: acc[index]
-                        let index = fields.get("index")
-                            .ok_or("SuffixIndex missing 'index'")?;
+                        let index = fields.get("index").ok_or("SuffixIndex missing 'index'")?;
 
                         // Convert acc to TypedExpression
                         let acc_expr = self.parsed_value_to_expr(acc, state)?;
 
                         // Convert index to TypedExpression
-                        let index_expr = self.parsed_value_to_expr(index.as_ref().clone(), state)?;
+                        let index_expr =
+                            self.parsed_value_to_expr(index.as_ref().clone(), state)?;
 
                         Ok(ParsedValue::Expression(Box::new(typed_node(
                             TypedExpression::Index(TypedIndex {
@@ -2035,22 +2194,28 @@ impl<'g> GrammarInterpreter<'g> {
                         let start = match start_val {
                             Some(v) => match v.as_ref() {
                                 ParsedValue::None | ParsedValue::Optional(None) => None,
-                                other => Some(Box::new(self.parsed_value_to_expr(other.clone(), state)?)),
-                            }
+                                other => {
+                                    Some(Box::new(self.parsed_value_to_expr(other.clone(), state)?))
+                                }
+                            },
                             None => None,
                         };
                         let end = match end_val {
                             Some(v) => match v.as_ref() {
                                 ParsedValue::None | ParsedValue::Optional(None) => None,
-                                other => Some(Box::new(self.parsed_value_to_expr(other.clone(), state)?)),
-                            }
+                                other => {
+                                    Some(Box::new(self.parsed_value_to_expr(other.clone(), state)?))
+                                }
+                            },
                             None => None,
                         };
                         let step = match step_val {
                             Some(v) => match v.as_ref() {
                                 ParsedValue::None | ParsedValue::Optional(None) => None,
-                                other => Some(Box::new(self.parsed_value_to_expr(other.clone(), state)?)),
-                            }
+                                other => {
+                                    Some(Box::new(self.parsed_value_to_expr(other.clone(), state)?))
+                                }
+                            },
                             None => None,
                         };
 
@@ -2079,22 +2244,18 @@ impl<'g> GrammarInterpreter<'g> {
         state: &mut ParserState<'a>,
     ) -> Result<Vec<TypedNode<TypedExpression>>, String> {
         match val {
-            ParsedValue::List(items) => {
-                items.into_iter()
-                    .map(|item| self.parsed_value_to_expr(item, state))
-                    .collect()
-            }
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| self.parsed_value_to_expr(item, state))
+                .collect(),
             ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
-            ParsedValue::Optional(Some(inner)) => {
-                match *inner {
-                    ParsedValue::List(items) => {
-                        items.into_iter()
-                            .map(|item| self.parsed_value_to_expr(item, state))
-                            .collect()
-                    }
-                    other => Ok(vec![self.parsed_value_to_expr(other, state)?]),
-                }
-            }
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => items
+                    .into_iter()
+                    .map(|item| self.parsed_value_to_expr(item, state))
+                    .collect(),
+                other => Ok(vec![self.parsed_value_to_expr(other, state)?]),
+            },
             other => Ok(vec![self.parsed_value_to_expr(other, state)?]),
         }
     }
@@ -2110,11 +2271,12 @@ impl<'g> GrammarInterpreter<'g> {
                 // Handle special binding names
                 if name == "text" {
                     // 'text' refers to the captured text from an atomic rule (bound to __text__)
-                    return state.get_binding("__text__")
-                        .cloned()
-                        .ok_or_else(|| "binding 'text' not found (not in atomic rule?)".to_string());
+                    return state.get_binding("__text__").cloned().ok_or_else(|| {
+                        "binding 'text' not found (not in atomic rule?)".to_string()
+                    });
                 }
-                state.get_binding(name)
+                state
+                    .get_binding(name)
                     .cloned()
                     .ok_or_else(|| format!("binding '{}' not found", name))
             }
@@ -2122,7 +2284,8 @@ impl<'g> GrammarInterpreter<'g> {
             ExprIR::IntLit(i) => Ok(ParsedValue::Int(*i)),
             ExprIR::BoolLit(b) => Ok(ParsedValue::Bool(*b)),
             ExprIR::List(items) => {
-                let values: Result<Vec<_>, _> = items.iter()
+                let values: Result<Vec<_>, _> = items
+                    .iter()
                     .map(|item| self.eval_expr(item, state))
                     .collect();
                 Ok(ParsedValue::List(values?))
@@ -2131,28 +2294,28 @@ impl<'g> GrammarInterpreter<'g> {
                 let span = Span::new(0, 0); // Dummy span for helper calls
                 self.execute_helper_call(function, args, state, span)
             }
-            ExprIR::MethodCall { receiver, method, args } => {
+            ExprIR::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
                 let recv_val = self.eval_expr(receiver, state)?;
                 match method.as_str() {
-                    "unwrap_or_default" | "unwrap_or" => {
-                        match recv_val {
-                            ParsedValue::Optional(Some(inner)) => Ok(*inner),
-                            ParsedValue::Optional(None) => {
-                                if args.is_empty() {
-                                    Ok(ParsedValue::None)
-                                } else {
-                                    self.eval_expr(&args[0], state)
-                                }
+                    "unwrap_or_default" | "unwrap_or" => match recv_val {
+                        ParsedValue::Optional(Some(inner)) => Ok(*inner),
+                        ParsedValue::Optional(None) => {
+                            if args.is_empty() {
+                                Ok(ParsedValue::None)
+                            } else {
+                                self.eval_expr(&args[0], state)
                             }
-                            other => Ok(other),
                         }
-                    }
-                    "is_some" => {
-                        match recv_val {
-                            ParsedValue::Optional(opt) => Ok(ParsedValue::Bool(opt.is_some())),
-                            _ => Ok(ParsedValue::Bool(true)),
-                        }
-                    }
+                        other => Ok(other),
+                    },
+                    "is_some" => match recv_val {
+                        ParsedValue::Optional(opt) => Ok(ParsedValue::Bool(opt.is_some())),
+                        _ => Ok(ParsedValue::Bool(true)),
+                    },
                     _ => Err(format!("unknown method: {}", method)),
                 }
             }
@@ -2189,7 +2352,11 @@ impl<'g> GrammarInterpreter<'g> {
                 let span = Span::new(0, 0);
                 self.execute_construct(type_name, fields, state, span)
             }
-            ExprIR::EnumVariant { type_name, variant, value } => {
+            ExprIR::EnumVariant {
+                type_name,
+                variant,
+                value,
+            } => {
                 // Handle enum variants like Type::Named, Some(x), None, Box::new(x)
                 let span = Span::new(0, 0);
 
@@ -2215,7 +2382,9 @@ impl<'g> GrammarInterpreter<'g> {
                     // Variant without value
                     match (type_name.as_str(), variant.as_str()) {
                         (_, "None") => Ok(ParsedValue::Optional(None)),
-                        ("TypedVariantFields", "Unit") | (_, "Unit") if type_name == "TypedVariantFields" => {
+                        ("TypedVariantFields", "Unit") | (_, "Unit")
+                            if type_name == "TypedVariantFields" =>
+                        {
                             // Return a marker text that construct_variant can recognize
                             Ok(ParsedValue::Text("TypedVariantFields::Unit".to_string()))
                         }
@@ -2260,7 +2429,11 @@ impl<'g> GrammarInterpreter<'g> {
                     other => Ok(other),
                 }
             }
-            ExprIR::MapOption { optional, param, body } => {
+            ExprIR::MapOption {
+                optional,
+                param,
+                body,
+            } => {
                 let opt_val = self.eval_expr(optional, state)?;
                 match opt_val {
                     ParsedValue::Optional(Some(inner)) => {
@@ -2296,12 +2469,20 @@ impl<'g> GrammarInterpreter<'g> {
                     (ParsedValue::Int(a), "-", ParsedValue::Int(b)) => Ok(ParsedValue::Int(a - b)),
                     (ParsedValue::Int(a), "*", ParsedValue::Int(b)) => Ok(ParsedValue::Int(a * b)),
                     (ParsedValue::Int(a), "/", ParsedValue::Int(b)) => Ok(ParsedValue::Int(a / b)),
-                    (ParsedValue::Int(a), "==", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a == b)),
-                    (ParsedValue::Int(a), "!=", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a != b)),
+                    (ParsedValue::Int(a), "==", ParsedValue::Int(b)) => {
+                        Ok(ParsedValue::Bool(a == b))
+                    }
+                    (ParsedValue::Int(a), "!=", ParsedValue::Int(b)) => {
+                        Ok(ParsedValue::Bool(a != b))
+                    }
                     (ParsedValue::Int(a), "<", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a < b)),
                     (ParsedValue::Int(a), ">", ParsedValue::Int(b)) => Ok(ParsedValue::Bool(a > b)),
-                    (ParsedValue::Bool(a), "&&", ParsedValue::Bool(b)) => Ok(ParsedValue::Bool(a && b)),
-                    (ParsedValue::Bool(a), "||", ParsedValue::Bool(b)) => Ok(ParsedValue::Bool(a || b)),
+                    (ParsedValue::Bool(a), "&&", ParsedValue::Bool(b)) => {
+                        Ok(ParsedValue::Bool(a && b))
+                    }
+                    (ParsedValue::Bool(a), "||", ParsedValue::Bool(b)) => {
+                        Ok(ParsedValue::Bool(a || b))
+                    }
                     _ => Err(format!("unsupported binary operation: {}", op)),
                 }
             }
@@ -2338,12 +2519,17 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<zyntax_typed_ast::InternedString, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         match val {
             ParsedValue::Interned(s) => Ok(s),
             ParsedValue::Text(s) => Ok(state.intern(&s)),
+            ParsedValue::Expression(expr) => match expr.node {
+                TypedExpression::Literal(TypedLiteral::String(s)) => Ok(s),
+                _ => Err(format!("field '{}' is not a string/interned", name)),
+            },
             _ => Err(format!("field '{}' is not a string/interned", name)),
         }
     }
@@ -2354,7 +2540,8 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<String, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         self.eval_expr_as_string(expr, state)
     }
@@ -2365,12 +2552,15 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<i64, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         match val {
             ParsedValue::Int(i) => Ok(i),
-            ParsedValue::Text(s) => s.parse().map_err(|_| format!("cannot parse '{}' as int", s)),
+            ParsedValue::Text(s) => s
+                .parse()
+                .map_err(|_| format!("cannot parse '{}' as int", s)),
             _ => Err(format!("field '{}' is not an integer", name)),
         }
     }
@@ -2381,13 +2571,16 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<f64, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         match val {
             ParsedValue::Float(f) => Ok(f),
             ParsedValue::Int(i) => Ok(i as f64),
-            ParsedValue::Text(s) => s.parse().map_err(|_| format!("cannot parse '{}' as float", s)),
+            ParsedValue::Text(s) => s
+                .parse()
+                .map_err(|_| format!("cannot parse '{}' as float", s)),
             _ => Err(format!("field '{}' is not a float", name)),
         }
     }
@@ -2398,7 +2591,8 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<bool, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         match val {
@@ -2418,12 +2612,10 @@ impl<'g> GrammarInterpreter<'g> {
                 let val = self.eval_expr(expr, state)?;
                 match val {
                     ParsedValue::Optional(None) => Ok(None),
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::Type(t) => Ok(Some(t)),
-                            _ => Ok(None),
-                        }
-                    }
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::Type(t) => Ok(Some(t)),
+                        _ => Ok(None),
+                    },
                     ParsedValue::Type(t) => Ok(Some(t)),
                     ParsedValue::None => Ok(None),
                     _ => Ok(None),
@@ -2439,7 +2631,8 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<TypedNode<TypedExpression>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         self.parsed_value_to_expr(val, state)
@@ -2477,32 +2670,29 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<Vec<TypedNode<TypedExpression>>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
 
         match val {
-            ParsedValue::List(items) => {
-                items.into_iter()
-                    .map(|item| self.parsed_value_to_expr(item, state))
-                    .collect()
-            }
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| self.parsed_value_to_expr(item, state))
+                .collect(),
             // Handle optional fields that are None (e.g., empty argument lists)
             ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
             // Optional with a value - unwrap and process
-            ParsedValue::Optional(Some(inner)) => {
-                match *inner {
-                    ParsedValue::List(items) => {
-                        items.into_iter()
-                            .map(|item| self.parsed_value_to_expr(item, state))
-                            .collect()
-                    }
-                    other => {
-                        let e = self.parsed_value_to_expr(other, state)?;
-                        Ok(vec![e])
-                    }
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => items
+                    .into_iter()
+                    .map(|item| self.parsed_value_to_expr(item, state))
+                    .collect(),
+                other => {
+                    let e = self.parsed_value_to_expr(other, state)?;
+                    Ok(vec![e])
                 }
-            }
+            },
             other => {
                 // Single expression becomes a list of one
                 let e = self.parsed_value_to_expr(other, state)?;
@@ -2544,7 +2734,8 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<TypedBlock, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         self.parsed_value_to_block(val, state)
@@ -2556,7 +2747,8 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<TypedNode<TypedPattern>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         self.parsed_value_to_pattern(val, state)
@@ -2568,30 +2760,27 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<Vec<TypedNode<TypedPattern>>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
 
         match val {
-            ParsedValue::List(items) => {
-                items.into_iter()
-                    .map(|item| self.parsed_value_to_pattern(item, state))
-                    .collect()
-            }
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| self.parsed_value_to_pattern(item, state))
+                .collect(),
             ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
-            ParsedValue::Optional(Some(inner)) => {
-                match *inner {
-                    ParsedValue::List(items) => {
-                        items.into_iter()
-                            .map(|item| self.parsed_value_to_pattern(item, state))
-                            .collect()
-                    }
-                    other => {
-                        let p = self.parsed_value_to_pattern(other, state)?;
-                        Ok(vec![p])
-                    }
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => items
+                    .into_iter()
+                    .map(|item| self.parsed_value_to_pattern(item, state))
+                    .collect(),
+                other => {
+                    let p = self.parsed_value_to_pattern(other, state)?;
+                    Ok(vec![p])
                 }
-            }
+            },
             other => {
                 let p = self.parsed_value_to_pattern(other, state)?;
                 Ok(vec![p])
@@ -2652,16 +2841,16 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<Vec<TypedMatchArm>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
 
         match val {
-            ParsedValue::List(items) => {
-                items.into_iter()
-                    .map(|item| self.parsed_value_to_match_arm(item))
-                    .collect()
-            }
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| self.parsed_value_to_match_arm(item))
+                .collect(),
             ParsedValue::MatchArm(arm) => Ok(vec![arm]),
             _ => Err("cannot convert value to match arm list".to_string()),
         }
@@ -2674,22 +2863,58 @@ impl<'g> GrammarInterpreter<'g> {
         }
     }
 
+    fn get_field_as_catch_list<'a>(
+        &self,
+        name: &str,
+        fields: &[(String, ExprIR)],
+        state: &mut ParserState<'a>,
+    ) -> Result<Vec<TypedCatch>, String> {
+        let expr = self
+            .get_field(name, fields)
+            .ok_or_else(|| format!("missing field: {}", name))?;
+        let val = self.eval_expr(expr, state)?;
+
+        match val {
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| self.parsed_value_to_catch(item))
+                .collect(),
+            ParsedValue::Catch(catch_clause) => Ok(vec![catch_clause]),
+            ParsedValue::Optional(None) | ParsedValue::None => Ok(vec![]),
+            ParsedValue::Optional(Some(inner)) => match *inner {
+                ParsedValue::List(items) => items
+                    .into_iter()
+                    .map(|item| self.parsed_value_to_catch(item))
+                    .collect(),
+                other => Ok(vec![self.parsed_value_to_catch(other)?]),
+            },
+            other => Ok(vec![self.parsed_value_to_catch(other)?]),
+        }
+    }
+
+    fn parsed_value_to_catch(&self, val: ParsedValue) -> Result<TypedCatch, String> {
+        match val {
+            ParsedValue::Catch(catch_clause) => Ok(catch_clause),
+            _ => Err("cannot convert value to catch clause".to_string()),
+        }
+    }
+
     fn get_field_as_decl_list<'a>(
         &self,
         name: &str,
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<Vec<TypedNode<TypedDeclaration>>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
 
         match val {
-            ParsedValue::List(items) => {
-                items.into_iter()
-                    .map(|item| self.parsed_value_to_decl(item))
-                    .collect()
-            }
+            ParsedValue::List(items) => items
+                .into_iter()
+                .map(|item| self.parsed_value_to_decl(item))
+                .collect(),
             ParsedValue::Declaration(decl) => Ok(vec![*decl]),
             _ => Err(format!("field '{}' is not a declaration list", name)),
         }
@@ -2716,22 +2941,20 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::List(items) => {
-                                let mut result = Vec::new();
-                                for item in items {
-                                    let param = self.parsed_value_to_param(item, state)?;
-                                    result.push(param);
-                                }
-                                Ok(result)
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => {
+                            let mut result = Vec::new();
+                            for item in items {
+                                let param = self.parsed_value_to_param(item, state)?;
+                                result.push(param);
                             }
-                            other => {
-                                let param = self.parsed_value_to_param(other, state)?;
-                                Ok(vec![param])
-                            }
+                            Ok(result)
                         }
-                    }
+                        other => {
+                            let param = self.parsed_value_to_param(other, state)?;
+                            Ok(vec![param])
+                        }
+                    },
                     ParsedValue::Parameter(p) => Ok(vec![p]),
                     other => {
                         // Single item - try to convert
@@ -2864,22 +3087,20 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::List(items) => {
-                                let mut result = Vec::new();
-                                for item in items {
-                                    let variant = self.parsed_value_to_variant(item, state)?;
-                                    result.push(variant);
-                                }
-                                Ok(result)
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => {
+                            let mut result = Vec::new();
+                            for item in items {
+                                let variant = self.parsed_value_to_variant(item, state)?;
+                                result.push(variant);
                             }
-                            other => {
-                                let variant = self.parsed_value_to_variant(other, state)?;
-                                Ok(vec![variant])
-                            }
+                            Ok(result)
                         }
-                    }
+                        other => {
+                            let variant = self.parsed_value_to_variant(other, state)?;
+                            Ok(vec![variant])
+                        }
+                    },
                     ParsedValue::Variant(v) => Ok(vec![v]),
                     other => {
                         let variant = self.parsed_value_to_variant(other, state)?;
@@ -2942,22 +3163,20 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::List(items) => {
-                                let mut result = Vec::new();
-                                for item in items {
-                                    let field = self.parsed_value_to_field(item, state)?;
-                                    result.push(field);
-                                }
-                                Ok(result)
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => {
+                            let mut result = Vec::new();
+                            for item in items {
+                                let field = self.parsed_value_to_field(item, state)?;
+                                result.push(field);
                             }
-                            other => {
-                                let field = self.parsed_value_to_field(other, state)?;
-                                Ok(vec![field])
-                            }
+                            Ok(result)
                         }
-                    }
+                        other => {
+                            let field = self.parsed_value_to_field(other, state)?;
+                            Ok(vec![field])
+                        }
+                    },
                     ParsedValue::Field(f) => Ok(vec![f]),
                     other => {
                         let field = self.parsed_value_to_field(other, state)?;
@@ -2991,26 +3210,24 @@ impl<'g> GrammarInterpreter<'g> {
                     }
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
-                    ParsedValue::Optional(Some(inner)) => {
-                        match *inner {
-                            ParsedValue::List(items) => {
-                                let mut result = Vec::new();
-                                for item in items {
-                                    if let Ok(decl) = self.parsed_value_to_decl(item) {
-                                        result.push(decl);
-                                    }
+                    ParsedValue::Optional(Some(inner)) => match *inner {
+                        ParsedValue::List(items) => {
+                            let mut result = Vec::new();
+                            for item in items {
+                                if let Ok(decl) = self.parsed_value_to_decl(item) {
+                                    result.push(decl);
                                 }
-                                Ok(result)
                             }
-                            other => {
-                                if let Ok(decl) = self.parsed_value_to_decl(other) {
-                                    Ok(vec![decl])
-                                } else {
-                                    Ok(vec![])
-                                }
+                            Ok(result)
+                        }
+                        other => {
+                            if let Ok(decl) = self.parsed_value_to_decl(other) {
+                                Ok(vec![decl])
+                            } else {
+                                Ok(vec![])
                             }
                         }
-                    }
+                    },
                     ParsedValue::Declaration(d) => Ok(vec![*d]),
                     other => {
                         if let Ok(decl) = self.parsed_value_to_decl(other) {
@@ -3046,6 +3263,16 @@ impl<'g> GrammarInterpreter<'g> {
         let span = Span::new(0, 0);
         match val {
             ParsedValue::Expression(e) => Ok(*e),
+            ParsedValue::Literal(lit) => {
+                let ty = match &lit {
+                    TypedLiteral::Integer(_) => Type::Primitive(PrimitiveType::I64),
+                    TypedLiteral::Float(_) => Type::Primitive(PrimitiveType::F64),
+                    TypedLiteral::Bool(_) => Type::Primitive(PrimitiveType::Bool),
+                    TypedLiteral::String(_) => Type::Primitive(PrimitiveType::String),
+                    _ => Type::Any,
+                };
+                Ok(typed_node(TypedExpression::Literal(lit), ty, span))
+            }
             ParsedValue::Int(i) => Ok(typed_node(
                 TypedExpression::Literal(TypedLiteral::Integer(i as i128)),
                 Type::Primitive(PrimitiveType::I32),
@@ -3099,7 +3326,8 @@ impl<'g> GrammarInterpreter<'g> {
         match val {
             ParsedValue::Block(b) => Ok(b),
             ParsedValue::List(items) => {
-                let stmts: Result<Vec<_>, _> = items.into_iter()
+                let stmts: Result<Vec<_>, _> = items
+                    .into_iter()
                     .map(|item| self.parsed_value_to_stmt(item))
                     .collect();
                 Ok(TypedBlock {
@@ -3123,25 +3351,117 @@ impl<'g> GrammarInterpreter<'g> {
         }
     }
 
+    /// Convert ParsedValue to TypedLiteralPattern
+    fn parsed_value_to_literal_pattern<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedLiteralPattern, String> {
+        match val {
+            ParsedValue::Literal(lit) => Ok(match lit {
+                TypedLiteral::Integer(i) => TypedLiteralPattern::Integer(i),
+                TypedLiteral::Float(f) => TypedLiteralPattern::Float(f),
+                TypedLiteral::Bool(b) => TypedLiteralPattern::Bool(b),
+                TypedLiteral::String(s) => TypedLiteralPattern::String(s),
+                TypedLiteral::Char(c) => TypedLiteralPattern::Char(c),
+                TypedLiteral::Unit => TypedLiteralPattern::Unit,
+                TypedLiteral::Null => TypedLiteralPattern::Null,
+                TypedLiteral::Undefined => TypedLiteralPattern::Null,
+            }),
+            ParsedValue::Expression(expr) => match expr.node {
+                TypedExpression::Literal(lit) => {
+                    self.parsed_value_to_literal_pattern(ParsedValue::Literal(lit), state)
+                }
+                _ => Err("cannot convert non-literal expression to literal pattern".to_string()),
+            },
+            ParsedValue::Int(i) => Ok(TypedLiteralPattern::Integer(i as i128)),
+            ParsedValue::Float(f) => Ok(TypedLiteralPattern::Float(f)),
+            ParsedValue::Bool(b) => Ok(TypedLiteralPattern::Bool(b)),
+            ParsedValue::Text(s) => Ok(TypedLiteralPattern::String(state.intern(&s))),
+            ParsedValue::Interned(s) => Ok(TypedLiteralPattern::String(s)),
+            _ => Err("cannot convert value to literal pattern".to_string()),
+        }
+    }
+
     /// Convert ParsedValue to TypedPattern
-    fn parsed_value_to_pattern<'a>(&self, val: ParsedValue, _state: &mut ParserState<'a>) -> Result<TypedNode<TypedPattern>, String> {
+    fn parsed_value_to_pattern<'a>(
+        &self,
+        val: ParsedValue,
+        state: &mut ParserState<'a>,
+    ) -> Result<TypedNode<TypedPattern>, String> {
+        let span = Span::new(0, 0);
         match val {
             ParsedValue::Pattern(p) => Ok(*p),
+            value @ (ParsedValue::Literal(_)
+            | ParsedValue::Int(_)
+            | ParsedValue::Float(_)
+            | ParsedValue::Bool(_)
+            | ParsedValue::Text(_)
+            | ParsedValue::Interned(_)) => {
+                let lit = self.parsed_value_to_literal_pattern(value, state)?;
+                Ok(typed_node(TypedPattern::Literal(lit), Type::Any, span))
+            }
+            ParsedValue::Expression(expr) => match expr.node {
+                TypedExpression::Literal(lit) => {
+                    let lit_pat =
+                        self.parsed_value_to_literal_pattern(ParsedValue::Literal(lit), state)?;
+                    Ok(typed_node(TypedPattern::Literal(lit_pat), Type::Any, span))
+                }
+                _ => Err("cannot convert value to pattern".to_string()),
+            },
             _ => Err("cannot convert value to pattern".to_string()),
         }
     }
 
     /// Convert ParsedValue to TypedDeclaration
-    fn parsed_value_to_decl(&self, val: ParsedValue) -> Result<TypedNode<TypedDeclaration>, String> {
+    fn parsed_value_to_decl(
+        &self,
+        val: ParsedValue,
+    ) -> Result<TypedNode<TypedDeclaration>, String> {
         match val {
             ParsedValue::Declaration(d) => Ok(*d),
             ParsedValue::Statement(s) => {
-                // Try to extract declaration from expression statement
-                log::warn!("Got Statement when expecting Declaration, trying to convert. Statement: {:?}", s.node);
-                Err("cannot convert value to declaration".to_string())
+                // Top-level `let` bindings come through as TypedStatement::Let; promote them
+                // to TypedDeclaration::Variable so they integrate with the program's declaration list.
+                let span = s.span.clone();
+                let ty = s.ty.clone();
+                match s.node {
+                    TypedStatement::Let(let_stmt) => Ok(TypedNode {
+                        node: TypedDeclaration::Variable(TypedVariable {
+                            name: let_stmt.name,
+                            ty: let_stmt.ty,
+                            mutability: let_stmt.mutability,
+                            initializer: let_stmt.initializer,
+                            visibility: Visibility::Public,
+                        }),
+                        ty,
+                        span,
+                    }),
+                    TypedStatement::Expression(expr_stmt) => Ok(TypedNode {
+                        node: TypedDeclaration::Variable(TypedVariable {
+                            name: zyntax_typed_ast::InternedString::new_global("__expr"),
+                            ty: expr_stmt.ty.clone(),
+                            mutability: Mutability::Immutable,
+                            initializer: Some(expr_stmt),
+                            visibility: Visibility::Public,
+                        }),
+                        ty: Type::Never,
+                        span,
+                    }),
+                    other => {
+                        log::error!(
+                            "Cannot convert statement to declaration: {:?}",
+                            std::mem::discriminant(&other)
+                        );
+                        Err("cannot convert value to declaration".to_string())
+                    }
+                }
             }
             other => {
-                log::error!("Cannot convert value to declaration. Got: {:?}", std::mem::discriminant(&other));
+                log::error!(
+                    "Cannot convert value to declaration. Got: {:?}",
+                    std::mem::discriminant(&other)
+                );
                 Err("cannot convert value to declaration".to_string())
             }
         }
@@ -3154,7 +3474,8 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<TypedNode<TypedDeclaration>, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         self.parsed_value_to_decl(val)
@@ -3182,7 +3503,10 @@ impl<'g> GrammarInterpreter<'g> {
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
                     ParsedValue::Annotation(a) => Ok(vec![a]),
-                    other => Err(format!("field '{}' is not an annotation list: {:?}", name, other)),
+                    other => Err(format!(
+                        "field '{}' is not an annotation list: {:?}",
+                        name, other
+                    )),
                 }
             }
             None => Ok(vec![]),
@@ -3211,7 +3535,10 @@ impl<'g> GrammarInterpreter<'g> {
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
                     ParsedValue::AnnotationArg(a) => Ok(vec![a]),
-                    other => Err(format!("field '{}' is not an annotation arg list: {:?}", name, other)),
+                    other => Err(format!(
+                        "field '{}' is not an annotation arg list: {:?}",
+                        name, other
+                    )),
                 }
             }
             None => Ok(vec![]),
@@ -3225,7 +3552,8 @@ impl<'g> GrammarInterpreter<'g> {
         fields: &[(String, ExprIR)],
         state: &mut ParserState<'a>,
     ) -> Result<TypedAnnotationValue, String> {
-        let expr = self.get_field(name, fields)
+        let expr = self
+            .get_field(name, fields)
             .ok_or_else(|| format!("missing field: {}", name))?;
         let val = self.eval_expr(expr, state)?;
         self.parsed_value_to_annotation_value(val)
@@ -3253,7 +3581,10 @@ impl<'g> GrammarInterpreter<'g> {
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
                     ParsedValue::AnnotationValue(v) => Ok(vec![v]),
-                    other => Err(format!("field '{}' is not an annotation value list: {:?}", name, other)),
+                    other => Err(format!(
+                        "field '{}' is not an annotation value list: {:?}",
+                        name, other
+                    )),
                 }
             }
             None => Ok(vec![]),
@@ -3269,7 +3600,10 @@ impl<'g> GrammarInterpreter<'g> {
     }
 
     /// Convert ParsedValue to TypedAnnotationArg
-    fn parsed_value_to_annotation_arg(&self, val: ParsedValue) -> Result<TypedAnnotationArg, String> {
+    fn parsed_value_to_annotation_arg(
+        &self,
+        val: ParsedValue,
+    ) -> Result<TypedAnnotationArg, String> {
         match val {
             ParsedValue::AnnotationArg(a) => Ok(a),
             _ => Err(format!("cannot convert value to annotation arg: {:?}", val)),
@@ -3277,16 +3611,24 @@ impl<'g> GrammarInterpreter<'g> {
     }
 
     /// Convert ParsedValue to TypedAnnotationValue
-    fn parsed_value_to_annotation_value(&self, val: ParsedValue) -> Result<TypedAnnotationValue, String> {
+    fn parsed_value_to_annotation_value(
+        &self,
+        val: ParsedValue,
+    ) -> Result<TypedAnnotationValue, String> {
         match val {
             ParsedValue::AnnotationValue(v) => Ok(v),
             // Allow direct conversion from primitives
             ParsedValue::Int(i) => Ok(TypedAnnotationValue::Integer(i)),
             ParsedValue::Bool(b) => Ok(TypedAnnotationValue::Bool(b)),
             ParsedValue::Float(f) => Ok(TypedAnnotationValue::Float(f)),
-            ParsedValue::Text(s) => Ok(TypedAnnotationValue::String(zyntax_typed_ast::InternedString::new_global(&s))),
+            ParsedValue::Text(s) => Ok(TypedAnnotationValue::String(
+                zyntax_typed_ast::InternedString::new_global(&s),
+            )),
             ParsedValue::Interned(s) => Ok(TypedAnnotationValue::Identifier(s)),
-            _ => Err(format!("cannot convert value to annotation value: {:?}", val)),
+            _ => Err(format!(
+                "cannot convert value to annotation value: {:?}",
+                val
+            )),
         }
     }
 
@@ -3312,7 +3654,10 @@ impl<'g> GrammarInterpreter<'g> {
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
                     ParsedValue::EffectOp(op) => Ok(vec![op]),
-                    other => Err(format!("field '{}' is not an effect op list: {:?}", name, other)),
+                    other => Err(format!(
+                        "field '{}' is not an effect op list: {:?}",
+                        name, other
+                    )),
                 }
             }
             None => Ok(vec![]),
@@ -3341,7 +3686,10 @@ impl<'g> GrammarInterpreter<'g> {
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
                     ParsedValue::EffectHandlerImpl(impl_) => Ok(vec![impl_]),
-                    other => Err(format!("field '{}' is not a handler impl list: {:?}", name, other)),
+                    other => Err(format!(
+                        "field '{}' is not a handler impl list: {:?}",
+                        name, other
+                    )),
                 }
             }
             None => Ok(vec![]),
@@ -3415,15 +3763,15 @@ impl<'g> GrammarInterpreter<'g> {
                     ParsedValue::None => Ok(vec![]),
                     ParsedValue::Optional(None) => Ok(vec![]),
                     ParsedValue::LambdaParam(p) => Ok(vec![p]),
-                    ParsedValue::Interned(i) => Ok(vec![TypedLambdaParam {
-                        name: i,
-                        ty: None,
-                    }]),
+                    ParsedValue::Interned(i) => Ok(vec![TypedLambdaParam { name: i, ty: None }]),
                     ParsedValue::Text(s) => Ok(vec![TypedLambdaParam {
                         name: state.intern(&s),
                         ty: None,
                     }]),
-                    _ => Err(format!("field '{}' is not a lambda param list: {:?}", name, val)),
+                    _ => Err(format!(
+                        "field '{}' is not a lambda param list: {:?}",
+                        name, val
+                    )),
                 }
             }
             None => Ok(vec![]),
@@ -3438,10 +3786,7 @@ impl<'g> GrammarInterpreter<'g> {
     ) -> Result<TypedLambdaParam, String> {
         match val {
             ParsedValue::LambdaParam(p) => Ok(p),
-            ParsedValue::Interned(i) => Ok(TypedLambdaParam {
-                name: i,
-                ty: None,
-            }),
+            ParsedValue::Interned(i) => Ok(TypedLambdaParam { name: i, ty: None }),
             ParsedValue::Text(s) => Ok(TypedLambdaParam {
                 name: state.intern(&s),
                 ty: None,
@@ -3451,7 +3796,10 @@ impl<'g> GrammarInterpreter<'g> {
     }
 
     /// Convert ParsedValue to TypedEffectOp
-    fn parsed_value_to_effect_op(&self, val: ParsedValue) -> Result<zyntax_typed_ast::TypedEffectOp, String> {
+    fn parsed_value_to_effect_op(
+        &self,
+        val: ParsedValue,
+    ) -> Result<zyntax_typed_ast::TypedEffectOp, String> {
         match val {
             ParsedValue::EffectOp(op) => Ok(op),
             _ => Err(format!("cannot convert value to effect op: {:?}", val)),
@@ -3459,7 +3807,10 @@ impl<'g> GrammarInterpreter<'g> {
     }
 
     /// Convert ParsedValue to TypedEffectHandlerImpl
-    fn parsed_value_to_handler_impl(&self, val: ParsedValue) -> Result<zyntax_typed_ast::TypedEffectHandlerImpl, String> {
+    fn parsed_value_to_handler_impl(
+        &self,
+        val: ParsedValue,
+    ) -> Result<zyntax_typed_ast::TypedEffectHandlerImpl, String> {
         match val {
             ParsedValue::EffectHandlerImpl(impl_) => Ok(impl_),
             _ => Err(format!("cannot convert value to handler impl: {:?}", val)),
@@ -3472,6 +3823,7 @@ impl<'g> GrammarInterpreter<'g> {
             "+" | "Add" => Ok(zyntax_typed_ast::BinaryOp::Add),
             "-" | "Sub" => Ok(zyntax_typed_ast::BinaryOp::Sub),
             "*" | "Mul" => Ok(zyntax_typed_ast::BinaryOp::Mul),
+            "@" => Ok(zyntax_typed_ast::BinaryOp::Mul),
             "/" | "Div" => Ok(zyntax_typed_ast::BinaryOp::Div),
             "%" | "Rem" => Ok(zyntax_typed_ast::BinaryOp::Rem),
             "==" | "Eq" => Ok(zyntax_typed_ast::BinaryOp::Eq),
@@ -3513,45 +3865,35 @@ impl<'g> GrammarInterpreter<'g> {
         atomic: bool,
     ) -> ParseResult<ParsedValue> {
         match pattern {
-            PatternIR::Literal(s) => {
-                match state.match_literal(s) {
-                    ParseResult::Success(_, pos) => ParseResult::Success(ParsedValue::None, pos),
-                    ParseResult::Failure(e) => ParseResult::Failure(e),
-                }
-            }
+            PatternIR::Literal(s) => match state.match_literal(s) {
+                ParseResult::Success(_, pos) => ParseResult::Success(ParsedValue::None, pos),
+                ParseResult::Failure(e) => ParseResult::Failure(e),
+            },
 
-            PatternIR::CharClass(class) => {
-                self.execute_char_class(class, state)
-            }
+            PatternIR::CharClass(class) => self.execute_char_class(class, state),
 
             PatternIR::RuleRef { rule_name, binding } => {
                 // Check for built-in patterns first
                 let result = match rule_name.as_str() {
-                    "ASCII_DIGIT" => {
-                        state.match_char(|c| c.is_ascii_digit(), "digit")
-                            .map(|c| ParsedValue::Text(c.to_string()))
-                    }
-                    "ASCII_ALPHA" => {
-                        state.match_char(|c| c.is_ascii_alphabetic(), "letter")
-                            .map(|c| ParsedValue::Text(c.to_string()))
-                    }
-                    "ASCII_ALPHANUMERIC" => {
-                        state.match_char(|c| c.is_ascii_alphanumeric(), "alphanumeric")
-                            .map(|c| ParsedValue::Text(c.to_string()))
-                    }
-                    "ASCII_HEX_DIGIT" => {
-                        state.match_char(|c| c.is_ascii_hexdigit(), "hex digit")
-                            .map(|c| ParsedValue::Text(c.to_string()))
-                    }
-                    "ANY" => {
-                        match state.peek_char() {
-                            Some(c) => {
-                                state.advance();
-                                ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
-                            }
-                            None => state.fail("any character"),
+                    "ASCII_DIGIT" => state
+                        .match_char(|c| c.is_ascii_digit(), "digit")
+                        .map(|c| ParsedValue::Text(c.to_string())),
+                    "ASCII_ALPHA" => state
+                        .match_char(|c| c.is_ascii_alphabetic(), "letter")
+                        .map(|c| ParsedValue::Text(c.to_string())),
+                    "ASCII_ALPHANUMERIC" => state
+                        .match_char(|c| c.is_ascii_alphanumeric(), "alphanumeric")
+                        .map(|c| ParsedValue::Text(c.to_string())),
+                    "ASCII_HEX_DIGIT" => state
+                        .match_char(|c| c.is_ascii_hexdigit(), "hex digit")
+                        .map(|c| ParsedValue::Text(c.to_string())),
+                    "ANY" => match state.peek_char() {
+                        Some(c) => {
+                            state.advance();
+                            ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
                         }
-                    }
+                        None => state.fail("any character"),
+                    },
                     "SOI" => {
                         if state.pos() == 0 {
                             ParseResult::Success(ParsedValue::None, 0)
@@ -3644,7 +3986,10 @@ impl<'g> GrammarInterpreter<'g> {
 
                 // Extract binding name from inner pattern if it's a bound RuleRef
                 let inner_binding = match inner.as_ref() {
-                    PatternIR::RuleRef { binding: Some(name), .. } => Some(name.clone()),
+                    PatternIR::RuleRef {
+                        binding: Some(name),
+                        ..
+                    } => Some(name.clone()),
                     _ => None,
                 };
 
@@ -3665,12 +4010,20 @@ impl<'g> GrammarInterpreter<'g> {
                 }
             }
 
-            PatternIR::Repeat { pattern, min, max, separator } => {
+            PatternIR::Repeat {
+                pattern,
+                min,
+                max,
+                separator,
+            } => {
                 let mut items = Vec::new();
 
                 // Extract binding name from inner pattern if it's a bound RuleRef
                 let inner_binding = match pattern.as_ref() {
-                    PatternIR::RuleRef { binding: Some(name), .. } => Some(name.clone()),
+                    PatternIR::RuleRef {
+                        binding: Some(name),
+                        ..
+                    } => Some(name.clone()),
                     _ => None,
                 };
 
@@ -3741,15 +4094,17 @@ impl<'g> GrammarInterpreter<'g> {
 
                 // Check min
                 if items.len() < *min {
-                    return state.fail(&format!("expected at least {} items, got {}", min, items.len()));
+                    return state.fail(&format!(
+                        "expected at least {} items, got {}",
+                        min,
+                        items.len()
+                    ));
                 }
 
                 // Set accumulated bindings as lists
                 // Even if empty, we need to set the binding so actions can reference it
                 if let Some(ref bind_name) = inner_binding {
-                    let values = accumulated_bindings
-                        .remove(bind_name)
-                        .unwrap_or_default();
+                    let values = accumulated_bindings.remove(bind_name).unwrap_or_default();
                     state.set_binding(bind_name, ParsedValue::List(values));
                 }
                 // Set any remaining bindings (shouldn't normally happen, but for safety)
@@ -3770,7 +4125,9 @@ impl<'g> GrammarInterpreter<'g> {
                 state.restore_bindings(saved_bindings);
 
                 match result {
-                    ParseResult::Success(_, _) => ParseResult::Success(ParsedValue::None, start_pos),
+                    ParseResult::Success(_, _) => {
+                        ParseResult::Success(ParsedValue::None, start_pos)
+                    }
                     ParseResult::Failure(e) => ParseResult::Failure(e),
                 }
             }
@@ -3790,15 +4147,13 @@ impl<'g> GrammarInterpreter<'g> {
                 }
             }
 
-            PatternIR::Any => {
-                match state.peek_char() {
-                    Some(c) => {
-                        state.advance();
-                        ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
-                    }
-                    None => state.fail("any character"),
+            PatternIR::Any => match state.peek_char() {
+                Some(c) => {
+                    state.advance();
+                    ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
                 }
-            }
+                None => state.fail("any character"),
+            },
 
             PatternIR::StartOfInput => {
                 if state.pos() == 0 {
@@ -3830,25 +4185,21 @@ impl<'g> GrammarInterpreter<'g> {
         state: &mut ParserState<'a>,
     ) -> ParseResult<ParsedValue> {
         match class {
-            CharClass::Single(expected) => {
-                match state.peek_char() {
-                    Some(c) if c == *expected => {
-                        state.advance();
-                        ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
-                    }
-                    _ => state.fail(&format!("'{}'", expected)),
+            CharClass::Single(expected) => match state.peek_char() {
+                Some(c) if c == *expected => {
+                    state.advance();
+                    ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
                 }
-            }
+                _ => state.fail(&format!("'{}'", expected)),
+            },
 
-            CharClass::Range(start, end) => {
-                match state.peek_char() {
-                    Some(c) if c >= *start && c <= *end => {
-                        state.advance();
-                        ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
-                    }
-                    _ => state.fail(&format!("'{}'..'{}'", start, end)),
+            CharClass::Range(start, end) => match state.peek_char() {
+                Some(c) if c >= *start && c <= *end => {
+                    state.advance();
+                    ParseResult::Success(ParsedValue::Text(c.to_string()), state.pos())
                 }
-            }
+                _ => state.fail(&format!("'{}'..'{}'", start, end)),
+            },
 
             CharClass::Builtin(name) => {
                 let pred: Box<dyn Fn(char) -> bool> = match name.as_str() {
@@ -3915,8 +4266,8 @@ impl<'g> GrammarInterpreter<'g> {
 mod tests {
     use super::*;
     use crate::grammar::parser::parse_grammar;
-    use zyntax_typed_ast::TypedASTBuilder;
     use zyntax_typed_ast::type_registry::TypeRegistry;
+    use zyntax_typed_ast::TypedASTBuilder;
 
     #[test]
     fn test_interpret_literal() {

@@ -382,12 +382,11 @@ module_decl = { "module" ~ name:identifier }
 
 // config { device: "cpu", precision: "float32", batch_size: 32 }
 config_block = { "config" ~ "{" ~ config_entries ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "config", "args": {
-              "entries": "$1"
-          }}
-      ]
+  -> TypedDeclaration::Variable {
+      name: intern("__config"),
+      type_annotation: None,
+      initializer: None,
+      is_mutable: false,
   }
 
 config_entries = { config_entry ~ ("," ~ config_entry)* ~ ","? }
@@ -395,31 +394,20 @@ config_entries = { config_entry ~ ("," ~ config_entry)* ~ ","? }
       "get_all_children": true
   }
 
-config_entry = { identifier ~ ":" ~ expr }
-  -> TypedExpression {
-      "commands": [
-          { "define": "config_entry", "args": {
-              "key": "$1",
-              "value": "$2"
-          }}
-      ]
-  }
+config_entry = { key:identifier ~ ":" ~ value:expr }
+  -> value
 
 // ============================================================================
 // Pipeline Definition
 // ============================================================================
 
 // pipeline image_search(query: text, top_k: int) -> list { ... }
-pipeline_def = { "pipeline" ~ identifier ~ "(" ~ fn_params? ~ ")" ~ ("->" ~ type_expr)? ~ block }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "pipeline", "args": {
-              "name": "$1",
-              "params": "$2",
-              "return_type": "$3",
-              "body": "$4"
-          }}
-      ]
+pipeline_def = { "pipeline" ~ name:identifier ~ "(" ~ params:fn_params? ~ ")" ~ ("->" ~ type_expr)? ~ body:block }
+  -> TypedDeclaration::Function {
+      name: intern(name),
+      params: params,
+      return_type: Type::Unit,
+      body: Some(body),
   }
 
 // ============================================================================
@@ -613,30 +601,25 @@ handler_impl = { "def" ~ name:identifier ~ type_params:type_params? ~ "(" ~ para
 
 // render photo
 // render chart(data) { type: "line", title: "My Chart" }
-render_stmt = { render_with_options | render_simple }
-  -> TypedDeclaration {
-      "get_child": { "index": 0 }
-  }
+render_stmt = { decl:render_with_options | decl:render_simple }
+  -> decl
 
 // render photo { title: "Original Image", width: 400 }
-render_with_options = { "render" ~ expr ~ "{" ~ config_entries ~ "}" }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "render", "args": {
-              "expr": "$1",
-              "options": "$2"
-          }}
-      ]
+render_with_options = { "render" ~ value:expr ~ "{" ~ config_entries ~ "}" }
+  -> TypedDeclaration::Variable {
+      name: intern("__render"),
+      type_annotation: None,
+      initializer: Some(value),
+      is_mutable: false,
   }
 
 // render photo
-render_simple = { "render" ~ expr }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "render", "args": {
-              "expr": "$1"
-          }}
-      ]
+render_simple = { "render" ~ value:expr }
+  -> TypedDeclaration::Variable {
+      name: intern("__render"),
+      type_annotation: None,
+      initializer: Some(value),
+      is_mutable: false,
   }
 
 // ============================================================================
@@ -644,14 +627,12 @@ render_simple = { "render" ~ expr }
 // ============================================================================
 
 // stream sensor_data |> window(100) |> sink(alert_system)
-stream_stmt = { "stream" ~ identifier ~ ("|>" ~ pipe_call)+ }
-  -> TypedDeclaration {
-      "commands": [
-          { "define": "stream", "args": {
-              "source": "$1",
-              "pipeline": "$2"
-          }}
-      ]
+stream_stmt = { "stream" ~ source:identifier ~ ("|>" ~ pipe_call)+ }
+  -> TypedDeclaration::Variable {
+      name: intern("__stream"),
+      type_annotation: None,
+      initializer: Some(TypedExpression::Variable { name: intern(source) }),
+      is_mutable: false,
   }
 
 // ============================================================================
@@ -2126,23 +2107,17 @@ block = { "{" ~ stmts:statement* ~ "}" }
 // Used ONLY for top-level function definitions where greediness is acceptable
 // Note: PEG grammars don't track indentation, so this consumes all remaining statements
 // This works for `fn main(): ...` but NOT for control flow inside functions
-indent_block = { statement+ }
+indent_block = { statements:statement+ }
   -> TypedBlock {
-      "get_all_children": true,
-      "define": "block",
-      "args": { "statements": "$result" }
+      statements: statements,
   }
 
 // Expression block (for colon-based method syntax)
 // Wraps a single expression as a block with one expression statement
 // Used in impl methods: fn getter(self) -> T: self.field
-expr_block = { expr }
+expr_block = { value:expr }
   -> TypedBlock {
-      "commands": [
-          { "define": "expr_block", "args": {
-              "expr": "$1"
-          }}
-      ]
+      statements: [TypedStatement::Expression { expr: value }],
   }
 
 // ============================================================================
@@ -2525,14 +2500,10 @@ import_modifier_expr = { "import" ~ loader:identifier ~ "(" ~ path:string_litera
 // ============================================================================
 
 // model("bert.onnx") { input: text, output: Embedding }
-model_config_expr = { "model" ~ "(" ~ string_literal ~ ")" ~ "{" ~ config_entries ~ "}" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "model_config", "args": {
-              "path": "$1",
-              "config": "$2"
-          }}
-      ]
+model_config_expr = { "model" ~ "(" ~ path:string_literal ~ ")" ~ _config:raw_brace_block }
+  -> TypedExpression::Call {
+      callee: Box::new(TypedExpression::Variable { name: intern("model") }),
+      args: [path],
   }
 
 // ============================================================================
@@ -2540,15 +2511,15 @@ model_config_expr = { "model" ~ "(" ~ string_literal ~ ")" ~ "{" ~ config_entrie
 // ============================================================================
 
 // compute(tensor) { @kernel elementwise for i in 0..len { out[i] = x[i] * 2.0 } }
-compute_expr = { "compute" ~ "(" ~ call_args ~ ")" ~ "{" ~ compute_body ~ "}" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "compute", "args": {
-              "args": "$1",
-              "body": "$2"
-          }}
-      ]
+compute_expr = { "compute" ~ "(" ~ args:call_args ~ ")" ~ _body:raw_brace_block }
+  -> TypedExpression::Call {
+      callee: Box::new(TypedExpression::Variable { name: intern("compute") }),
+      args: args,
   }
+
+// Permissive brace block used by syntax sugar forms that only need token-level parsing.
+raw_brace_block = { "{" ~ raw_brace_item* ~ "}" }
+raw_brace_item = { raw_brace_block | !("{" | "}") ~ ANY }
 
 // Compute body can have decorators and statements
 compute_body = { (decorator | statement)* }
@@ -2587,14 +2558,10 @@ var_expr = { name:identifier }
 // Tensor literal: tensor([1.0, 2.0, 3.0])
 // Shape inference: tensor([[1, 2], [3, 4]]) -> shape [2, 2]
 // Uses standard call pattern - zyntax_embed handles builtin resolution
-tensor_literal = { "tensor" ~ "(" ~ array_literal ~ ")" }
-  -> TypedExpression {
-      "commands": [
-          { "define": "call", "args": {
-              "callee": { "define": "variable", "args": { "name": "tensor_from_array" } },
-              "args": ["$1"]
-          }}
-      ]
+tensor_literal = { "tensor" ~ "(" ~ value:array_literal ~ ")" }
+  -> TypedExpression::Call {
+      callee: Box::new(TypedExpression::Variable { name: intern("tensor_from_array") }),
+      args: [value],
   }
 
 // ============================================================================
@@ -2661,7 +2628,13 @@ array_element = { e:array_literal | e:expr }
 // ============================================================================
 
 // Float: 3.14, -2.5, 1e-3
-float_literal = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)? }
+float_literal = @{
+    "-"? ~ ASCII_DIGIT+ ~
+    (
+        "." ~ ASCII_DIGIT+ ~ (("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+)?
+      | ("e" | "E") ~ ("+" | "-")? ~ ASCII_DIGIT+
+    )
+}
   -> TypedExpression::FloatLiteral { value: parse_float(text()) }
 
 // Suffixed literal: 1000ms, 5s, 3ns (abstract type suffix)
@@ -2737,14 +2710,14 @@ string_literal = @{ triple_quoted_string | regular_string }
   -> TypedExpression::StringLiteral { value: text() }
 
 // Triple-quoted string for multiline/docstrings
-triple_quoted_string = { "\"\"\"" ~ triple_string_inner* ~ "\"\"\"" }
+triple_quoted_string = @{ "\"\"\"" ~ triple_string_inner* ~ "\"\"\"" }
 
-triple_string_inner = { !("\"\"\"") ~ ANY }
+triple_string_inner = @{ !("\"\"\"") ~ ANY }
 
 // Regular double-quoted string
-regular_string = { "\"" ~ string_inner* ~ "\"" }
+regular_string = @{ "\"" ~ string_inner* ~ "\"" }
 
-string_inner = { !("\"" | "\\") ~ ANY | "\\" ~ ANY }
+string_inner = @{ !("\"" | "\\") ~ ANY | "\\" ~ ANY }
 
 // Boolean: true, false
 bool_literal = { "true" | "false" }

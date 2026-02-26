@@ -6,18 +6,19 @@
 //! - Type registry for type construction
 //! - Packrat memoization cache
 
+use super::memo::{MemoCache, MemoEntry, MemoKey};
 use std::collections::HashMap;
+use zyntax_typed_ast::typed_ast::TypedCatch;
 use zyntax_typed_ast::{
-    TypedASTBuilder, Span, InternedString,
-    type_registry::{Type, TypeRegistry, PrimitiveType},
+    type_registry::{PrimitiveType, Type, TypeRegistry},
+    InternedString, Span, TypedASTBuilder,
 };
-use super::memo::{MemoKey, MemoEntry, MemoCache};
 
 /// Result of a parse attempt
 #[derive(Debug, Clone)]
 pub enum ParseResult<T> {
     /// Parse succeeded with value
-    Success(T, usize),  // (value, new_position)
+    Success(T, usize), // (value, new_position)
     /// Parse failed (can backtrack)
     Failure(ParseFailure),
 }
@@ -169,6 +170,8 @@ pub enum ParsedValue {
     LambdaParam(zyntax_typed_ast::TypedLambdaParam),
     /// A match arm (pattern -> body)
     MatchArm(zyntax_typed_ast::TypedMatchArm),
+    /// A catch clause for try/catch statements
+    Catch(TypedCatch),
 }
 
 /// Handle to an AST node (opaque, managed by builder)
@@ -250,7 +253,8 @@ impl<'a> ParserState<'a> {
     /// Update line/column after position change
     fn update_line_column(&mut self) {
         // Binary search for the line
-        let line_idx = self.line_starts
+        let line_idx = self
+            .line_starts
             .partition_point(|&start| start <= self.pos)
             .saturating_sub(1);
 
@@ -354,7 +358,12 @@ impl<'a> ParserState<'a> {
             self.furthest_expected.push(expected.to_string());
         }
 
-        ParseResult::Failure(ParseFailure::new(expected, self.pos, self.line, self.column))
+        ParseResult::Failure(ParseFailure::new(
+            expected,
+            self.pos,
+            self.line,
+            self.column,
+        ))
     }
 
     /// Get the furthest error information
@@ -374,7 +383,8 @@ impl<'a> ParserState<'a> {
     }
 
     fn column_for_pos(&self, pos: usize) -> usize {
-        let line_idx = self.line_starts
+        let line_idx = self
+            .line_starts
             .partition_point(|&start| start <= pos)
             .saturating_sub(1);
         pos - self.line_starts[line_idx] + 1
@@ -386,12 +396,21 @@ impl<'a> ParserState<'a> {
 
     /// Check memo cache for a rule at current position
     pub fn check_memo(&self, rule_id: usize) -> Option<&MemoEntry> {
-        self.memo.get(MemoKey { pos: self.pos, rule_id })
+        self.memo.get(MemoKey {
+            pos: self.pos,
+            rule_id,
+        })
     }
 
     /// Store result in memo cache at current position
     pub fn store_memo(&mut self, rule_id: usize, entry: MemoEntry) {
-        self.memo.insert(MemoKey { pos: self.pos, rule_id }, entry);
+        self.memo.insert(
+            MemoKey {
+                pos: self.pos,
+                rule_id,
+            },
+            entry,
+        );
     }
 
     /// Store result in memo cache at a specific position (use start_pos after rule completes)
@@ -541,8 +560,8 @@ impl<'a> ParserState<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zyntax_typed_ast::TypedASTBuilder;
     use zyntax_typed_ast::type_registry::TypeRegistry;
+    use zyntax_typed_ast::TypedASTBuilder;
 
     #[test]
     fn test_position_tracking() {

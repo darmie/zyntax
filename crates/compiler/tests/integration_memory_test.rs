@@ -1,9 +1,9 @@
 use zyntax_compiler::cranelift_backend::CraneliftBackend;
 use zyntax_compiler::hir::{
-    HirConstant, HirFunction, HirFunctionSignature, HirId, HirInstruction, HirParam,
-    HirTerminator, HirType, HirValueKind, ParamAttributes,
+    HirConstant, HirFunction, HirFunctionSignature, HirId, HirInstruction, HirParam, HirTerminator,
+    HirType, HirValueKind, ParamAttributes,
 };
-use zyntax_typed_ast::{InternedString, arena::AstArena};
+use zyntax_typed_ast::{arena::AstArena, InternedString};
 
 /// Helper to create an interned string for tests
 fn create_test_string(s: &str) -> InternedString {
@@ -14,13 +14,14 @@ fn create_test_string(s: &str) -> InternedString {
 /// Compile a HIR function and return the backend + function pointer
 fn compile_and_get_ptr(func: HirFunction) -> (CraneliftBackend, Option<*const u8>) {
     let func_id = func.id;
-    let mut backend = CraneliftBackend::new()
-        .expect("Failed to create Cranelift backend");
-    backend.compile_function(func_id, &func)
+    let mut backend = CraneliftBackend::new().expect("Failed to create Cranelift backend");
+    backend
+        .compile_function(func_id, &func)
         .expect("Failed to compile function");
 
     // Manually finalize and get function pointer
-    backend.finalize_definitions()
+    backend
+        .finalize_definitions()
         .expect("Failed to finalize definitions");
 
     let func_ptr = backend.get_function_ptr(func_id);
@@ -60,7 +61,10 @@ fn test_memory_roundtrip_execution() {
     let param_x = func.create_value(HirType::I32, HirValueKind::Parameter(0));
 
     // Alloca i32
-    let ptr = func.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
+    let ptr = func.create_value(
+        HirType::Ptr(Box::new(HirType::I32)),
+        HirValueKind::Instruction,
+    );
     let alloca = HirInstruction::Alloca {
         result: ptr,
         ty: HirType::I32,
@@ -90,7 +94,9 @@ fn test_memory_roundtrip_execution() {
     block.add_instruction(alloca);
     block.add_instruction(store);
     block.add_instruction(load);
-    block.set_terminator(HirTerminator::Return { values: vec![result] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![result],
+    });
 
     let (_backend, func_ptr) = compile_and_get_ptr(func);
     let func_ptr = func_ptr.expect("Failed to get function pointer");
@@ -139,7 +145,10 @@ fn test_memory_i64_execution() {
     let param_x = func.create_value(HirType::I64, HirValueKind::Parameter(0));
 
     // Alloca i64
-    let ptr = func.create_value(HirType::Ptr(Box::new(HirType::I64)), HirValueKind::Instruction);
+    let ptr = func.create_value(
+        HirType::Ptr(Box::new(HirType::I64)),
+        HirValueKind::Instruction,
+    );
     let alloca = HirInstruction::Alloca {
         result: ptr,
         ty: HirType::I64,
@@ -169,7 +178,9 @@ fn test_memory_i64_execution() {
     block.add_instruction(alloca);
     block.add_instruction(store);
     block.add_instruction(load);
-    block.set_terminator(HirTerminator::Return { values: vec![result] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![result],
+    });
 
     let (_backend, func_ptr) = compile_and_get_ptr(func);
     let func_ptr = func_ptr.expect("Failed to get function pointer");
@@ -218,7 +229,10 @@ fn test_memory_f64_execution() {
     let param_x = func.create_value(HirType::F64, HirValueKind::Parameter(0));
 
     // Alloca f64
-    let ptr = func.create_value(HirType::Ptr(Box::new(HirType::F64)), HirValueKind::Instruction);
+    let ptr = func.create_value(
+        HirType::Ptr(Box::new(HirType::F64)),
+        HirValueKind::Instruction,
+    );
     let alloca = HirInstruction::Alloca {
         result: ptr,
         ty: HirType::F64,
@@ -248,7 +262,9 @@ fn test_memory_f64_execution() {
     block.add_instruction(alloca);
     block.add_instruction(store);
     block.add_instruction(load);
-    block.set_terminator(HirTerminator::Return { values: vec![result] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![result],
+    });
 
     let (_backend, func_ptr) = compile_and_get_ptr(func);
     let func_ptr = func_ptr.expect("Failed to get function pointer");
@@ -257,7 +273,7 @@ fn test_memory_f64_execution() {
     let func_typed: extern "C" fn(f64) -> f64 = unsafe { std::mem::transmute(func_ptr) };
 
     // Test with various values
-    assert_eq!(func_typed(3.14159), 3.14159);
+    assert_eq!(func_typed(std::f64::consts::PI), std::f64::consts::PI);
     assert_eq!(func_typed(0.0), 0.0);
     assert_eq!(func_typed(-123.456), -123.456);
     assert_eq!(func_typed(f64::MAX), f64::MAX);
@@ -309,7 +325,10 @@ fn test_multiple_allocations_execution() {
     let param_b = func.create_value(HirType::I32, HirValueKind::Parameter(1));
 
     // Alloca for a
-    let ptr_a = func.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
+    let ptr_a = func.create_value(
+        HirType::Ptr(Box::new(HirType::I32)),
+        HirValueKind::Instruction,
+    );
     let alloca_a = HirInstruction::Alloca {
         result: ptr_a,
         ty: HirType::I32,
@@ -318,7 +337,10 @@ fn test_multiple_allocations_execution() {
     };
 
     // Alloca for b
-    let ptr_b = func.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
+    let ptr_b = func.create_value(
+        HirType::Ptr(Box::new(HirType::I32)),
+        HirValueKind::Instruction,
+    );
     let alloca_b = HirInstruction::Alloca {
         result: ptr_b,
         ty: HirType::I32,
@@ -431,7 +453,10 @@ fn test_memory_update_execution() {
     let param_x = func.create_value(HirType::I32, HirValueKind::Parameter(0));
 
     // Alloca i32
-    let ptr = func.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
+    let ptr = func.create_value(
+        HirType::Ptr(Box::new(HirType::I32)),
+        HirValueKind::Instruction,
+    );
     let alloca = HirInstruction::Alloca {
         result: ptr,
         ty: HirType::I32,
@@ -493,7 +518,9 @@ fn test_memory_update_execution() {
     block.add_instruction(add);
     block.add_instruction(store2);
     block.add_instruction(load2);
-    block.set_terminator(HirTerminator::Return { values: vec![result] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![result],
+    });
 
     let (_backend, func_ptr) = compile_and_get_ptr(func);
     let func_ptr = func_ptr.expect("Failed to get function pointer");
