@@ -238,6 +238,12 @@ impl CraneliftBackend {
 
     /// Compile a HIR module to native code
     pub fn compile_module(&mut self, module: &HirModule) -> CompilerResult<()> {
+        // Dump HIR if ZYNTAX_DUMP_HIR is set
+        if std::env::var("ZYNTAX_DUMP_HIR").is_ok() {
+            let dump = crate::hir_dump::dump_module(module);
+            eprintln!("{}", dump);
+        }
+
         // Process globals first (including vtables)
         for (id, global) in &module.globals {
             self.compile_global(*id, global)?;
@@ -880,6 +886,7 @@ impl CraneliftBackend {
                                     }
                                 }
                                 // Comparisons - use operand type (not result type) to determine signed/unsigned
+                                // Comparisons always return bool (i8) - never uextend
                                 BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                                     // Get operand type from left value, not result type
                                     let operand_ty = function.values.get(left)
@@ -894,16 +901,8 @@ impl CraneliftBackend {
                                         BinaryOp::Ge => if operand_ty.is_signed() { IntCC::SignedGreaterThanOrEqual } else { IntCC::UnsignedGreaterThanOrEqual },
                                         _ => unreachable!(),
                                     };
-                                    let cmp = builder.ins().icmp(cc, lhs, rhs);
-                                    if let Some(result_val) = function.values.get(result) {
-                                        if matches!(result_val.ty, HirType::Bool) {
-                                            cmp
-                                        } else {
-                                            builder.ins().uextend(types::I32, cmp)
-                                        }
-                                    } else {
-                                        cmp
-                                    }
+                                    // icmp always returns i8 (bool) - no extension needed
+                                    builder.ins().icmp(cc, lhs, rhs)
                                 }
                                 BinaryOp::FAdd => builder.ins().fadd(lhs, rhs),
                                 BinaryOp::FSub => builder.ins().fsub(lhs, rhs),
@@ -913,6 +912,7 @@ impl CraneliftBackend {
                                     // TODO: Re-implement fmod import in multi-block context
                                     builder.ins().f64const(0.0)
                                 }
+                                // Float comparisons also always return bool (i8)
                                 BinaryOp::FEq | BinaryOp::FNe | BinaryOp::FLt | BinaryOp::FLe | BinaryOp::FGt | BinaryOp::FGe => {
                                     let cc = match op {
                                         BinaryOp::FEq => FloatCC::Equal,
@@ -923,16 +923,8 @@ impl CraneliftBackend {
                                         BinaryOp::FGe => FloatCC::GreaterThanOrEqual,
                                         _ => unreachable!(),
                                     };
-                                    let cmp = builder.ins().fcmp(cc, lhs, rhs);
-                                    if let Some(result_val) = function.values.get(result) {
-                                        if matches!(result_val.ty, HirType::Bool) {
-                                            cmp
-                                        } else {
-                                            builder.ins().uextend(types::I32, cmp)
-                                        }
-                                    } else {
-                                        cmp
-                                    }
+                                    // fcmp always returns i8 (bool) - no extension needed
+                                    builder.ins().fcmp(cc, lhs, rhs)
                                 }
                             };
 
@@ -1192,12 +1184,10 @@ impl CraneliftBackend {
                                                         HirType::Opaque(_) => (0x0012u32, 8u32), // Opaque
                                                         HirType::Ptr(inner) if matches!(inner.as_ref(), HirType::Opaque(_)) => (0x0012u32, 8u32),
                                                         other => {
-                                                            eprintln!("[DEBUG Boxing Function] Unhandled type: {:?}, defaulting to Opaque", other);
                                                             (0x0012u32, 8u32)  // Opaque
                                                         },
                                                     }
                                                 } else {
-                                                    eprintln!("[DEBUG Boxing Function] No HirValue found for arg_hir_id {:?}", arg_hir_id);
                                                     (0x0012u32, 8u32)  // Opaque
                                                 };
 
@@ -1285,7 +1275,22 @@ impl CraneliftBackend {
                                         // Call the external function with boxed args
                                         if let Some(&cranelift_func_id) = self.function_map.get(func_id) {
                                             let local_callee = self.module.declare_func_in_func(cranelift_func_id, builder.func);
-                                            let call = builder.ins().call(local_callee, &boxed_args);
+
+                                            // Coerce argument types to match declared signature
+                                            let sig_ref = builder.func.dfg.ext_funcs[local_callee].signature;
+                                            let expected_types: Vec<_> = builder.func.dfg.signatures[sig_ref]
+                                                .params.iter().map(|p| p.value_type).collect();
+                                            let mut coerced = boxed_args.clone();
+                                            for (i, &expected) in expected_types.iter().enumerate() {
+                                                if i < coerced.len() {
+                                                    let actual = builder.func.dfg.value_type(coerced[i]);
+                                                    if actual != expected {
+                                                        coerced[i] = Self::coerce_value(&mut builder, coerced[i], actual, expected);
+                                                    }
+                                                }
+                                            }
+
+                                            let call = builder.ins().call(local_callee, &coerced);
                                             if let Some(result_id) = result {
                                                 if let Some(&ret_val) = builder.inst_results(call).first() {
                                                     self.value_map.insert(*result_id, ret_val);
@@ -1298,7 +1303,21 @@ impl CraneliftBackend {
                                             let local_callee = self.module
                                                 .declare_func_in_func(cranelift_func_id, builder.func);
 
-                                            let call = builder.ins().call(local_callee, &arg_values);
+                                            // Coerce argument types to match declared signature
+                                            let sig_ref = builder.func.dfg.ext_funcs[local_callee].signature;
+                                            let expected_types: Vec<_> = builder.func.dfg.signatures[sig_ref]
+                                                .params.iter().map(|p| p.value_type).collect();
+                                            let mut coerced = arg_values.clone();
+                                            for (i, &expected) in expected_types.iter().enumerate() {
+                                                if i < coerced.len() {
+                                                    let actual = builder.func.dfg.value_type(coerced[i]);
+                                                    if actual != expected {
+                                                        coerced[i] = Self::coerce_value(&mut builder, coerced[i], actual, expected);
+                                                    }
+                                                }
+                                            }
+
+                                            let call = builder.ins().call(local_callee, &coerced);
 
                                             if let Some(result_id) = result {
                                                 if let Some(&ret_val) = builder.inst_results(call).first() {
@@ -1351,11 +1370,8 @@ impl CraneliftBackend {
                                             .copied()
                                             .unwrap_or(false);
                                         log::debug!("[DynamicBox] Symbol: {}, param {}: needs_boxing = {}", symbol_name, param_index, needs_boxing);
-                                        eprintln!("[DEBUG Boxing] Symbol: {}, param {}: needs_boxing = {}", symbol_name, param_index, needs_boxing);
                                         if let Some(sig) = self.symbol_signatures.get(symbol_name) {
-                                            eprintln!("[DEBUG Signature] Symbol: {}, returns_dynamic = {}", symbol_name, sig.returns_dynamic());
                                         } else {
-                                            eprintln!("[DEBUG Signature] Symbol: {} has no signature", symbol_name);
                                         }
                                         if needs_boxing {
                                             // This parameter expects DynamicBox - wrap it
@@ -1519,14 +1535,11 @@ impl CraneliftBackend {
                                                         builder.ins().iconst(types::I64, 0)
                                                     }
                                                 } else {
-                                                    eprintln!("[DEBUG DynamicBox] HIR value not found");
                                                     // HIR value not found
                                                     builder.ins().iconst(types::I64, 0)
                                                 }
                                             };
-                                            eprintln!("[DEBUG DynamicBox] Storing display_fn at offset 24");
                                             builder.ins().store(cranelift_codegen::ir::MemFlags::new(), display_fn_value, box_addr, 24);
-                                            eprintln!("[DEBUG DynamicBox] DynamicBox complete, passing to function");
 
                                             // Pass the box by value (load struct fields and pass as args)
                                             // Actually, DynamicBox is passed by value, so we need to load the struct
@@ -1544,7 +1557,6 @@ impl CraneliftBackend {
                                     // Check if we have a ZRTL signature for this symbol
                                     let return_cranelift_ty = if let Some(sym_sig) = self.symbol_signatures.get(symbol_name) {
                                         // Use ZRTL signature for parameters AND return type
-                                        eprintln!("[DEBUG Signature] Using ZRTL signature for {}: {} params", symbol_name, sym_sig.param_count);
                                         for i in 0..sym_sig.param_count {
                                             // Convert ZRTL TypeTag to Cranelift type
                                             let type_tag = &sym_sig.params[i as usize];
@@ -1561,7 +1573,6 @@ impl CraneliftBackend {
                                         }
                                     } else {
                                         // No ZRTL signature - infer from boxed args
-                                        eprintln!("[DEBUG Signature] No ZRTL signature for {}, inferring from args", symbol_name);
                                         for arg_val in &boxed_args {
                                             let arg_ty = builder.func.dfg.value_type(*arg_val);
                                             sig.params.push(cranelift_codegen::ir::AbiParam::new(arg_ty));
@@ -1594,6 +1605,19 @@ impl CraneliftBackend {
                                         sig.returns.push(cranelift_codegen::ir::AbiParam::new(ret_ty));
                                     }
 
+                                    // Coerce argument types to match the declared signature
+                                    // e.g., narrow i64 to i32 when ZRTL expects u32/i32
+                                    let mut coerced_args = boxed_args.clone();
+                                    for (i, param) in sig.params.iter().enumerate() {
+                                        if i < coerced_args.len() {
+                                            let actual_ty = builder.func.dfg.value_type(coerced_args[i]);
+                                            let expected_ty = param.value_type;
+                                            if actual_ty != expected_ty {
+                                                coerced_args[i] = Self::coerce_value(&mut builder, coerced_args[i], actual_ty, expected_ty);
+                                            }
+                                        }
+                                    }
+
                                     let func = self.module
                                         .declare_function(symbol_name, Linkage::Import, &sig)
                                         .expect(&format!("Failed to declare symbol {}", symbol_name));
@@ -1601,7 +1625,7 @@ impl CraneliftBackend {
                                     let local_func = self.module
                                         .declare_func_in_func(func, builder.func);
 
-                                    let call = builder.ins().call(local_func, &boxed_args);
+                                    let call = builder.ins().call(local_func, &coerced_args);
 
                                     if let Some(result_id) = result {
                                         if let Some(&ret_val) = builder.inst_results(call).first() {
@@ -3052,6 +3076,34 @@ impl CraneliftBackend {
         Ok(cranelift_sig)
     }
     
+    /// Coerce a Cranelift value from one type to another (e.g., i64 -> i32, f64 -> f32)
+    fn coerce_value(builder: &mut FunctionBuilder, val: Value, actual: types::Type, expected: types::Type) -> Value {
+        if actual == expected {
+            return val;
+        }
+        if actual.is_int() && expected.is_int() {
+            if actual.bits() > expected.bits() {
+                builder.ins().ireduce(expected, val)
+            } else {
+                builder.ins().uextend(expected, val)
+            }
+        } else if actual.is_float() && expected.is_float() {
+            if actual.bits() > expected.bits() {
+                builder.ins().fdemote(expected, val)
+            } else {
+                builder.ins().fpromote(expected, val)
+            }
+        } else if actual.is_int() && expected.is_float() && actual.bits() == expected.bits() {
+            builder.ins().bitcast(expected, cranelift_codegen::ir::MemFlags::new(), val)
+        } else if actual.is_float() && expected.is_int() && actual.bits() == expected.bits() {
+            builder.ins().bitcast(expected, cranelift_codegen::ir::MemFlags::new(), val)
+        } else {
+            // Can't coerce, return as-is (may produce verification error)
+            log::warn!("[Cranelift] Cannot coerce {:?} to {:?}", actual, expected);
+            val
+        }
+    }
+
     /// Translate HIR type to Cranelift type
     pub fn translate_type(&self, ty: &HirType) -> CompilerResult<types::Type> {
         match ty {
@@ -3538,33 +3590,14 @@ impl CraneliftBackend {
                             builder.ins().ushr(lhs, rhs)
                         }
                     }
-                    BinaryOp::Eq => {
-                        let cmp = builder.ins().icmp(IntCC::Equal, lhs, rhs);
-                        // Extend i8 boolean result to match HIR result type
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::Ne => {
-                        let cmp = builder.ins().icmp(IntCC::NotEqual, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
+                    // Integer comparisons - always return i8 (bool), never uextend
+                    BinaryOp::Eq => builder.ins().icmp(IntCC::Equal, lhs, rhs),
+                    BinaryOp::Ne => builder.ins().icmp(IntCC::NotEqual, lhs, rhs),
                     // For comparisons, default to signed since ZynML uses signed integers
-                    // (The result type `ty` is Bool, so we can't use it for signedness)
-                    BinaryOp::Lt => {
-                        let cmp = builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::Le => {
-                        let cmp = builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::Gt => {
-                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::Ge => {
-                        let cmp = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
+                    BinaryOp::Lt => builder.ins().icmp(IntCC::SignedLessThan, lhs, rhs),
+                    BinaryOp::Le => builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs),
+                    BinaryOp::Gt => builder.ins().icmp(IntCC::SignedGreaterThan, lhs, rhs),
+                    BinaryOp::Ge => builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs),
                     // Floating point operations
                     BinaryOp::FAdd => builder.ins().fadd(lhs, rhs),
                     BinaryOp::FSub => builder.ins().fsub(lhs, rhs),
@@ -3574,31 +3607,13 @@ impl CraneliftBackend {
                         // Cranelift doesn't have frem, use libm fmod
                         self.call_libm_fmod(builder, lhs, rhs)?
                     }
-                    // Floating point comparisons
-                    BinaryOp::FEq => {
-                        let cmp = builder.ins().fcmp(FloatCC::Equal, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::FNe => {
-                        let cmp = builder.ins().fcmp(FloatCC::NotEqual, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::FLt => {
-                        let cmp = builder.ins().fcmp(FloatCC::LessThan, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::FLe => {
-                        let cmp = builder.ins().fcmp(FloatCC::LessThanOrEqual, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::FGt => {
-                        let cmp = builder.ins().fcmp(FloatCC::GreaterThan, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
-                    BinaryOp::FGe => {
-                        let cmp = builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs);
-                        builder.ins().uextend(types::I32, cmp)
-                    }
+                    // Floating point comparisons - always return i8 (bool), never uextend
+                    BinaryOp::FEq => builder.ins().fcmp(FloatCC::Equal, lhs, rhs),
+                    BinaryOp::FNe => builder.ins().fcmp(FloatCC::NotEqual, lhs, rhs),
+                    BinaryOp::FLt => builder.ins().fcmp(FloatCC::LessThan, lhs, rhs),
+                    BinaryOp::FLe => builder.ins().fcmp(FloatCC::LessThanOrEqual, lhs, rhs),
+                    BinaryOp::FGt => builder.ins().fcmp(FloatCC::GreaterThan, lhs, rhs),
+                    BinaryOp::FGe => builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs),
                 };
                 
                 self.value_map.insert(*result, value);
@@ -4717,6 +4732,7 @@ impl CraneliftBackend {
                         }
                     }
                     // Comparison operations - use operand type to determine signed/unsigned
+                    // Comparisons always return bool (i8) - never uextend
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
                         // Get operand type from left value, not result type
                         let operand_ty = function.values.get(left)
@@ -4731,17 +4747,8 @@ impl CraneliftBackend {
                             BinaryOp::Ge => if operand_ty.is_signed() { IntCC::SignedGreaterThanOrEqual } else { IntCC::UnsignedGreaterThanOrEqual },
                             _ => unreachable!(),
                         };
-                        let cmp = builder.ins().icmp(cc, lhs, rhs);
-                        // Extend if result type is not Bool
-                        if let Some(result_val) = function.values.get(result) {
-                            if matches!(result_val.ty, HirType::Bool) {
-                                cmp
-                            } else {
-                                builder.ins().uextend(types::I32, cmp)
-                            }
-                        } else {
-                            cmp
-                        }
+                        // icmp always returns i8 (bool) - no extension needed
+                        builder.ins().icmp(cc, lhs, rhs)
                     }
                     // Float operations
                     BinaryOp::FAdd => builder.ins().fadd(lhs, rhs),
@@ -4749,7 +4756,7 @@ impl CraneliftBackend {
                     BinaryOp::FMul => builder.ins().fmul(lhs, rhs),
                     BinaryOp::FDiv => builder.ins().fdiv(lhs, rhs),
                     BinaryOp::FRem => self.call_libm_fmod(builder, lhs, rhs)?,
-                    // Float comparisons
+                    // Float comparisons - also always return bool (i8)
                     BinaryOp::FEq | BinaryOp::FNe | BinaryOp::FLt | BinaryOp::FLe | BinaryOp::FGt | BinaryOp::FGe => {
                         let cc = match op {
                             BinaryOp::FEq => FloatCC::Equal,
@@ -4760,16 +4767,8 @@ impl CraneliftBackend {
                             BinaryOp::FGe => FloatCC::GreaterThanOrEqual,
                             _ => unreachable!(),
                         };
-                        let cmp = builder.ins().fcmp(cc, lhs, rhs);
-                        if let Some(result_val) = function.values.get(result) {
-                            if matches!(result_val.ty, HirType::Bool) {
-                                cmp
-                            } else {
-                                builder.ins().uextend(types::I32, cmp)
-                            }
-                        } else {
-                            cmp
-                        }
+                        // fcmp always returns i8 (bool) - no extension needed
+                        builder.ins().fcmp(cc, lhs, rhs)
                     }
                 };
 

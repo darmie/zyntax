@@ -289,6 +289,8 @@ impl<T> IntoIterator for List<T> {
 // HashMap and HashSet - Collection Types
 // ============================================================================
 //
+// NOTE: HashMap and HashSet are commented out pending ZRTL plugin implementation.
+//
 // HashMap<K, V> and HashSet<T> are extern generic types backed by ZRTL.
 //
 // Usage:
@@ -298,77 +300,9 @@ impl<T> IntoIterator for List<T> {
 //
 // ============================================================================
 
-// Extern generic struct declarations - ZRTL provides the implementation
-extern struct HashMap<K, V>
-extern struct HashSet<T>
-
-impl<K, V> HashMap<K, V> {
-    def new(): HashMap<K, V> {
-        extern hashmap_new()
-    }
-
-    def with_capacity(capacity: i64): HashMap<K, V> {
-        extern hashmap_with_capacity(capacity)
-    }
-
-    def insert(self, key: K, value: V) {
-        extern hashmap_insert(self, key, value)
-    }
-
-    def get(self, key: K): ?V {
-        extern hashmap_get(self, key)
-    }
-
-    def remove(self, key: K): ?V {
-        extern hashmap_remove(self, key)
-    }
-
-    def contains_key(self, key: K): bool {
-        extern hashmap_contains_key(self, key)
-    }
-
-    def len(self): i64 {
-        extern hashmap_len(self)
-    }
-
-    def is_empty(self): bool {
-        self.len() == 0
-    }
-
-    def clear(self) {
-        extern hashmap_clear(self)
-    }
-}
-
-impl<T> HashSet<T> {
-    def new(): HashSet<T> {
-        extern hashset_new()
-    }
-
-    def insert(self, value: T): bool {
-        extern hashset_insert(self, value)
-    }
-
-    def remove(self, value: T): bool {
-        extern hashset_remove(self, value)
-    }
-
-    def contains(self, value: T): bool {
-        extern hashset_contains(self, value)
-    }
-
-    def len(self): i64 {
-        extern hashset_len(self)
-    }
-
-    def is_empty(self): bool {
-        self.len() == 0
-    }
-
-    def clear(self) {
-        extern hashset_clear(self)
-    }
-}
+// TODO: Enable when ZRTL HashMap/HashSet plugins are available
+// extern struct HashMap<K, V>
+// extern struct HashSet<T>
 
 // ============================================================================
 // Option Methods

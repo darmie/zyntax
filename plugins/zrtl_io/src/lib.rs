@@ -819,6 +819,28 @@ pub unsafe extern "C" fn io_println_array_f64(arr: zrtl::ArrayConstPtr) {
 // String Concatenation
 // ============================================================================
 
+/// Convert a string pointer to a DynamicBox
+/// Used by f-string desugaring to make string results compatible with println_dynamic
+#[no_mangle]
+pub unsafe extern "C" fn io_string_to_dynamic(s: StringConstPtr) -> *mut zrtl::DynamicBox {
+    use zrtl::{DynamicBox, TypeTag};
+
+    if s.is_null() {
+        return Box::into_raw(Box::new(DynamicBox::null()));
+    }
+
+    // The DynamicBox for String category expects data to be a StringConstPtr
+    // (pointer to ZRTL string format: [i32 length][utf8 bytes])
+    // We just wrap the existing pointer - caller is responsible for memory
+    Box::into_raw(Box::new(DynamicBox {
+        tag: TypeTag::STRING,
+        size: std::mem::size_of::<*const u8>() as u32,
+        data: s as *mut u8,
+        dropper: None,     // Don't free the string, caller manages it
+        display_fn: None,  // Use default string formatting
+    }))
+}
+
 /// Concatenate two ZRTL strings
 ///
 /// Returns a new ZRTL string, caller must free with `string_free`.
@@ -849,6 +871,68 @@ pub unsafe extern "C" fn io_string_concat(a: StringConstPtr, b: StringConstPtr) 
     }
 
     string_new(&result)
+}
+
+/// Concatenate two values (DynamicBox) and return a DynamicBox containing the resulting string
+/// Used by f-string desugaring so the result works with println_dynamic
+#[no_mangle]
+pub unsafe extern "C" fn io_concat_dynamic(a: *const zrtl::DynamicBox, b: *const zrtl::DynamicBox) -> *mut zrtl::DynamicBox {
+    use zrtl::{DynamicBox, TypeTag, TypeCategory};
+
+    let mut result = String::new();
+
+    // Format first argument
+    if !a.is_null() {
+        let box_a = &*a;
+        // Check if it's a string type - if so, extract directly
+        if box_a.tag.category() == TypeCategory::String {
+            let ptr = box_a.data as StringConstPtr;
+            if !ptr.is_null() {
+                let len = string_length(ptr) as usize;
+                let data = string_data(ptr);
+                if len > 0 && !data.is_null() {
+                    let bytes = std::slice::from_raw_parts(data, len);
+                    if let Ok(s) = std::str::from_utf8(bytes) {
+                        result.push_str(s);
+                    }
+                }
+            }
+        } else {
+            // Use format_dynamic_box for other types
+            format_dynamic_box(box_a, &mut result);
+        }
+    }
+
+    // Format second argument
+    if !b.is_null() {
+        let box_b = &*b;
+        if box_b.tag.category() == TypeCategory::String {
+            let ptr = box_b.data as StringConstPtr;
+            if !ptr.is_null() {
+                let len = string_length(ptr) as usize;
+                let data = string_data(ptr);
+                if len > 0 && !data.is_null() {
+                    let bytes = std::slice::from_raw_parts(data, len);
+                    if let Ok(s) = std::str::from_utf8(bytes) {
+                        result.push_str(s);
+                    }
+                }
+            }
+        } else {
+            format_dynamic_box(box_b, &mut result);
+        }
+    }
+
+    // Create a new ZRTL string and wrap in DynamicBox
+    let str_ptr = string_new(&result);
+
+    Box::into_raw(Box::new(DynamicBox {
+        tag: TypeTag::STRING,
+        size: std::mem::size_of::<*const u8>() as u32,
+        data: str_ptr as *mut u8,
+        dropper: None,  // TODO: Add dropper to free the string
+        display_fn: None,
+    }))
 }
 
 // ============================================================================
@@ -919,6 +1003,8 @@ zrtl_plugin! {
 
         // String operations
         ("$IO$string_concat", io_string_concat, (i64, i64) -> i64),
+        ("$IO$string_to_dynamic", io_string_to_dynamic, (i64) -> i64),
+        ("$IO$concat_dynamic", io_concat_dynamic, dynamic(2) -> dynamic),
     ]
 }
 

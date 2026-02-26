@@ -1854,8 +1854,9 @@ impl SsaBuilder {
             }
 
             TypedExpression::Array(elements) => {
-                // Create ZRTL array format: [i32 capacity][i32 length][elements...]
-                // This format allows plugins to safely read array length
+                // Lower array literal as List<T> struct: { data: i64 (ptr), len: i64, capacity: i64 }
+                // This matches the List<T> struct definition in prelude.zynml and allows
+                // field access (shape.data, shape.len) via extractvalue to work correctly.
                 let elem_ty = if let Type::Array { element_type, .. } = &expr.ty {
                     self.convert_type(element_type)
                 } else {
@@ -1873,58 +1874,28 @@ impl SsaBuilder {
                 };
                 let num_elements = elements.len();
 
-                // ZRTL array header: 8 bytes (capacity i32 + length i32)
-                const ZRTL_HEADER_BYTES: usize = 8;
-                let total_size = ZRTL_HEADER_BYTES + num_elements * elem_size;
-
-                // Allocate raw bytes for the entire ZRTL array
-                let alloc_ty = HirType::Array(Box::new(HirType::U8), total_size as u64);
-                let alloc_result = self.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
-
+                // Step 1: Allocate element data buffer
+                let data_buf_size = num_elements * elem_size;
+                let data_alloc_ty = HirType::Array(Box::new(elem_ty.clone()), num_elements as u64);
+                let data_ptr = self.create_value(HirType::Ptr(Box::new(elem_ty.clone())), HirValueKind::Instruction);
                 self.add_instruction(block_id, HirInstruction::Alloca {
-                    result: alloc_result,
-                    ty: alloc_ty,
+                    result: data_ptr,
+                    ty: data_alloc_ty,
                     count: None,
-                    align: 8,
+                    align: elem_size.min(8) as u32,
                 });
 
-                // Store capacity at offset 0 (i32)
-                let cap_const = self.create_value(HirType::I32, HirValueKind::Constant(crate::hir::HirConstant::I32(num_elements as i32)));
-                self.add_instruction(block_id, HirInstruction::Store {
-                    value: cap_const,
-                    ptr: alloc_result,
-                    align: 4,
-                    volatile: false,
-                });
-
-                // Store length at offset 4 (i32) - need to calculate ptr + 4
-                let len_const = self.create_value(HirType::I32, HirValueKind::Constant(crate::hir::HirConstant::I32(num_elements as i32)));
-                let offset_4 = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(4)));
-                let len_ptr = self.create_value(HirType::Ptr(Box::new(HirType::I32)), HirValueKind::Instruction);
-                self.add_instruction(block_id, HirInstruction::GetElementPtr {
-                    result: len_ptr,
-                    ty: HirType::U8, // Base type for byte offset calculation
-                    ptr: alloc_result,
-                    indices: vec![offset_4],
-                });
-                self.add_instruction(block_id, HirInstruction::Store {
-                    value: len_const,
-                    ptr: len_ptr,
-                    align: 4,
-                    volatile: false,
-                });
-
-                // Store each element starting at offset 8
+                // Step 2: Store each element into the data buffer
                 for (i, elem_expr) in elements.iter().enumerate() {
                     let elem_val = self.translate_expression(block_id, elem_expr)?;
 
-                    let offset = ZRTL_HEADER_BYTES + i * elem_size;
+                    let offset = i * elem_size;
                     let offset_const = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(offset as i64)));
                     let elem_ptr = self.create_value(HirType::Ptr(Box::new(elem_ty.clone())), HirValueKind::Instruction);
                     self.add_instruction(block_id, HirInstruction::GetElementPtr {
                         result: elem_ptr,
                         ty: HirType::U8, // Base type for byte offset calculation
-                        ptr: alloc_result,
+                        ptr: data_ptr,
                         indices: vec![offset_const],
                     });
 
@@ -1936,8 +1907,71 @@ impl SsaBuilder {
                     });
                 }
 
-                // Return pointer to the ZRTL array header
-                Ok(alloc_result)
+                // Step 3: Build List<T> struct: { data: i64 (ptr), len: i64, capacity: i64 }
+                let list_struct_ty = HirType::Struct(crate::hir::HirStructType {
+                    name: None,
+                    fields: vec![HirType::I64, HirType::I64, HirType::I64],
+                    packed: false,
+                });
+                let list_alloc = self.create_value(HirType::Ptr(Box::new(list_struct_ty.clone())), HirValueKind::Instruction);
+                self.add_instruction(block_id, HirInstruction::Alloca {
+                    result: list_alloc,
+                    ty: list_struct_ty,
+                    count: None,
+                    align: 8,
+                });
+
+                // Store data pointer (field 0) — cast ptr to i64 for storage
+                let data_as_i64 = self.create_value(HirType::I64, HirValueKind::Instruction);
+                self.add_instruction(block_id, HirInstruction::Cast {
+                    result: data_as_i64,
+                    ty: HirType::I64,
+                    operand: data_ptr,
+                    op: crate::hir::CastOp::PtrToInt,
+                });
+                self.add_instruction(block_id, HirInstruction::Store {
+                    value: data_as_i64,
+                    ptr: list_alloc,
+                    align: 8,
+                    volatile: false,
+                });
+
+                // Store len (field 1) at offset 8
+                let len_const = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(num_elements as i64)));
+                let offset_8 = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(8)));
+                let len_field_ptr = self.create_value(HirType::Ptr(Box::new(HirType::I64)), HirValueKind::Instruction);
+                self.add_instruction(block_id, HirInstruction::GetElementPtr {
+                    result: len_field_ptr,
+                    ty: HirType::U8, // byte offset
+                    ptr: list_alloc,
+                    indices: vec![offset_8],
+                });
+                self.add_instruction(block_id, HirInstruction::Store {
+                    value: len_const,
+                    ptr: len_field_ptr,
+                    align: 8,
+                    volatile: false,
+                });
+
+                // Store capacity (field 2) at offset 16
+                let cap_const = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(num_elements as i64)));
+                let offset_16 = self.create_value(HirType::I64, HirValueKind::Constant(crate::hir::HirConstant::I64(16)));
+                let cap_field_ptr = self.create_value(HirType::Ptr(Box::new(HirType::I64)), HirValueKind::Instruction);
+                self.add_instruction(block_id, HirInstruction::GetElementPtr {
+                    result: cap_field_ptr,
+                    ty: HirType::U8, // byte offset
+                    ptr: list_alloc,
+                    indices: vec![offset_16],
+                });
+                self.add_instruction(block_id, HirInstruction::Store {
+                    value: cap_const,
+                    ptr: cap_field_ptr,
+                    align: 8,
+                    volatile: false,
+                });
+
+                // Return pointer to the List struct
+                Ok(list_alloc)
             }
 
             TypedExpression::Tuple(elements) => {
@@ -3248,6 +3282,7 @@ impl SsaBuilder {
                 PrimitiveType::F32 => HirType::F32,
                 PrimitiveType::F64 => HirType::F64,
                 PrimitiveType::Unit => HirType::Void,
+                PrimitiveType::String => HirType::Ptr(Box::new(HirType::I8)), // String is Ptr<i8>
                 _ => HirType::I64, // Default
             },
             Type::Tuple(types) if types.is_empty() => HirType::Void,

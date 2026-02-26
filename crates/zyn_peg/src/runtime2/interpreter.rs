@@ -73,6 +73,30 @@ impl<'g> GrammarInterpreter<'g> {
         let start_pos = state.pos();
         trace!("execute_rule: {} at pos {}", rule.name, start_pos);
 
+        // Packrat memoization: look up (start_pos, rule_id) in the memo cache.
+        // This converts exponential backtracking to O(n * grammar_size) parsing.
+        // InProgress entries detect left-recursive rule cycles.
+        use crate::runtime2::memo::MemoEntry;
+        let memo_rule_id = self.rule_id_map.get(&rule.name).copied().unwrap_or(usize::MAX);
+        if let Some(entry) = state.check_memo(memo_rule_id) {
+            return match entry.clone() {
+                MemoEntry::Success { value, end_pos } => {
+                    state.set_pos(end_pos);
+                    ParseResult::Success(value, end_pos)
+                }
+                MemoEntry::Failure => {
+                    state.set_pos(start_pos);
+                    state.fail("memoized failure")
+                }
+                MemoEntry::InProgress => {
+                    state.set_pos(start_pos);
+                    state.fail("left recursion detected")
+                }
+            };
+        }
+        // Mark this (start_pos, rule_id) as in-progress for left-recursion detection
+        state.store_memo(memo_rule_id, MemoEntry::InProgress);
+
         // Note: We don't skip whitespace here at the start of a rule.
         // Whitespace skipping happens between sequence elements (see execute_pattern).
         // This preserves the position for SOI matching.
@@ -121,6 +145,16 @@ impl<'g> GrammarInterpreter<'g> {
 
         // Restore parent bindings after rule completes
         state.restore_bindings(saved_bindings);
+
+        // Store result in Packrat memo cache at start_pos
+        let memo_entry = match &final_result {
+            ParseResult::Success(value, end_pos) => MemoEntry::Success {
+                value: value.clone(),
+                end_pos: *end_pos,
+            },
+            ParseResult::Failure(_) => MemoEntry::Failure,
+        };
+        state.store_memo_at(start_pos, memo_rule_id, memo_entry);
 
         final_result
     }
@@ -3673,6 +3707,13 @@ impl<'g> GrammarInterpreter<'g> {
                     // Try to match item
                     match self.execute_pattern(pattern, state, atomic) {
                         ParseResult::Success(v, _) => {
+                            // Guard: if no input was consumed, break to prevent infinite loop.
+                            // A zero-width match in a repetition would otherwise spin forever.
+                            if state.pos() == item_start {
+                                state.restore_bindings(saved_bindings);
+                                break;
+                            }
+
                             items.push(v.clone());
 
                             // If there's an inner binding, accumulate its value

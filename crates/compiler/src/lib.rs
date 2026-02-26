@@ -18,6 +18,7 @@
 //! - Memory safety validated before code generation
 
 pub mod hir;
+pub mod hir_dump;  // CLIF-inspired HIR text dump for debugging
 pub mod hir_builder;  // HIR Builder API for direct HIR construction
 pub mod bytecode;  // HIR bytecode serialization/deserialization
 pub mod stdlib;  // Standard library implementation using HIR Builder

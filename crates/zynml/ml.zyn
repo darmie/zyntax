@@ -34,6 +34,12 @@
     tensor_from_array: "$Tensor$from_array_f32",
     tensor_zeros: "$Tensor$zeros",
     tensor_ones: "$Tensor$ones",
+    tensor_zeros_1d: "$Tensor$zeros_1d",
+    tensor_zeros_2d: "$Tensor$zeros_2d",
+    tensor_zeros_3d: "$Tensor$zeros_3d",
+    tensor_ones_1d: "$Tensor$ones_1d",
+    tensor_ones_2d: "$Tensor$ones_2d",
+    tensor_ones_3d: "$Tensor$ones_3d",
     tensor_full: "$Tensor$full_f32",
     arange: "$Tensor$arange",             // arange(1.0, 10.0, 1.0) shorthand - f64 version
     tensor_arange: "$Tensor$arange",      // f64 version for convenience
@@ -157,14 +163,14 @@
     simd_layer_norm: "$SIMD$layer_norm_f32",
 
     // === I/O Operations (zrtl_io) ===
-    // Dynamic print functions that handle ALL types via DynamicBox dispatch
-    // Uses display_fn field to call type's to_string() for opaque types like Tensor
+    // Universal print functions - handle ALL types via DynamicBox dispatch
+    // The compiler auto-boxes arguments based on the dynamic(1) signature
     print: "$IO$print_dynamic",
     println: "$IO$println_dynamic",
     eprint: "$IO$eprint_dynamic",
     eprintln: "$IO$eprintln_dynamic",
 
-    // String-only output (for when you know it's a string)
+    // String-only output (for raw string pointers)
     print_str: "$IO$print",
     println_str: "$IO$println",
     eprint_str: "$IO$eprint",
@@ -217,10 +223,11 @@
     println_array_f64: "$IO$println_array_f64",
 
     // String operations
-    concat: "$IO$string_concat",         // Used by f-string desugaring (binary concat)
-    string_concat: "$IO$string_concat",
+    concat: "$IO$string_concat",         // Used by f-string desugaring (returns string pointer)
+    string_concat: "$IO$string_concat",  // Raw string concat (returns string pointer)
     string_free: "$IO$string_free",
-    to_string: "$IO$format_dynamic",     // Used by f-string desugaring for interpolations
+    to_string: "$IO$format_dynamic",     // Generic to_string (can conflict with traits)
+    __fstring_format__: "$IO$format_dynamic",  // Used by f-string desugaring (internal, no conflict)
 
     // === File Operations (zrtl_fs) ===
     file_read: "$FS$read_string",
@@ -2640,7 +2647,10 @@ array_literal = { "[" ~ elements:array_elements? ~ "]" }
       elements: elements,
   }
 
-array_elements = { e:array_element ~ ("," ~ e:array_element)* }
+array_elements = { first:array_element ~ rest:array_element_comma* }
+  -> prepend_list(first, rest)
+
+array_element_comma = { "," ~ e:array_element }
   -> e
 
 array_element = { e:array_literal | e:expr }
@@ -2700,10 +2710,10 @@ f_string_regular = { "f\"" ~ parts:f_string_part* ~ "\"" }
 // Parts of an f-string: either text or interpolated expression
 f_string_part = { f_string_interp | f_string_text }
 
-// {expr} or {expr:format_spec} - wrap in to_string call
+// {expr} or {expr:format_spec} - wrap in __fstring_format__ call (internal, doesn't conflict with traits)
 f_string_interp = { "{" ~ e:expr ~ format_spec? ~ "}" }
   -> TypedExpression::Call {
-      callee: TypedExpression::Variable { name: intern("to_string") },
+      callee: TypedExpression::Variable { name: intern("__fstring_format__") },
       args: [e],
   }
 

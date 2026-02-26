@@ -1,44 +1,49 @@
-// ============================================================================
-// ZynML Example: Simple Hello World (no imports)
-// ============================================================================
-// Run with: zynml run examples/hello_simple.zynml
-//
-// Demonstrates basic ZynML without module imports
-// ============================================================================
+// Simple hello.zynml without f-strings
+import tensor
 
 def main() {
     println("Hello from ZynML!")
-    println("Testing basic ZynML...")
 
-    // Local function call test
-    greet("World")
+    // Create tensors using static methods
+    let a = Tensor::arange(1.0, 5.0, 1.0)  // [1.0, 2.0, 3.0, 4.0]
+    let b = Tensor::arange(5.0, 9.0, 1.0)  // [5.0, 6.0, 7.0, 8.0]
 
-    // Test arithmetic inside main
-    let a: i64 = 10
-    let b: i64 = 20
-    let result: i64 = a + b
-    println("10 + 20 = 30 (computed)")
+    println("Tensor a:")
+    println(a)
 
-    // Test conditionals
-    if result > 0 {
-        println("Result is positive!")
-    }
+    println("Tensor b:")
+    println(b)
 
-    // Test multi-arg function calls
-    let product: i64 = multiply(3, 7)
-    if product > 0 {
-        println("3 * 7 = 21 (computed)")
-    }
+    // Arithmetic operations using operator overloading
+    let sum = a + b
+    println("a + b:")
+    println(sum)
+
+    let diff = b - a
+    println("b - a:")
+    println(diff)
+
+    let prod = a * b
+    println("a * b (element-wise):")
+    println(prod)
+
+    // Reduction operations
+    let total = a.sum()
+    println("Sum of a:")
+    println(total)
+
+    let avg = a.mean()
+    println("Mean of a:")
+    println(avg)
+
+    // Create matrices
+    let matrix = Tensor::zeros([2, 3])
+    println("2x3 zeros matrix:")
+    println(matrix)
+
+    let ones = Tensor::ones([3, 2])
+    println("3x2 ones matrix:")
+    println(ones)
 
     println("Done!")
-}
-
-def greet(name: String) {
-    print("Hello, ")
-    print(name)
-    println("!")
-}
-
-def multiply(x: i64, y: i64): i64 {
-    x * y
 }

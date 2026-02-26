@@ -389,9 +389,14 @@ impl<'a> ParserState<'a> {
         self.memo.get(MemoKey { pos: self.pos, rule_id })
     }
 
-    /// Store result in memo cache
+    /// Store result in memo cache at current position
     pub fn store_memo(&mut self, rule_id: usize, entry: MemoEntry) {
         self.memo.insert(MemoKey { pos: self.pos, rule_id }, entry);
+    }
+
+    /// Store result in memo cache at a specific position (use start_pos after rule completes)
+    pub fn store_memo_at(&mut self, pos: usize, rule_id: usize, entry: MemoEntry) {
+        self.memo.insert(MemoKey { pos, rule_id }, entry);
     }
 
     // =========================================================================

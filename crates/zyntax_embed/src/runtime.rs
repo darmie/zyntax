@@ -982,11 +982,8 @@ impl ZyntaxRuntime {
             // Mark as processed BEFORE recursive processing
             PROCESSED_IMPORTS.with(|set| set.borrow_mut().insert(module_name.clone()));
 
-            log::debug!("Processing import: {}", module_name);
-
             // Try to resolve the import using our import resolvers
             if let Ok(Some(source)) = self.resolve_import(&module_name) {
-                log::debug!("Resolved import '{}', parsing module...", module_name);
 
                 // Find a grammar to parse the imported module
                 // Try each registered grammar until one succeeds
@@ -1003,8 +1000,6 @@ impl ZyntaxRuntime {
                 }
 
                 if let Some(mut imported_program) = parsed_program {
-                    log::info!("Parsed stdlib module '{}': {} declarations",
-                        module_name, imported_program.declarations.len());
 
                     // IMPORTANT: Recursively process imports from the imported module FIRST
                     // This ensures transitive dependencies (e.g., tensor -> prelude) are loaded

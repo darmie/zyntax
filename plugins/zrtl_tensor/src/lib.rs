@@ -392,6 +392,66 @@ pub extern "C" fn tensor_ones(
     tensor
 }
 
+/// Create a tensor filled with zeros (f32 dtype, no dtype parameter needed)
+#[no_mangle]
+pub extern "C" fn tensor_zeros_f32(
+    shape_ptr: *const usize,
+    ndim: u32,
+) -> TensorPtr {
+    tensor_zeros(shape_ptr, ndim, DType::F32 as u8)
+}
+
+/// Create a tensor filled with ones (f32 dtype, no dtype parameter needed)
+#[no_mangle]
+pub extern "C" fn tensor_ones_f32(
+    shape_ptr: *const usize,
+    ndim: u32,
+) -> TensorPtr {
+    tensor_ones(shape_ptr, ndim, DType::F32 as u8)
+}
+
+/// Create a 1D tensor filled with zeros (convenience, no pointer/List needed)
+#[no_mangle]
+pub extern "C" fn tensor_zeros_1d(n: i64) -> TensorPtr {
+    let shape = [n as usize];
+    tensor_zeros(shape.as_ptr(), 1, DType::F32 as u8)
+}
+
+/// Create a 2D tensor filled with zeros (convenience, no pointer/List needed)
+#[no_mangle]
+pub extern "C" fn tensor_zeros_2d(rows: i64, cols: i64) -> TensorPtr {
+    let shape = [rows as usize, cols as usize];
+    tensor_zeros(shape.as_ptr(), 2, DType::F32 as u8)
+}
+
+/// Create a 3D tensor filled with zeros (convenience, no pointer/List needed)
+#[no_mangle]
+pub extern "C" fn tensor_zeros_3d(d0: i64, d1: i64, d2: i64) -> TensorPtr {
+    let shape = [d0 as usize, d1 as usize, d2 as usize];
+    tensor_zeros(shape.as_ptr(), 3, DType::F32 as u8)
+}
+
+/// Create a 1D tensor filled with ones (convenience, no pointer/List needed)
+#[no_mangle]
+pub extern "C" fn tensor_ones_1d(n: i64) -> TensorPtr {
+    let shape = [n as usize];
+    tensor_ones(shape.as_ptr(), 1, DType::F32 as u8)
+}
+
+/// Create a 2D tensor filled with ones (convenience, no pointer/List needed)
+#[no_mangle]
+pub extern "C" fn tensor_ones_2d(rows: i64, cols: i64) -> TensorPtr {
+    let shape = [rows as usize, cols as usize];
+    tensor_ones(shape.as_ptr(), 2, DType::F32 as u8)
+}
+
+/// Create a 3D tensor filled with ones (convenience, no pointer/List needed)
+#[no_mangle]
+pub extern "C" fn tensor_ones_3d(d0: i64, d1: i64, d2: i64) -> TensorPtr {
+    let shape = [d0 as usize, d1 as usize, d2 as usize];
+    tensor_ones(shape.as_ptr(), 3, DType::F32 as u8)
+}
+
 /// Create a tensor filled with a scalar value
 #[no_mangle]
 pub extern "C" fn tensor_full_f32(
@@ -536,6 +596,24 @@ pub extern "C" fn tensor_linspace_f32(start: f32, end: f32, n: usize) -> TensorP
     }
 
     tensor
+}
+
+/// Create a tensor with random values from uniform distribution [0, 1) (auto-seeded)
+#[no_mangle]
+pub extern "C" fn tensor_rand_f32_auto(
+    shape_ptr: *const usize,
+    ndim: u32,
+) -> TensorPtr {
+    tensor_rand_f32(shape_ptr, ndim, 0)
+}
+
+/// Create a tensor with random values from standard normal distribution (auto-seeded)
+#[no_mangle]
+pub extern "C" fn tensor_randn_f32_auto(
+    shape_ptr: *const usize,
+    ndim: u32,
+) -> TensorPtr {
+    tensor_randn_f32(shape_ptr, ndim, 0)
 }
 
 /// Create a tensor with random values from uniform distribution [0, 1)
@@ -1871,17 +1949,27 @@ zrtl_plugin! {
     symbols: [
         // Creation - all return TensorPtr (opaque pointers)
         // Note: pointers are i64, counts/sizes are i64 or u64 depending on usize
-        ("$Tensor$new", tensor_new, (i64, u32) -> opaque),  // shape_ptr, ndim
-        ("$Tensor$zeros", tensor_zeros, (i64, u32) -> opaque),  // shape_ptr, ndim
-        ("$Tensor$ones", tensor_ones, (i64, u32) -> opaque),  // shape_ptr, ndim
-        ("$Tensor$full_f32", tensor_full_f32, (i64, u32) -> opaque),  // shape_ptr, ndim (+ value f32)
+        ("$Tensor$new", tensor_new, (i64, u32, u8) -> opaque),  // shape_ptr, ndim, dtype
+        ("$Tensor$zeros", tensor_zeros_f32, (i64, u32) -> opaque),  // shape_ptr, ndim (f32 default)
+        ("$Tensor$ones", tensor_ones_f32, (i64, u32) -> opaque),  // shape_ptr, ndim (f32 default)
+        ("$Tensor$zeros_typed", tensor_zeros, (i64, u32, u8) -> opaque),  // shape_ptr, ndim, dtype
+        ("$Tensor$ones_typed", tensor_ones, (i64, u32, u8) -> opaque),  // shape_ptr, ndim, dtype
+        ("$Tensor$zeros_1d", tensor_zeros_1d, (i64) -> opaque),  // n
+        ("$Tensor$zeros_2d", tensor_zeros_2d, (i64, i64) -> opaque),  // rows, cols
+        ("$Tensor$zeros_3d", tensor_zeros_3d, (i64, i64, i64) -> opaque),  // d0, d1, d2
+        ("$Tensor$ones_1d", tensor_ones_1d, (i64) -> opaque),  // n
+        ("$Tensor$ones_2d", tensor_ones_2d, (i64, i64) -> opaque),  // rows, cols
+        ("$Tensor$ones_3d", tensor_ones_3d, (i64, i64, i64) -> opaque),  // d0, d1, d2
+        ("$Tensor$full_f32", tensor_full_f32, (i64, u32, f32) -> opaque),  // shape_ptr, ndim, value
         ("$Tensor$from_array_f32", tensor_from_array_f32, (i64) -> opaque),  // array ptr
         ("$Tensor$from_raw_f32", tensor_from_raw_f32, (i64, u64) -> opaque),  // ptr + count (usize)
         ("$Tensor$arange_f32", tensor_arange_f32, (f32, f32, f32) -> opaque),
         ("$Tensor$arange", tensor_arange, (f64, f64, f64) -> opaque),  // f64 wrapper for convenience
         ("$Tensor$linspace_f32", tensor_linspace_f32, (f32, f32, u64) -> opaque),  // start, end, n (usize)
-        ("$Tensor$rand_f32", tensor_rand_f32, (i64, u32) -> opaque),  // shape_ptr, ndim
-        ("$Tensor$randn_f32", tensor_randn_f32, (i64, u32) -> opaque),  // shape_ptr, ndim
+        ("$Tensor$rand_f32", tensor_rand_f32_auto, (i64, u32) -> opaque),  // shape_ptr, ndim (auto-seeded)
+        ("$Tensor$randn_f32", tensor_randn_f32_auto, (i64, u32) -> opaque),  // shape_ptr, ndim (auto-seeded)
+        ("$Tensor$rand_f32_seeded", tensor_rand_f32, (i64, u32, u64) -> opaque),  // shape_ptr, ndim, seed
+        ("$Tensor$randn_f32_seeded", tensor_randn_f32, (i64, u32, u64) -> opaque),  // shape_ptr, ndim, seed
 
         // Memory
         ("$Tensor$free", tensor_free, (i64) -> void),

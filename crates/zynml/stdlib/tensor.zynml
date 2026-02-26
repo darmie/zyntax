@@ -23,15 +23,13 @@ extern struct Tensor
 // ============================================================================
 
 impl Display for Tensor {
-    def to_string(self): String {
-        extern tensor_to_string(self)
-    }
+    // Auto-maps to $Tensor$Display$to_string
+    extern def to_string(self): String
 }
 
 impl Clone for Tensor {
-    def clone(self): Tensor {
-        extern tensor_clone(self)
-    }
+    // Auto-maps to $Tensor$Clone$clone
+    extern def clone(self): Tensor
 }
 
 // ============================================================================
@@ -41,55 +39,37 @@ impl Clone for Tensor {
 // Tensor + Tensor
 impl Add<Tensor> for Tensor {
     type Output = Tensor
-
-    def add(self, rhs: Tensor): Tensor {
-        extern tensor_add(self, rhs)
-    }
+    extern def add(self, rhs: Tensor): Tensor
 }
 
 // Tensor - Tensor
 impl Sub<Tensor> for Tensor {
     type Output = Tensor
-
-    def sub(self, rhs: Tensor): Tensor {
-        extern tensor_sub(self, rhs)
-    }
+    extern def sub(self, rhs: Tensor): Tensor
 }
 
 // Tensor * Tensor (element-wise)
 impl Mul<Tensor> for Tensor {
     type Output = Tensor
-
-    def mul(self, rhs: Tensor): Tensor {
-        extern tensor_mul(self, rhs)
-    }
+    extern def mul(self, rhs: Tensor): Tensor
 }
 
 // Tensor / Tensor (element-wise)
 impl Div<Tensor> for Tensor {
     type Output = Tensor
-
-    def div(self, rhs: Tensor): Tensor {
-        extern tensor_div(self, rhs)
-    }
+    extern def div(self, rhs: Tensor): Tensor
 }
 
-// Tensor @ Tensor (matrix multiplication)
-impl MatMul<Tensor> for Tensor {
-    type Output = Tensor
-
-    def matmul(self, rhs: Tensor): Tensor {
-        extern tensor_matmul(self, rhs)
-    }
-}
+// Tensor @ Tensor (matrix multiplication) - DISABLED until ZRTL supports proper matmul
+// impl MatMul<Tensor> for Tensor {
+//     type Output = Tensor
+//     extern def matmul(self, rhs: Tensor): Tensor
+// }
 
 // Tensor negation (-x)
 impl Neg for Tensor {
     type Output = Tensor
-
-    def neg(self): Tensor {
-        extern tensor_neg(self)
-    }
+    extern def neg(self): Tensor
 }
 
 // ============================================================================
@@ -99,56 +79,55 @@ impl Neg for Tensor {
 impl Tensor {
     // Create tensor from array literal
     // Usage: Tensor::from_array([1.0, 2.0, 3.0])
-    def from_array(data: List<f64>): Tensor {
-        extern tensor_from_array(data)
-    }
+    extern def from_array(data: List<f32>): Tensor
 
     // Create tensor filled with zeros
     // Usage: Tensor::zeros([3, 4])
+    // ZRTL expects (ptr, ndim) - wrapper unpacks List struct fields
     def zeros(shape: List<i64>): Tensor {
-        extern tensor_zeros(shape)
+        extern tensor_zeros(shape.data, shape.len)
     }
 
     // Create tensor filled with ones
     // Usage: Tensor::ones([3, 4])
+    // ZRTL expects (ptr, ndim) - wrapper unpacks List struct fields
     def ones(shape: List<i64>): Tensor {
-        extern tensor_ones(shape)
+        extern tensor_ones(shape.data, shape.len)
     }
 
     // Create tensor with values in range [start, end) with step
     // Usage: Tensor::arange(0.0, 10.0, 1.0)
-    def arange(start: f64, end: f64, step: f64 = 1.0): Tensor {
-        extern tensor_arange(start, end, step)
-    }
+    // ZRTL signature: (f64, f64, f64) -> opaque
+    extern def arange(start: f64, end: f64, step: f64 = 1.0): Tensor
 
     // Create tensor with n evenly spaced values between start and end
     // Usage: Tensor::linspace(0.0, 1.0, 100)
-    def linspace(start: f64, end: f64, n: i64): Tensor {
-        extern tensor_linspace(start, end, n)
-    }
+    // ZRTL signature: (f32, f32, i64) -> opaque
+    extern def linspace(start: f32, end: f32, n: i64): Tensor
 
     // Create tensor with random values in [0, 1)
     // Usage: Tensor::rand([3, 4])
+    // ZRTL expects (ptr, ndim) - wrapper unpacks List struct fields
     def rand(shape: List<i64>): Tensor {
-        extern tensor_rand(shape)
+        extern tensor_rand(shape.data, shape.len)
     }
 
     // Create tensor with random normal values (mean=0, std=1)
     // Usage: Tensor::randn([3, 4])
+    // ZRTL expects (ptr, ndim) - wrapper unpacks List struct fields
     def randn(shape: List<i64>): Tensor {
-        extern tensor_randn(shape)
+        extern tensor_randn(shape.data, shape.len)
     }
 
     // Create identity matrix
     // Usage: Tensor::eye(3)
-    def eye(n: i64): Tensor {
-        extern tensor_eye(n)
-    }
+    extern def eye(n: i64): Tensor
 
     // Create tensor filled with a constant value
     // Usage: Tensor::full([3, 4], 2.5)
-    def full(shape: List<i64>, value: f64): Tensor {
-        extern tensor_full(shape, value)
+    // ZRTL expects (ptr, ndim, value) - wrapper unpacks List struct fields
+    def full(shape: List<i64>, value: f32): Tensor {
+        extern tensor_full(shape.data, shape.len, value)
     }
 }
 
@@ -157,115 +136,93 @@ impl Tensor {
 // ============================================================================
 
 impl Tensor {
-    // Shape and dimensions
+    // Shape and dimensions - ZRTL returns different types, use wrappers
     def shape(self): List<i64> {
         extern tensor_shape(self)
     }
-
     def ndim(self): i64 {
         extern tensor_ndim(self)
     }
-
     def numel(self): i64 {
         extern tensor_numel(self)
     }
 
-    // Reduction operations
-    def sum(self): f64 {
-        extern tensor_sum(self)
+    // Reduction operations - ZRTL uses _f32 suffix, use wrappers
+    def sum(self): f32 {
+        extern tensor_sum_f32(self)
     }
-
-    def mean(self): f64 {
-        extern tensor_mean(self)
+    def mean(self): f32 {
+        extern tensor_mean_f32(self)
     }
-
-    def max(self): f64 {
-        extern tensor_max(self)
+    def max(self): f32 {
+        extern tensor_max_f32(self)
     }
-
-    def min(self): f64 {
-        extern tensor_min(self)
+    def min(self): f32 {
+        extern tensor_min_f32(self)
     }
-
-    def std(self): f64 {
+    def std(self): f32 {
         extern tensor_std(self)
     }
-
-    def var(self): f64 {
+    def var(self): f32 {
         extern tensor_var(self)
     }
 
-    // Axis-wise reductions
+    // Axis-wise reductions - use wrappers for now
     def sum_axis(self, axis: i64): Tensor {
         extern tensor_sum_axis(self, axis)
     }
-
     def mean_axis(self, axis: i64): Tensor {
         extern tensor_mean_axis(self, axis)
     }
-
     def max_axis(self, axis: i64): Tensor {
         extern tensor_max_axis(self, axis)
     }
-
     def min_axis(self, axis: i64): Tensor {
         extern tensor_min_axis(self, axis)
     }
 
-    // Shape manipulation
+    // Shape manipulation - use wrappers
     def reshape(self, shape: List<i64>): Tensor {
-        extern tensor_reshape(self, shape)
+        extern tensor_reshape(self, shape.data, shape.len)
     }
-
     def transpose(self): Tensor {
         extern tensor_transpose(self)
     }
-
     def transpose_axes(self, dim0: i64, dim1: i64): Tensor {
         extern tensor_transpose_axes(self, dim0, dim1)
     }
-
     def flatten(self): Tensor {
         extern tensor_flatten(self)
     }
-
     def squeeze(self): Tensor {
         extern tensor_squeeze(self)
     }
-
     def unsqueeze(self, dim: i64): Tensor {
         extern tensor_unsqueeze(self, dim)
     }
 
-    // Element-wise math operations
+    // Element-wise math operations - use wrappers
     def abs(self): Tensor {
         extern tensor_abs(self)
     }
-
     def sqrt(self): Tensor {
         extern tensor_sqrt(self)
     }
-
     def exp(self): Tensor {
         extern tensor_exp(self)
     }
-
     def log(self): Tensor {
         extern tensor_log(self)
     }
-
     def sin(self): Tensor {
         extern tensor_sin(self)
     }
-
     def cos(self): Tensor {
         extern tensor_cos(self)
     }
-
     def tanh(self): Tensor {
         extern tensor_tanh(self)
     }
-
     def pow(self, exponent: f64): Tensor {
         extern tensor_pow(self, exponent)
     }
@@ -279,36 +236,29 @@ impl Tensor {
     def get(self, indices: List<i64>): f64 {
         extern tensor_get(self, indices)
     }
-
     def set(self, indices: List<i64>, value: f64) {
         extern tensor_set(self, indices, value)
     }
-
     def slice(self, start: List<i64>, end: List<i64>): Tensor {
         extern tensor_slice(self, start, end)
     }
 
-    // Comparison (returns boolean tensor)
+    // Comparison (returns boolean tensor) - use wrappers
     def eq(self, other: Tensor): Tensor {
         extern tensor_eq(self, other)
     }
-
     def ne(self, other: Tensor): Tensor {
         extern tensor_ne(self, other)
     }
-
     def lt(self, other: Tensor): Tensor {
         extern tensor_lt(self, other)
     }
-
     def le(self, other: Tensor): Tensor {
         extern tensor_le(self, other)
     }
-
     def gt(self, other: Tensor): Tensor {
         extern tensor_gt(self, other)
     }
-
     def ge(self, other: Tensor): Tensor {
         extern tensor_ge(self, other)
     }
@@ -317,7 +267,6 @@ impl Tensor {
     def to_list(self): List<f64> {
         extern tensor_to_list(self)
     }
-
     def item(self): f64 {
         extern tensor_item(self)
     }
@@ -332,10 +281,10 @@ def dot(a: Tensor, b: Tensor): f64 {
     extern tensor_dot(a, b)
 }
 
-// Matrix multiplication
-def matmul(a: Tensor, b: Tensor): Tensor {
-    extern tensor_matmul(a, b)
-}
+// Matrix multiplication - DISABLED until ZRTL supports proper matmul
+// def matmul(a: Tensor, b: Tensor): Tensor {
+//     extern tensor_matmul(a, b)
+// }
 
 // Concatenate tensors along axis
 def concat(tensors: List<Tensor>, axis: i64 = 0): Tensor {

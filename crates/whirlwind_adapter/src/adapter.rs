@@ -357,6 +357,9 @@ impl WhirlwindAdapter {
                 is_external: false,
                 calling_convention: zyntax_typed_ast::CallingConvention::Default,
                 link_name: None,
+                annotations: vec![],
+                effects: vec![],
+                is_pure: false,
             }),
             return_type,
             span

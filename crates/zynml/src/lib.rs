@@ -147,9 +147,6 @@ impl ZynML {
         let mut runtime = ZyntaxRuntime::new()
             .context("Failed to create Zyntax runtime")?;
 
-        // Register the grammar
-        runtime.register_grammar("zynml", grammar.clone());
-
         // Register stdlib import resolver
         // This allows `import prelude` and `import tensor` to resolve
         runtime.add_import_resolver(Box::new(|module_name| {
@@ -160,7 +157,8 @@ impl ZynML {
             }
         }));
 
-        // Load required plugins
+        // Load required plugins BEFORE registering grammar
+        // This ensures builtin mappings (e.g., println -> $IO$println_dynamic) can find their targets
         let plugins_path = Path::new(&config.plugins_dir);
         for plugin_name in REQUIRED_PLUGINS {
             let plugin_path = plugins_path.join(format!("{}.zrtl", plugin_name));
@@ -191,6 +189,10 @@ impl ZynML {
                 }
             }
         }
+
+        // Register the grammar AFTER loading plugins
+        // This ensures builtin mappings can find the target external functions
+        runtime.register_grammar("zynml", grammar.clone());
 
         // Optionally compile Grammar2 for direct TypedAST parsing
         let grammar2 = Grammar2::from_source(ZYNML_GRAMMAR).ok();

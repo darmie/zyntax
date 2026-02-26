@@ -345,6 +345,20 @@ pub fn convert_type(
             ))
         }
 
+        // Extern types (external runtime types like $Tensor, $Audio)
+        FrontendType::Extern { name, .. } => {
+            // Convert extern types to opaque types
+            Ok(HirType::Opaque(*name))
+        }
+
+        // Unresolved types (should be resolved before lowering, but allow as opaque)
+        FrontendType::Unresolved(name) => {
+            // Log a warning but allow as opaque type
+            eprintln!("[WARN] Unresolved type '{}' in HIR lowering - treating as opaque",
+                name.resolve_global().unwrap_or_default());
+            Ok(HirType::Opaque(*name))
+        }
+
         _ => {
             // Catch-all for other type variants
             Err(crate::CompilerError::Analysis(format!(
