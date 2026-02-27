@@ -206,6 +206,26 @@ fn test_arithmetic_operations() {
         .expect("Failed to compile division function");
 }
 
+/// Test SIMD vector arithmetic compilation (integer lanes)
+#[test]
+fn test_vector_i32x4_add_compilation() {
+    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
+    let func = create_vector_arithmetic_function("vec_i32x4_add", BinaryOp::Add, HirType::I32, 4);
+    backend
+        .compile_function(func.id, &func)
+        .expect("Failed to compile i32x4 add function");
+}
+
+/// Test SIMD vector arithmetic compilation (floating lanes)
+#[test]
+fn test_vector_f32x4_add_compilation() {
+    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
+    let func = create_vector_arithmetic_function("vec_f32x4_add", BinaryOp::FAdd, HirType::F32, 4);
+    backend
+        .compile_function(func.id, &func)
+        .expect("Failed to compile f32x4 add function");
+}
+
 /// Test comparison operations
 #[test]
 fn test_comparison_operations() {
@@ -346,6 +366,65 @@ fn create_comparison_function(name: &str, op: BinaryOp) -> HirFunction {
         op,
         result,
         ty: HirType::Bool,
+        left: param_a,
+        right: param_b,
+    };
+
+    let block = func.blocks.get_mut(&entry_block_id).unwrap();
+    block.add_instruction(inst);
+    block.set_terminator(HirTerminator::Return {
+        values: vec![result],
+    });
+
+    func
+}
+
+/// Helper function to create vector arithmetic operations
+fn create_vector_arithmetic_function(
+    name: &str,
+    op: BinaryOp,
+    elem_ty: HirType,
+    lanes: u32,
+) -> HirFunction {
+    let name = create_test_string(name);
+    let vec_ty = HirType::Vector(Box::new(elem_ty), lanes);
+
+    let sig = HirFunctionSignature {
+        params: vec![
+            HirParam {
+                id: HirId::new(),
+                name: create_test_string("a"),
+                ty: vec_ty.clone(),
+                attributes: ParamAttributes::default(),
+            },
+            HirParam {
+                id: HirId::new(),
+                name: create_test_string("b"),
+                ty: vec_ty.clone(),
+                attributes: ParamAttributes::default(),
+            },
+        ],
+        returns: vec![vec_ty.clone()],
+        type_params: vec![],
+        const_params: vec![],
+        lifetime_params: vec![],
+        is_variadic: false,
+        is_async: false,
+        effects: vec![],
+        is_pure: false,
+    };
+
+    let mut func = HirFunction::new(name, sig);
+
+    let entry_block_id = func.entry_block;
+    let param_a = func.create_value(vec_ty.clone(), HirValueKind::Parameter(0));
+    let param_b = func.create_value(vec_ty.clone(), HirValueKind::Parameter(1));
+
+    let result = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let inst = HirInstruction::Binary {
+        op,
+        result,
+        ty: vec_ty,
         left: param_a,
         right: param_b,
     };

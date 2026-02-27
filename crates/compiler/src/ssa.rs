@@ -1883,7 +1883,7 @@ impl SsaBuilder {
                 let right_val = self.translate_expression(block_id, right)?;
                 let result_type = self.convert_type(&expr.ty);
 
-                let hir_op = self.convert_binary_op(op);
+                let hir_op = self.convert_binary_op(op, &left_with_type.ty);
 
                 // For comparisons, use the operand type (not Bool result type) for the instruction
                 let inst_type = match hir_op {
@@ -4350,28 +4350,102 @@ impl SsaBuilder {
     fn convert_binary_op(
         &self,
         op: &zyntax_typed_ast::typed_ast::BinaryOp,
+        operand_ty: &Type,
     ) -> crate::hir::BinaryOp {
         use crate::hir::BinaryOp as HirOp;
         use zyntax_typed_ast::typed_ast::BinaryOp as FrontendOp;
 
+        let operand_hir_ty = self.convert_type(operand_ty);
+        let is_float_like = match &operand_hir_ty {
+            HirType::F32 | HirType::F64 => true,
+            HirType::Vector(elem_ty, _) => matches!(&**elem_ty, HirType::F32 | HirType::F64),
+            _ => false,
+        };
+
         match op {
-            FrontendOp::Add => HirOp::Add,
-            FrontendOp::Sub => HirOp::Sub,
-            FrontendOp::Mul => HirOp::Mul,
+            FrontendOp::Add => {
+                if is_float_like {
+                    HirOp::FAdd
+                } else {
+                    HirOp::Add
+                }
+            }
+            FrontendOp::Sub => {
+                if is_float_like {
+                    HirOp::FSub
+                } else {
+                    HirOp::Sub
+                }
+            }
+            FrontendOp::Mul => {
+                if is_float_like {
+                    HirOp::FMul
+                } else {
+                    HirOp::Mul
+                }
+            }
             FrontendOp::MatMul => HirOp::Mul,
-            FrontendOp::Div => HirOp::Div,
-            FrontendOp::Rem => HirOp::Rem,
+            FrontendOp::Div => {
+                if is_float_like {
+                    HirOp::FDiv
+                } else {
+                    HirOp::Div
+                }
+            }
+            FrontendOp::Rem => {
+                if is_float_like {
+                    HirOp::FRem
+                } else {
+                    HirOp::Rem
+                }
+            }
             FrontendOp::BitAnd => HirOp::And,
             FrontendOp::BitOr => HirOp::Or,
             FrontendOp::BitXor => HirOp::Xor,
             FrontendOp::Shl => HirOp::Shl,
             FrontendOp::Shr => HirOp::Shr,
-            FrontendOp::Eq => HirOp::Eq,
-            FrontendOp::Ne => HirOp::Ne,
-            FrontendOp::Lt => HirOp::Lt,
-            FrontendOp::Le => HirOp::Le,
-            FrontendOp::Gt => HirOp::Gt,
-            FrontendOp::Ge => HirOp::Ge,
+            FrontendOp::Eq => {
+                if is_float_like {
+                    HirOp::FEq
+                } else {
+                    HirOp::Eq
+                }
+            }
+            FrontendOp::Ne => {
+                if is_float_like {
+                    HirOp::FNe
+                } else {
+                    HirOp::Ne
+                }
+            }
+            FrontendOp::Lt => {
+                if is_float_like {
+                    HirOp::FLt
+                } else {
+                    HirOp::Lt
+                }
+            }
+            FrontendOp::Le => {
+                if is_float_like {
+                    HirOp::FLe
+                } else {
+                    HirOp::Le
+                }
+            }
+            FrontendOp::Gt => {
+                if is_float_like {
+                    HirOp::FGt
+                } else {
+                    HirOp::Gt
+                }
+            }
+            FrontendOp::Ge => {
+                if is_float_like {
+                    HirOp::FGe
+                } else {
+                    HirOp::Ge
+                }
+            }
             _ => HirOp::Add, // Default
         }
     }
@@ -6493,7 +6567,7 @@ impl SsaBuilder {
                     ));
                 }
 
-                let hir_op = self.convert_binary_op(&bin.op);
+                let hir_op = self.convert_binary_op(&bin.op, &bin.left.ty);
                 let result_id = HirId::new();
                 func.values.insert(
                     result_id,

@@ -6709,15 +6709,20 @@ impl CraneliftBackend {
 impl HirType {
     #[allow(dead_code)]
     fn is_float(&self) -> bool {
-        matches!(self, HirType::F32 | HirType::F64)
+        match self {
+            HirType::F32 | HirType::F64 => true,
+            HirType::Vector(elem_ty, _) => elem_ty.is_float(),
+            _ => false,
+        }
     }
 
     #[allow(dead_code)]
     fn is_signed(&self) -> bool {
-        matches!(
-            self,
-            HirType::I8 | HirType::I16 | HirType::I32 | HirType::I64 | HirType::I128
-        )
+        match self {
+            HirType::I8 | HirType::I16 | HirType::I32 | HirType::I64 | HirType::I128 => true,
+            HirType::Vector(elem_ty, _) => elem_ty.is_signed(),
+            _ => false,
+        }
     }
 }
 
