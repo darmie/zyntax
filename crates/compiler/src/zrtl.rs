@@ -1627,6 +1627,25 @@ extern "C" fn drop_box_u8(ptr: *mut u8) {
 ///
 /// This is called at compile time (during lowering) to get the
 /// ZRTL TypeTag for a given type.
+fn stable_opaque_type_sub_id(type_name: &str) -> u16 {
+    let clean_name = type_name.trim_start_matches('$');
+    if clean_name.is_empty() {
+        return 1;
+    }
+
+    let mut hash: u32 = 0x811C_9DC5;
+    for byte in clean_name.as_bytes() {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+
+    let mut id = (hash as u16) & 0x7FFF;
+    if id == 0 {
+        id = 1;
+    }
+    id
+}
+
 pub fn type_tag_for_hir_type(ty: &crate::hir::HirType) -> TypeTag {
     use crate::hir::HirType;
 
@@ -1653,7 +1672,14 @@ pub fn type_tag_for_hir_type(ty: &crate::hir::HirType) -> TypeTag {
         HirType::Union(_) => TypeTag::new(TypeCategory::Union, 0, TypeFlags::NONE),
         HirType::Function(_) => TypeTag::new(TypeCategory::Function, 0, TypeFlags::NONE),
         HirType::Closure(_) => TypeTag::new(TypeCategory::Function, 1, TypeFlags::NONE), // Closure
-        HirType::Opaque(_) => TypeTag::new(TypeCategory::Opaque, 0, TypeFlags::NONE),
+        HirType::Opaque(type_name) => {
+            let type_name_str = type_name.resolve_global().unwrap_or_default();
+            TypeTag::new(
+                TypeCategory::Opaque,
+                stable_opaque_type_sub_id(&type_name_str),
+                TypeFlags::NONE,
+            )
+        }
         HirType::ConstGeneric(_) => TypeTag::new(TypeCategory::Opaque, 1, TypeFlags::NONE),
         HirType::Generic { .. } => TypeTag::new(TypeCategory::Custom, 0, TypeFlags::NONE),
         HirType::TraitObject { .. } => TypeTag::new(TypeCategory::TraitObject, 0, TypeFlags::NONE),

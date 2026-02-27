@@ -3590,13 +3590,9 @@ mod execution {
         }
     }
 
-    // Ignored: this test crashes the test process with SIGABRT (stack overflow in Grammar2
-    // interpreter parsing the complex prelude.zynml) or SIGSEGV (tensor runtime bug in
-    // println_any). Both are pre-existing issues that kill the test runner via signal.
-    // Run manually with a larger stack:
-    //   RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests -- --include-ignored test_execute_hello
+    // Regression coverage for the full hello example (prelude + tensor + dynamic println).
+    // Keep panic isolation via catch_unwind so runtime regressions produce actionable test output.
     #[test]
-    #[ignore]
     fn test_execute_hello_example() {
         let Some(mut zynml) = create_runtime_with_plugins() else {
             println!("Skipping: plugins not available");

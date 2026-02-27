@@ -621,17 +621,20 @@ unsafe fn format_dynamic_box(value: &zrtl::DynamicBox, output: &mut String) {
                     output.push_str("<opaque (display failed)>");
                 }
             } else {
-                // No Display trait - show hex dump of first few bytes
-                output.push_str("<opaque ");
-                let num_bytes = (value.size as usize).min(16);
-                for i in 0..num_bytes {
-                    let byte = *value.data.add(i);
-                    let _ = write!(output, "{:02x}", byte);
+                // No Display trait - do NOT dereference opaque data pointers.
+                // Some runtime-backed values point to foreign allocations that are
+                // not safely readable as raw bytes from this plugin.
+                let kind = if value.category() == TypeCategory::Custom {
+                    "custom"
+                } else {
+                    "opaque"
+                };
+                let type_id = value.tag.type_id();
+                if value.data.is_null() {
+                    let _ = write!(output, "<{} type_id={} null>", kind, type_id);
+                } else {
+                    let _ = write!(output, "<{} type_id={} @{:p}>", kind, type_id, value.data);
                 }
-                if value.size > 16 {
-                    let _ = write!(output, "... ({} bytes total)", value.size);
-                }
-                output.push('>');
             }
         }
     }
@@ -1011,7 +1014,7 @@ zrtl_plugin! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zrtl::string_as_str;
+    use zrtl::{TypeCategory, TypeFlags, TypeTag, string_as_str};
 
     #[test]
     fn test_format_i64() {
@@ -1025,22 +1028,22 @@ mod tests {
 
     #[test]
     fn test_format_f64() {
-        let result = io_format_f64(3.14);
+        let result = io_format_f64(12.34);
         assert!(!result.is_null());
         unsafe {
             let s = string_as_str(result);
             assert!(s.is_some());
-            assert!(s.unwrap().starts_with("3.14"));
+            assert!(s.unwrap().starts_with("12.34"));
             string_free(result);
         }
     }
 
     #[test]
     fn test_format_f64_precision() {
-        let result = io_format_f64_precision(3.14159, 2);
+        let result = io_format_f64_precision(12.34567, 2);
         assert!(!result.is_null());
         unsafe {
-            assert_eq!(string_as_str(result), Some("3.14"));
+            assert_eq!(string_as_str(result), Some("12.35"));
             string_free(result);
         }
     }
@@ -1088,6 +1091,31 @@ mod tests {
             io_print(s);
             io_println(s);
             string_free(s);
+        }
+    }
+
+    #[test]
+    fn test_format_dynamic_opaque_includes_type_id_without_dereference() {
+        // Deliberately use an invalid raw pointer value to verify formatting
+        // does not dereference opaque/custom payload bytes.
+        let boxed = zrtl::DynamicBox {
+            tag: TypeTag::new(TypeCategory::Opaque, 0x1234, TypeFlags::NONE),
+            size: 8,
+            data: std::ptr::dangling_mut::<u8>(),
+            dropper: None,
+            display_fn: None,
+        };
+
+        let formatted = unsafe { io_format_dynamic(&boxed as *const zrtl::DynamicBox) };
+        assert!(!formatted.is_null());
+        unsafe {
+            let rendered = string_as_str(formatted).unwrap_or_default();
+            assert!(
+                rendered.contains("type_id=4660"),
+                "expected opaque type_id in output, got: {}",
+                rendered
+            );
+            string_free(formatted);
         }
     }
 }

@@ -78,6 +78,106 @@ fn type_tag_to_cranelift_type(tag: &crate::zrtl::TypeTag) -> types::Type {
     }
 }
 
+/// Deterministically derive a non-zero opaque sub-id from a type name.
+///
+/// We reserve `0` for unknown/legacy opaque values and keep `0xFFFF` for
+/// DynamicBox signature markers, so generated IDs stay in a safe range.
+fn stable_opaque_type_sub_id(type_name: &str) -> u16 {
+    let clean_name = type_name.trim_start_matches('$');
+    if clean_name.is_empty() {
+        return 1;
+    }
+
+    // FNV-1a (32-bit), deterministic across processes/platforms.
+    let mut hash: u32 = 0x811C_9DC5;
+    for byte in clean_name.as_bytes() {
+        hash ^= *byte as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+
+    let mut id = (hash as u16) & 0x7FFF;
+    if id == 0 {
+        id = 1;
+    }
+    id
+}
+
+fn dynamic_box_opaque_tag(opaque_name: &str) -> u32 {
+    crate::zrtl::TypeTag::new(
+        crate::zrtl::TypeCategory::Opaque,
+        stable_opaque_type_sub_id(opaque_name),
+        crate::zrtl::TypeFlags::NONE,
+    )
+    .0
+}
+
+fn dynamic_box_tag_and_size_for_hir_type(ty: &HirType) -> (u32, u32) {
+    match ty {
+        HirType::I8 => (crate::zrtl::TypeTag::I8.0, 1),
+        HirType::I16 => (crate::zrtl::TypeTag::I16.0, 2),
+        HirType::I32 => (crate::zrtl::TypeTag::I32.0, 4),
+        HirType::I64 => (crate::zrtl::TypeTag::I64.0, 8),
+        HirType::U8 => (crate::zrtl::TypeTag::U8.0, 1),
+        HirType::U16 => (crate::zrtl::TypeTag::U16.0, 2),
+        HirType::U32 => (crate::zrtl::TypeTag::U32.0, 4),
+        HirType::U64 => (crate::zrtl::TypeTag::U64.0, 8),
+        HirType::F32 => (crate::zrtl::TypeTag::F32.0, 4),
+        HirType::F64 => (crate::zrtl::TypeTag::F64.0, 8),
+        HirType::Bool => (crate::zrtl::TypeTag::BOOL.0, 1),
+        HirType::Ptr(inner) if matches!(inner.as_ref(), HirType::I8) => {
+            (crate::zrtl::TypeTag::STRING.0, 8)
+        }
+        HirType::Opaque(type_name) => {
+            let type_name_str = type_name.resolve_global().unwrap_or_default();
+            (dynamic_box_opaque_tag(&type_name_str), 8)
+        }
+        HirType::Ptr(inner) if matches!(inner.as_ref(), HirType::Opaque(_)) => {
+            if let HirType::Opaque(type_name) = inner.as_ref() {
+                let type_name_str = type_name.resolve_global().unwrap_or_default();
+                (dynamic_box_opaque_tag(&type_name_str), 8)
+            } else {
+                unreachable!("checked by match guard");
+            }
+        }
+        HirType::Ptr(_) => (
+            crate::zrtl::TypeTag::new(
+                crate::zrtl::TypeCategory::Pointer,
+                crate::zrtl::PrimitiveSize::Pointer as u16,
+                crate::zrtl::TypeFlags::NONE,
+            )
+            .0,
+            8,
+        ),
+        other => {
+            log::warn!(
+                "[Boxing] Unhandled type: {:?}, defaulting to opaque tag",
+                other
+            );
+            default_dynamic_box_opaque_tag_and_size()
+        }
+    }
+}
+
+fn default_dynamic_box_opaque_tag_and_size() -> (u32, u32) {
+    (
+        crate::zrtl::TypeTag::new(
+            crate::zrtl::TypeCategory::Opaque,
+            1,
+            crate::zrtl::TypeFlags::NONE,
+        )
+        .0,
+        8,
+    )
+}
+
+fn dynamic_box_uses_direct_pointer(ty: &HirType) -> bool {
+    match ty {
+        HirType::Opaque(_) => true,
+        HirType::Ptr(inner) => matches!(inner.as_ref(), HirType::Opaque(_) | HirType::I8),
+        _ => false,
+    }
+}
+
 /// Cranelift backend for JIT compilation
 pub struct CraneliftBackend {
     /// JIT module for code generation
@@ -1402,65 +1502,27 @@ impl CraneliftBackend {
                                             if needs_boxing {
                                                 // Apply DynamicBox wrapping - same logic as HirCallable::Symbol
                                                 let arg_hir_id = args[param_index];
-                                                // Check if this is a pointer type (opaque or string) - pass value directly
-                                                let is_pointer_type = if let Some(hir_value) =
-                                                    function.values.get(&arg_hir_id)
-                                                {
-                                                    match &hir_value.ty {
-                                                        HirType::Opaque(_) => true,
-                                                        HirType::Ptr(inner) => matches!(
-                                                            inner.as_ref(),
-                                                            HirType::Opaque(_) | HirType::I8
-                                                        ),
-                                                        _ => false,
-                                                    }
-                                                } else {
-                                                    false
-                                                };
+                                                let is_pointer_type = function
+                                                    .values
+                                                    .get(&arg_hir_id)
+                                                    .map(|hir_value| {
+                                                        dynamic_box_uses_direct_pointer(
+                                                            &hir_value.ty,
+                                                        )
+                                                    })
+                                                    .unwrap_or(false);
 
-                                                let (tag_value, size_value) =
-                                                    if let Some(hir_value) =
-                                                        function.values.get(&arg_hir_id)
-                                                    {
-                                                        // TypeTag format: (type_id << 8) | category
-                                                        // PrimitiveSize: Bits8=1, Bits16=2, Bits32=3, Bits64=4
-                                                        match &hir_value.ty {
-                                                            HirType::I8 => (0x0102u32, 1u32),   // Int(Bits8)
-                                                            HirType::I16 => (0x0202u32, 2u32), // Int(Bits16)
-                                                            HirType::I32 => (0x0302u32, 4u32), // Int(Bits32)
-                                                            HirType::I64 => (0x0402u32, 8u32), // Int(Bits64)
-                                                            HirType::U8 => (0x0103u32, 1u32), // UInt(Bits8)
-                                                            HirType::U16 => (0x0203u32, 2u32), // UInt(Bits16)
-                                                            HirType::U32 => (0x0303u32, 4u32), // UInt(Bits32)
-                                                            HirType::U64 => (0x0403u32, 8u32), // UInt(Bits64)
-                                                            HirType::F32 => (0x0304u32, 4u32), // Float(Bits32)
-                                                            HirType::F64 => (0x0404u32, 8u32), // Float(Bits64)
-                                                            HirType::Bool => (0x0001u32, 1u32), // Bool
-                                                            HirType::Ptr(inner)
-                                                                if matches!(
-                                                                    inner.as_ref(),
-                                                                    HirType::I8
-                                                                ) =>
-                                                            {
-                                                                (0x0005u32, 8u32)
-                                                            } // String
-                                                            HirType::Opaque(_) => (0x0012u32, 8u32), // Opaque
-                                                            HirType::Ptr(inner)
-                                                                if matches!(
-                                                                    inner.as_ref(),
-                                                                    HirType::Opaque(_)
-                                                                ) =>
-                                                            {
-                                                                (0x0012u32, 8u32)
-                                                            }
-                                                            other => {
-                                                                (0x0012u32, 8u32)
-                                                                // Opaque
-                                                            }
-                                                        }
-                                                    } else {
-                                                        (0x0012u32, 8u32) // Opaque
-                                                    };
+                                                let (tag_value, size_value) = function
+                                                    .values
+                                                    .get(&arg_hir_id)
+                                                    .map(|hir_value| {
+                                                        dynamic_box_tag_and_size_for_hir_type(
+                                                            &hir_value.ty,
+                                                        )
+                                                    })
+                                                    .unwrap_or_else(
+                                                        default_dynamic_box_opaque_tag_and_size,
+                                                    );
 
                                                 let data_ptr_value = if is_pointer_type {
                                                     // Pointer types (opaque, string): value IS the pointer
@@ -1776,65 +1838,30 @@ impl CraneliftBackend {
                                             // Allocate stack space for DynamicBox (32 bytes on 64-bit)
                                             // Determine TypeTag and size based on HIR type
                                             let arg_hir_id = args[param_index];
-                                            let (tag_value, size_value) = if let Some(hir_value) =
-                                                function.values.get(&arg_hir_id)
-                                            {
-                                                // TypeTag format: (type_id << 8) | category
-                                                // PrimitiveSize: Bits8=1, Bits16=2, Bits32=3, Bits64=4
-                                                match &hir_value.ty {
-                                                    HirType::I8 => (0x0102u32, 1u32),   // Int(Bits8)
-                                                    HirType::I16 => (0x0202u32, 2u32), // Int(Bits16)
-                                                    HirType::I32 => (0x0302u32, 4u32), // Int(Bits32)
-                                                    HirType::I64 => (0x0402u32, 8u32), // Int(Bits64)
-                                                    HirType::U8 => (0x0103u32, 1u32), // UInt(Bits8)
-                                                    HirType::U16 => (0x0203u32, 2u32), // UInt(Bits16)
-                                                    HirType::U32 => (0x0303u32, 4u32), // UInt(Bits32)
-                                                    HirType::U64 => (0x0403u32, 8u32), // UInt(Bits64)
-                                                    HirType::F32 => (0x0304u32, 4u32), // Float(Bits32)
-                                                    HirType::F64 => (0x0404u32, 8u32), // Float(Bits64)
-                                                    HirType::Bool => (0x0001u32, 1u32), // Bool
-                                                    HirType::Ptr(inner)
-                                                        if matches!(
-                                                            inner.as_ref(),
-                                                            HirType::I8
-                                                        ) =>
-                                                    {
-                                                        (0x0005u32, 8u32) // String
-                                                    }
-                                                    HirType::Opaque(_) => (0x0012u32, 8u32), // Opaque
-                                                    HirType::Ptr(inner)
-                                                        if matches!(
-                                                            inner.as_ref(),
-                                                            HirType::Opaque(_)
-                                                        ) =>
-                                                    {
-                                                        (0x0012u32, 8u32) // Ptr to Opaque
-                                                    }
-                                                    other => {
-                                                        log::warn!("[Boxing] Unhandled type: {:?}, defaulting to Opaque", other);
-                                                        (0x0012u32, 8u32) // Opaque
-                                                    }
-                                                }
-                                            } else {
-                                                log::warn!("[Boxing] No HirValue found for arg_hir_id {:?}", arg_hir_id);
-                                                (0x0012u32, 8u32) // Opaque
-                                            };
+                                            let (tag_value, size_value) = function
+                                                .values
+                                                .get(&arg_hir_id)
+                                                .map(|hir_value| {
+                                                    dynamic_box_tag_and_size_for_hir_type(
+                                                        &hir_value.ty,
+                                                    )
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    log::warn!(
+                                                        "[Boxing] No HirValue found for arg_hir_id {:?}",
+                                                        arg_hir_id
+                                                    );
+                                                    default_dynamic_box_opaque_tag_and_size()
+                                                });
 
                                             // Check if this is a pointer type (opaque types or strings that should be passed directly)
-                                            let is_pointer_type = if let Some(hir_value) =
-                                                function.values.get(&args[param_index])
-                                            {
-                                                match &hir_value.ty {
-                                                    HirType::Opaque(_) => true,
-                                                    HirType::Ptr(inner) => matches!(
-                                                        inner.as_ref(),
-                                                        HirType::Opaque(_) | HirType::I8
-                                                    ),
-                                                    _ => false,
-                                                }
-                                            } else {
-                                                false
-                                            };
+                                            let is_pointer_type = function
+                                                .values
+                                                .get(&args[param_index])
+                                                .map(|hir_value| {
+                                                    dynamic_box_uses_direct_pointer(&hir_value.ty)
+                                                })
+                                                .unwrap_or(false);
 
                                             // For pointer types, the value IS already a pointer - store directly
                                             // For primitives, allocate stack space and store a pointer to the value
