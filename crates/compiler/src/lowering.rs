@@ -4276,8 +4276,81 @@ impl LoweringContext {
         None
     }
 
+    fn can_implicitly_convert_numeric(
+        from: zyntax_typed_ast::PrimitiveType,
+        to: zyntax_typed_ast::PrimitiveType,
+    ) -> bool {
+        use zyntax_typed_ast::PrimitiveType::*;
+
+        if from == to {
+            return true;
+        }
+
+        match (from, to) {
+            // Widening signed integer conversions
+            (I8, I16 | I32 | I64 | I128) => true,
+            (I16, I32 | I64 | I128) => true,
+            (I32, I64 | I128) => true,
+            (I64, I128) => true,
+
+            // Widening unsigned integer conversions
+            (U8, U16 | U32 | U64 | U128) => true,
+            (U16, U32 | U64 | U128) => true,
+            (U32, U64 | U128) => true,
+            (U64, U128) => true,
+
+            // Float widening
+            (F32, F64) => true,
+
+            // Integer to float promotions
+            (I8 | I16 | I32, F32 | F64) => true,
+            (I64, F64) => true,
+            (U8 | U16 | U32, F32 | F64) => true,
+            (U64, F64) => true,
+
+            // Platform-sized integers (conservative defaults)
+            (ISize, I64 | I128 | F64) => true,
+            (USize, U64 | U128 | F64) => true,
+
+            _ => false,
+        }
+    }
+
+    fn try_implicit_numeric_conversion(
+        &self,
+        expr: zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>,
+        expected_type: &Type,
+    ) -> Option<zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>> {
+        use zyntax_typed_ast::{typed_ast::typed_node, TypedCast, TypedExpression};
+
+        let source_prim = match expr.ty {
+            Type::Primitive(p) if p.is_numeric() => p,
+            _ => return None,
+        };
+
+        let target_prim = match expected_type {
+            Type::Primitive(p) if p.is_numeric() => *p,
+            _ => return None,
+        };
+
+        if !Self::can_implicitly_convert_numeric(source_prim, target_prim) {
+            return None;
+        }
+
+        let span = expr.span;
+        Some(typed_node(
+            TypedExpression::Cast(TypedCast {
+                expr: Box::new(expr),
+                target_type: expected_type.clone(),
+            }),
+            expected_type.clone(),
+            span,
+        ))
+    }
+
     /// Try to insert an implicit From conversion if types don't match
-    /// Returns a new expression wrapped in Type::from() if conversion is available
+    /// Returns a new expression wrapped in either an implicit numeric cast
+    /// or Type::from() call when available.
     fn try_implicit_from_conversion(
         &self,
         expr: zyntax_typed_ast::TypedNode<zyntax_typed_ast::TypedExpression>,
@@ -4295,6 +4368,11 @@ impl LoweringContext {
             || matches!(expected_type, Type::Any | Type::Unknown)
         {
             return None;
+        }
+
+        // Prefer direct numeric casts for primitive numeric conversions.
+        if let Some(cast_expr) = self.try_implicit_numeric_conversion(expr.clone(), expected_type) {
+            return Some(cast_expr);
         }
 
         // Check if there's a From<expr.ty> impl for expected_type

@@ -5566,7 +5566,9 @@ impl CraneliftBackend {
                         result
                     }
                     crate::hir::CastOp::Trunc => builder.ins().ireduce(target_ty, val),
+                    crate::hir::CastOp::FpToUi => builder.ins().fcvt_to_uint(target_ty, val),
                     crate::hir::CastOp::FpToSi => builder.ins().fcvt_to_sint(target_ty, val),
+                    crate::hir::CastOp::UiToFp => builder.ins().fcvt_from_uint(target_ty, val),
                     crate::hir::CastOp::SiToFp => builder.ins().fcvt_from_sint(target_ty, val),
                     crate::hir::CastOp::FpExt => builder.ins().fpromote(target_ty, val),
                     crate::hir::CastOp::FpTrunc => builder.ins().fdemote(target_ty, val),

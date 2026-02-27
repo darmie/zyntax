@@ -1531,6 +1531,84 @@ impl SsaBuilder {
         self.translate_expression(block_id, &lowered_expr)
     }
 
+    fn int_type_width_and_sign(ty: &HirType) -> Option<(u8, bool)> {
+        match ty {
+            HirType::I8 => Some((8, true)),
+            HirType::I16 => Some((16, true)),
+            HirType::I32 => Some((32, true)),
+            HirType::I64 => Some((64, true)),
+            HirType::I128 => Some((128, true)),
+            HirType::U8 => Some((8, false)),
+            HirType::U16 => Some((16, false)),
+            HirType::U32 => Some((32, false)),
+            HirType::U64 => Some((64, false)),
+            HirType::U128 => Some((128, false)),
+            _ => None,
+        }
+    }
+
+    fn float_type_width(ty: &HirType) -> Option<u8> {
+        match ty {
+            HirType::F32 => Some(32),
+            HirType::F64 => Some(64),
+            _ => None,
+        }
+    }
+
+    fn select_cast_op(&self, source_ty: &HirType, target_ty: &HirType) -> CastOp {
+        use CastOp::*;
+
+        if source_ty == target_ty {
+            return Bitcast;
+        }
+
+        if let (Some((src_bits, src_signed)), Some((dst_bits, _dst_signed))) = (
+            Self::int_type_width_and_sign(source_ty),
+            Self::int_type_width_and_sign(target_ty),
+        ) {
+            if src_bits > dst_bits {
+                return Trunc;
+            }
+            if src_bits < dst_bits {
+                return if src_signed { SExt } else { ZExt };
+            }
+            return Bitcast;
+        }
+
+        if let (Some(src_bits), Some(dst_bits)) = (
+            Self::float_type_width(source_ty),
+            Self::float_type_width(target_ty),
+        ) {
+            if src_bits < dst_bits {
+                return FpExt;
+            }
+            if src_bits > dst_bits {
+                return FpTrunc;
+            }
+            return Bitcast;
+        }
+
+        if let (Some((_src_bits, src_signed)), Some(_dst_float_bits)) = (
+            Self::int_type_width_and_sign(source_ty),
+            Self::float_type_width(target_ty),
+        ) {
+            return if src_signed { SiToFp } else { UiToFp };
+        }
+
+        if let (Some(_src_float_bits), Some((_dst_bits, dst_signed))) = (
+            Self::float_type_width(source_ty),
+            Self::int_type_width_and_sign(target_ty),
+        ) {
+            return if dst_signed { FpToSi } else { FpToUi };
+        }
+
+        match (source_ty, target_ty) {
+            (HirType::Ptr(_), HirType::I64 | HirType::U64) => PtrToInt,
+            (HirType::I64 | HirType::U64, HirType::Ptr(_)) => IntToPtr,
+            _ => Bitcast,
+        }
+    }
+
     /// Translate expression to SSA value
     fn translate_expression(
         &mut self,
@@ -2535,17 +2613,10 @@ impl SsaBuilder {
 
             TypedExpression::Cast(cast) => {
                 let operand_val = self.translate_expression(block_id, &cast.expr)?;
+                let source_ty = self.convert_type(&cast.expr.ty);
                 let target_ty = self.convert_type(&cast.target_type);
                 let result = self.create_value(target_ty.clone(), HirValueKind::Instruction);
-
-                // NOTE: Proper cast operation selection requires type information.
-                // Should determine: IntToInt, IntToFloat, FloatToInt, FloatToFloat, Bitcast, etc.
-                // Needs source type width, target type width, signedness information.
-                //
-                // WORKAROUND: Always uses Bitcast (works for pointer casts and same-size conversions)
-                // FUTURE (v2.0): Add type-aware cast selection logic
-                // Estimated effort: 4-5 hours (needs type width/signedness utilities)
-                let cast_op = CastOp::Bitcast;
+                let cast_op = self.select_cast_op(&source_ty, &target_ty);
 
                 self.add_instruction(
                     block_id,

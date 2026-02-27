@@ -3639,6 +3639,62 @@ mod execution {
         );
     }
 
+    #[test]
+    fn test_execute_implicit_numeric_casts_in_assignments() {
+        let Some(mut zynml) = create_runtime_with_plugins() else {
+            println!("Skipping: plugins not available");
+            return;
+        };
+
+        let source = r#"
+            fn numeric_assignment_casts() {
+                let a: i64 = 41
+                let b: f64 = a
+                let c: i16 = 7
+                let d: i64 = c
+                let e: f64 = c
+            }
+        "#;
+
+        let functions = zynml
+            .load_source(source)
+            .expect("numeric assignment casts should compile");
+        assert!(
+            functions.iter().any(|f| f == "numeric_assignment_casts"),
+            "numeric_assignment_casts should be exported"
+        );
+    }
+
+    #[test]
+    fn test_execute_implicit_numeric_casts_in_call_args() {
+        let Some(mut zynml) = create_runtime_with_plugins() else {
+            println!("Skipping: plugins not available");
+            return;
+        };
+
+        let source = r#"
+            fn takes_i64(x: i64) {
+                let _copy = x
+            }
+
+            fn callsite() {
+                takes_i64(5)
+            }
+        "#;
+
+        let functions = zynml
+            .load_source(source)
+            .expect("numeric call-arg casts should compile");
+        assert!(
+            functions.iter().any(|f| f == "takes_i64"),
+            "takes_i64 should be exported"
+        );
+        assert!(
+            functions.iter().any(|f| f == "callsite"),
+            "callsite should be exported"
+        );
+    }
+
     // Regression coverage for the full hello example (prelude + tensor + dynamic println).
     // Keep panic isolation via catch_unwind so runtime regressions produce actionable test output.
     #[test]
