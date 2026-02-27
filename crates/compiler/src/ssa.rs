@@ -1607,33 +1607,123 @@ impl SsaBuilder {
                     return self.translate_assignment(block_id, left, right);
                 }
 
-                // Logical AND/OR operators - use bitwise operations for now
-                // TODO: Implement proper short-circuit evaluation
-                // For now, both sides are evaluated (no short-circuiting)
+                // Logical AND/OR operators require short-circuit control flow.
                 if matches!(op, FrontendOp::And | FrontendOp::Or) {
                     let left_val = self.translate_expression(block_id, left)?;
-                    let right_val = self.translate_expression(block_id, right)?;
-                    let result_type = self.convert_type(&expr.ty);
+                    let left_block_id = self.continuation_block.take().unwrap_or(block_id);
 
-                    let hir_op = match op {
-                        FrontendOp::And => crate::hir::BinaryOp::And, // Bitwise AND for now
-                        FrontendOp::Or => crate::hir::BinaryOp::Or,   // Bitwise OR for now
+                    let rhs_block_id = HirId::new();
+                    let short_block_id = HirId::new();
+                    let merge_block_id = HirId::new();
+
+                    self.function
+                        .blocks
+                        .insert(rhs_block_id, HirBlock::new(rhs_block_id));
+                    self.function
+                        .blocks
+                        .insert(short_block_id, HirBlock::new(short_block_id));
+                    self.function
+                        .blocks
+                        .insert(merge_block_id, HirBlock::new(merge_block_id));
+
+                    self.definitions.insert(rhs_block_id, IndexMap::new());
+                    self.definitions.insert(short_block_id, IndexMap::new());
+                    self.definitions.insert(merge_block_id, IndexMap::new());
+
+                    let (true_target, false_target, short_value) = match op {
+                        FrontendOp::And => (rhs_block_id, short_block_id, false),
+                        FrontendOp::Or => (short_block_id, rhs_block_id, true),
                         _ => unreachable!(),
                     };
 
-                    let result = self.create_value(result_type.clone(), HirValueKind::Instruction);
-                    let inst = HirInstruction::Binary {
-                        op: hir_op,
-                        result,
-                        ty: result_type,
-                        left: left_val,
-                        right: right_val,
+                    self.function
+                        .blocks
+                        .get_mut(&left_block_id)
+                        .unwrap()
+                        .terminator = HirTerminator::CondBranch {
+                        condition: left_val,
+                        true_target,
+                        false_target,
                     };
+                    self.function
+                        .blocks
+                        .get_mut(&left_block_id)
+                        .unwrap()
+                        .successors = vec![true_target, false_target];
+                    self.function
+                        .blocks
+                        .get_mut(&rhs_block_id)
+                        .unwrap()
+                        .predecessors
+                        .push(left_block_id);
+                    self.function
+                        .blocks
+                        .get_mut(&short_block_id)
+                        .unwrap()
+                        .predecessors
+                        .push(left_block_id);
 
-                    self.add_instruction(block_id, inst);
-                    self.add_use(left_val, result);
-                    self.add_use(right_val, result);
+                    let short_const = self.create_value(
+                        HirType::Bool,
+                        HirValueKind::Constant(crate::hir::HirConstant::Bool(short_value)),
+                    );
+                    self.function
+                        .blocks
+                        .get_mut(&short_block_id)
+                        .unwrap()
+                        .terminator = HirTerminator::Branch {
+                        target: merge_block_id,
+                    };
+                    self.function
+                        .blocks
+                        .get_mut(&short_block_id)
+                        .unwrap()
+                        .successors = vec![merge_block_id];
+                    self.function
+                        .blocks
+                        .get_mut(&merge_block_id)
+                        .unwrap()
+                        .predecessors
+                        .push(short_block_id);
 
+                    let rhs_value = self.translate_expression(rhs_block_id, right)?;
+                    let rhs_exit_block_id = self.continuation_block.take().unwrap_or(rhs_block_id);
+                    self.function
+                        .blocks
+                        .get_mut(&rhs_exit_block_id)
+                        .unwrap()
+                        .terminator = HirTerminator::Branch {
+                        target: merge_block_id,
+                    };
+                    self.function
+                        .blocks
+                        .get_mut(&rhs_exit_block_id)
+                        .unwrap()
+                        .successors = vec![merge_block_id];
+                    self.function
+                        .blocks
+                        .get_mut(&merge_block_id)
+                        .unwrap()
+                        .predecessors
+                        .push(rhs_exit_block_id);
+
+                    let result_type = self.convert_type(&expr.ty);
+                    let result = self.create_value(result_type.clone(), HirValueKind::Instruction);
+                    self.function
+                        .blocks
+                        .get_mut(&merge_block_id)
+                        .unwrap()
+                        .phis
+                        .push(HirPhi {
+                            result,
+                            ty: result_type,
+                            incoming: vec![
+                                (short_const, short_block_id),
+                                (rhs_value, rhs_exit_block_id),
+                            ],
+                        });
+
+                    self.continuation_block = Some(merge_block_id);
                     return Ok(result);
                 }
 

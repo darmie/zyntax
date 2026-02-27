@@ -75,6 +75,41 @@ fn create_test_program(arena: &mut AstArena, func_name: &str, body: TypedBlock) 
     }
 }
 
+/// Helper to create a typed program with one bool-returning function
+fn create_bool_test_program(
+    arena: &mut AstArena,
+    func_name: &str,
+    body: TypedBlock,
+) -> TypedProgram {
+    let name = arena.intern_string(func_name);
+    let function = TypedFunction {
+        name,
+        params: vec![],
+        type_params: vec![],
+        return_type: Type::Primitive(PrimitiveType::Bool),
+        body: Some(body),
+        visibility: Visibility::Public,
+        is_async: false,
+        is_external: false,
+        calling_convention: CallingConvention::Default,
+        link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
+    };
+
+    TypedProgram {
+        declarations: vec![typed_node(
+            TypedDeclaration::Function(function),
+            Type::Primitive(PrimitiveType::Unit),
+            test_span(),
+        )],
+        span: test_span(),
+        source_files: vec![],
+        type_registry: TypeRegistry::new(),
+    }
+}
+
 #[test]
 fn test_literal_lowering() {
     let mut arena = test_arena();
@@ -190,6 +225,196 @@ fn test_binary_operation_lowering() {
         matches!(entry_block.terminator, HirTerminator::Return { .. }),
         "Expected Return terminator"
     )
+}
+
+#[test]
+fn test_logical_and_short_circuit_lowering() {
+    let mut arena = test_arena();
+
+    let left = typed_node(
+        TypedExpression::Literal(TypedLiteral::Bool(false)),
+        Type::Primitive(PrimitiveType::Bool),
+        test_span(),
+    );
+    let right = typed_node(
+        TypedExpression::Literal(TypedLiteral::Bool(true)),
+        Type::Primitive(PrimitiveType::Bool),
+        test_span(),
+    );
+
+    let expr = typed_node(
+        TypedExpression::Binary(TypedBinary {
+            op: BinaryOp::And,
+            left: Box::new(left),
+            right: Box::new(right),
+        }),
+        Type::Primitive(PrimitiveType::Bool),
+        test_span(),
+    );
+
+    let return_stmt = typed_node(
+        TypedStatement::Return(Some(Box::new(expr))),
+        Type::Primitive(PrimitiveType::Unit),
+        test_span(),
+    );
+    let body = TypedBlock {
+        statements: vec![return_stmt],
+        span: test_span(),
+    };
+
+    let mut program = create_bool_test_program(&mut arena, "test_and_short_circuit", body);
+
+    let type_registry = Arc::new(TypeRegistry::new());
+    let config = LoweringConfig::default();
+    let module_name = arena.intern_string("test_module");
+    let arena = Arc::new(Mutex::new(arena));
+    let mut ctx = LoweringContext::new(module_name, type_registry, arena, config);
+    let result = ctx.lower_program(&mut program);
+    assert!(
+        result.is_ok(),
+        "Failed to lower logical and expression: {:?}",
+        result.err()
+    );
+
+    let module = result.unwrap();
+    let func = module.functions.values().next().unwrap();
+    assert!(
+        func.blocks.len() >= 4,
+        "Expected short-circuit CFG blocks for &&, got {}",
+        func.blocks.len()
+    );
+
+    // Ensure logical && is not lowered as a plain Binary And instruction.
+    let has_plain_and = func.blocks.values().any(|block| {
+        block.instructions.iter().any(|inst| {
+            matches!(
+                inst,
+                HirInstruction::Binary {
+                    op: zyntax_compiler::hir::BinaryOp::And,
+                    ..
+                }
+            )
+        })
+    });
+    assert!(
+        !has_plain_and,
+        "&& should use short-circuit CFG, not binary And"
+    );
+
+    let phi = func
+        .blocks
+        .values()
+        .flat_map(|b| b.phis.iter())
+        .find(|p| p.incoming.len() == 2)
+        .expect("Expected merge phi for && short-circuit");
+
+    let has_false_short_path = phi.incoming.iter().any(|(val, _)| {
+        matches!(
+            func.values.get(val).map(|v| &v.kind),
+            Some(zyntax_compiler::hir::HirValueKind::Constant(
+                zyntax_compiler::hir::HirConstant::Bool(false)
+            ))
+        )
+    });
+    assert!(
+        has_false_short_path,
+        "&& phi should contain constant false short-circuit path"
+    );
+}
+
+#[test]
+fn test_logical_or_short_circuit_lowering() {
+    let mut arena = test_arena();
+
+    let left = typed_node(
+        TypedExpression::Literal(TypedLiteral::Bool(true)),
+        Type::Primitive(PrimitiveType::Bool),
+        test_span(),
+    );
+    let right = typed_node(
+        TypedExpression::Literal(TypedLiteral::Bool(false)),
+        Type::Primitive(PrimitiveType::Bool),
+        test_span(),
+    );
+
+    let expr = typed_node(
+        TypedExpression::Binary(TypedBinary {
+            op: BinaryOp::Or,
+            left: Box::new(left),
+            right: Box::new(right),
+        }),
+        Type::Primitive(PrimitiveType::Bool),
+        test_span(),
+    );
+
+    let return_stmt = typed_node(
+        TypedStatement::Return(Some(Box::new(expr))),
+        Type::Primitive(PrimitiveType::Unit),
+        test_span(),
+    );
+    let body = TypedBlock {
+        statements: vec![return_stmt],
+        span: test_span(),
+    };
+
+    let mut program = create_bool_test_program(&mut arena, "test_or_short_circuit", body);
+
+    let type_registry = Arc::new(TypeRegistry::new());
+    let config = LoweringConfig::default();
+    let module_name = arena.intern_string("test_module");
+    let arena = Arc::new(Mutex::new(arena));
+    let mut ctx = LoweringContext::new(module_name, type_registry, arena, config);
+    let result = ctx.lower_program(&mut program);
+    assert!(
+        result.is_ok(),
+        "Failed to lower logical or expression: {:?}",
+        result.err()
+    );
+
+    let module = result.unwrap();
+    let func = module.functions.values().next().unwrap();
+    assert!(
+        func.blocks.len() >= 4,
+        "Expected short-circuit CFG blocks for ||, got {}",
+        func.blocks.len()
+    );
+
+    // Ensure logical || is not lowered as a plain Binary Or instruction.
+    let has_plain_or = func.blocks.values().any(|block| {
+        block.instructions.iter().any(|inst| {
+            matches!(
+                inst,
+                HirInstruction::Binary {
+                    op: zyntax_compiler::hir::BinaryOp::Or,
+                    ..
+                }
+            )
+        })
+    });
+    assert!(
+        !has_plain_or,
+        "|| should use short-circuit CFG, not binary Or"
+    );
+
+    let phi = func
+        .blocks
+        .values()
+        .flat_map(|b| b.phis.iter())
+        .find(|p| p.incoming.len() == 2)
+        .expect("Expected merge phi for || short-circuit");
+
+    let has_true_short_path = phi.incoming.iter().any(|(val, _)| {
+        matches!(
+            func.values.get(val).map(|v| &v.kind),
+            Some(zyntax_compiler::hir::HirValueKind::Constant(
+                zyntax_compiler::hir::HirConstant::Bool(true)
+            ))
+        )
+    });
+    assert!(
+        has_true_short_path,
+        "|| phi should contain constant true short-circuit path"
+    );
 }
 
 #[test]
