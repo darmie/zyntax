@@ -4272,23 +4272,23 @@ impl SsaBuilder {
             return Ok(None);
         }
 
-        // Get the method name for this operator
-        let method_name = match op {
-            FrontendOp::Add => "add",
-            FrontendOp::Sub => "sub",
-            FrontendOp::Mul => "mul",
-            FrontendOp::MatMul => "matmul",
-            FrontendOp::Div => "div",
-            FrontendOp::Rem => "mod",
-            FrontendOp::Eq => "eq",
-            FrontendOp::Ne => "ne",
-            FrontendOp::Lt => "lt",
-            FrontendOp::Le => "le",
-            FrontendOp::Gt => "gt",
-            FrontendOp::Ge => "ge",
-            FrontendOp::BitAnd => "bitand",
-            FrontendOp::BitOr => "bitor",
-            FrontendOp::BitXor => "bitxor",
+        // Get the method and trait names for this operator.
+        let (method_name, trait_name) = match op {
+            FrontendOp::Add => ("add", "Add"),
+            FrontendOp::Sub => ("sub", "Sub"),
+            FrontendOp::Mul => ("mul", "Mul"),
+            FrontendOp::MatMul => ("matmul", "MatMul"),
+            FrontendOp::Div => ("div", "Div"),
+            FrontendOp::Rem => ("mod", "Mod"),
+            FrontendOp::Eq => ("eq", "Eq"),
+            FrontendOp::Ne => ("ne", "Eq"),
+            FrontendOp::Lt => ("lt", "Ord"),
+            FrontendOp::Le => ("le", "Ord"),
+            FrontendOp::Gt => ("gt", "Ord"),
+            FrontendOp::Ge => ("ge", "Ord"),
+            FrontendOp::BitAnd => ("bitand", "BitAnd"),
+            FrontendOp::BitOr => ("bitor", "BitOr"),
+            FrontendOp::BitXor => ("bitxor", "BitXor"),
             _ => return Ok(None), // No trait method for this operator
         };
 
@@ -4299,35 +4299,53 @@ impl SsaBuilder {
         }
         let type_name = type_name.unwrap();
 
-        // Construct the method function name: TypeName$method
-        // For extern types, the type_name already starts with '$' (e.g., "$Tensor")
-        // so we just append $method to get "$Tensor$add"
-        let method_symbol = if type_name.starts_with('$') {
-            // Already has $ prefix (extern type)
+        // Build candidate names:
+        // 1) Type$method (standalone helper)
+        // 2) Type$Trait$method (impl-lowered method)
+        // 3) $Type$method (runtime symbol for extern-backed types)
+        let mut function_candidates = Vec::with_capacity(2);
+        let runtime_symbol = if let Some(stripped) = type_name.strip_prefix('$') {
+            function_candidates.push(format!("{}${}", stripped, method_name));
+            function_candidates.push(format!("{}${}${}", stripped, trait_name, method_name));
             format!("{}${}", type_name, method_name)
         } else {
-            // Regular type, add $ prefix for ZRTL compatibility
+            function_candidates.push(format!("{}${}", type_name, method_name));
+            function_candidates.push(format!("{}${}${}", type_name, trait_name, method_name));
             format!("${}${}", type_name, method_name)
         };
-        let method_name_interned = InternedString::new_global(&method_symbol);
-        log::debug!(
-            "[SSA] Operator trait dispatch: {} for type {}",
-            method_symbol,
-            type_name
-        );
 
-        // Try to look up the function ID for this method
-        // If it's a compiled ZynML function (like Duration$add), we need HirCallable::Function
-        // If it's an external plugin function (like $Tensor$add), we need HirCallable::Symbol
-        let callee = if let Some(&func_id) = self.function_symbols.get(&method_name_interned) {
-            log::debug!("[SSA] Found function ID for {}", method_symbol);
-            crate::hir::HirCallable::Function(func_id)
-        } else {
+        let mut matched_function: Option<(HirId, String)> = None;
+        for candidate in &function_candidates {
+            let candidate_interned = InternedString::new_global(candidate);
+            if let Some(&func_id) = self.function_symbols.get(&candidate_interned) {
+                matched_function = Some((func_id, candidate.clone()));
+                break;
+            }
+        }
+
+        let callee = if let Some((func_id, matched_name)) = matched_function {
             log::debug!(
-                "[SSA] No function ID found, using external symbol for {}",
-                method_symbol
+                "[SSA] Operator trait dispatch: using function '{}' for type {}",
+                matched_name,
+                type_name
             );
-            crate::hir::HirCallable::Symbol(method_symbol)
+            crate::hir::HirCallable::Function(func_id)
+        } else if type_name.starts_with('$') {
+            // Extern-backed types dispatch to runtime symbols.
+            log::debug!(
+                "[SSA] Operator trait dispatch: using runtime symbol '{}' for type {}",
+                runtime_symbol,
+                type_name
+            );
+            crate::hir::HirCallable::Symbol(runtime_symbol)
+        } else if matches!(op, FrontendOp::MatMul) {
+            // MatMul must not silently fall back.
+            return Err(crate::CompilerError::Analysis(format!(
+                "matrix multiplication '@' requires MatMul::matmul implementation for type {:?} (expected '{}' or '{}')",
+                left_type, function_candidates[0], function_candidates[1]
+            )));
+        } else {
+            return Ok(None);
         };
 
         // Translate arguments

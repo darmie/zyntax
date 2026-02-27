@@ -23,15 +23,15 @@
 
 use std::sync::{Arc, Mutex};
 use zyntax_compiler::{
-    hir::{HirInstruction, HirTerminator},
+    hir::{HirCallable, HirInstruction, HirTerminator},
     lowering::{AstLowering, LoweringConfig, LoweringContext},
 };
 use zyntax_typed_ast::{
     arena::AstArena,
-    typed_ast::{TypedBinary, TypedBlock, TypedIfExpr, TypedLet, TypedUnary},
+    typed_ast::{ParameterKind, TypedBinary, TypedBlock, TypedIfExpr, TypedLet, TypedUnary},
     typed_node, BinaryOp, CallingConvention, Mutability, PrimitiveType, Span, Type, TypeRegistry,
-    TypedDeclaration, TypedExpression, TypedFunction, TypedLiteral, TypedProgram, TypedStatement,
-    UnaryOp, Visibility,
+    TypedDeclaration, TypedExpression, TypedFunction, TypedLiteral, TypedParameter, TypedProgram,
+    TypedStatement, UnaryOp, Visibility,
 };
 
 /// Helper to create a test arena
@@ -42,6 +42,19 @@ fn test_arena() -> AstArena {
 /// Helper to create a test span
 fn test_span() -> Span {
     Span::new(0, 10)
+}
+
+struct SkipTypeCheckGuard;
+
+impl Drop for SkipTypeCheckGuard {
+    fn drop(&mut self) {
+        std::env::remove_var("SKIP_TYPE_CHECK");
+    }
+}
+
+fn skip_type_check() -> SkipTypeCheckGuard {
+    std::env::set_var("SKIP_TYPE_CHECK", "1");
+    SkipTypeCheckGuard
 }
 
 /// Helper to create a simple typed program with one function
@@ -415,6 +428,243 @@ fn test_logical_or_short_circuit_lowering() {
         has_true_short_path,
         "|| phi should contain constant true short-circuit path"
     );
+}
+
+#[test]
+fn test_matmul_dispatch_uses_named_type_function() {
+    let _skip_type_check = skip_type_check();
+    let mut arena = test_arena();
+    let mut type_registry = TypeRegistry::new();
+
+    let mat_name = arena.intern_string("Mat");
+    let mat_id = type_registry.register_struct_type(
+        mat_name,
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+        zyntax_typed_ast::TypeMetadata::default(),
+        test_span(),
+    );
+    let mat_ty = Type::Named {
+        id: mat_id,
+        type_args: vec![],
+        const_args: vec![],
+        variance: vec![],
+        nullability: zyntax_typed_ast::NullabilityKind::NonNull,
+    };
+
+    let lhs_name = arena.intern_string("lhs");
+    let rhs_name = arena.intern_string("rhs");
+
+    let matmul_impl = TypedFunction {
+        name: arena.intern_string("Mat$matmul"),
+        params: vec![
+            TypedParameter {
+                name: lhs_name,
+                ty: mat_ty.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: test_span(),
+            },
+            TypedParameter {
+                name: rhs_name,
+                ty: mat_ty.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: test_span(),
+            },
+        ],
+        type_params: vec![],
+        return_type: mat_ty.clone(),
+        body: None,
+        visibility: Visibility::Public,
+        is_async: false,
+        is_external: true,
+        calling_convention: CallingConvention::Default,
+        link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
+    };
+
+    let matmul_expr = typed_node(
+        TypedExpression::Binary(TypedBinary {
+            op: BinaryOp::MatMul,
+            left: Box::new(typed_node(
+                TypedExpression::Variable(lhs_name),
+                mat_ty.clone(),
+                test_span(),
+            )),
+            right: Box::new(typed_node(
+                TypedExpression::Variable(rhs_name),
+                mat_ty.clone(),
+                test_span(),
+            )),
+        }),
+        mat_ty.clone(),
+        test_span(),
+    );
+    let entry_body = TypedBlock {
+        statements: vec![typed_node(
+            TypedStatement::Return(Some(Box::new(matmul_expr))),
+            Type::Primitive(PrimitiveType::Unit),
+            test_span(),
+        )],
+        span: test_span(),
+    };
+    let entry_fn = TypedFunction {
+        name: arena.intern_string("entry"),
+        params: vec![
+            TypedParameter {
+                name: lhs_name,
+                ty: mat_ty.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: test_span(),
+            },
+            TypedParameter {
+                name: rhs_name,
+                ty: mat_ty.clone(),
+                mutability: Mutability::Immutable,
+                kind: ParameterKind::Regular,
+                default_value: None,
+                attributes: vec![],
+                span: test_span(),
+            },
+        ],
+        type_params: vec![],
+        return_type: mat_ty.clone(),
+        body: Some(entry_body),
+        visibility: Visibility::Public,
+        is_async: false,
+        is_external: false,
+        calling_convention: CallingConvention::Default,
+        link_name: None,
+        annotations: vec![],
+        effects: vec![],
+        is_pure: false,
+    };
+
+    let mut program = TypedProgram {
+        declarations: vec![
+            typed_node(
+                TypedDeclaration::Function(matmul_impl),
+                Type::Primitive(PrimitiveType::Unit),
+                test_span(),
+            ),
+            typed_node(
+                TypedDeclaration::Function(entry_fn),
+                Type::Primitive(PrimitiveType::Unit),
+                test_span(),
+            ),
+        ],
+        span: test_span(),
+        source_files: vec![],
+        type_registry: type_registry.clone(),
+    };
+
+    let type_registry = Arc::new(type_registry);
+    let config = LoweringConfig::default();
+    let module_name = arena.intern_string("test_module");
+    let arena = Arc::new(Mutex::new(arena));
+    let mut ctx = LoweringContext::new(module_name, type_registry, arena, config);
+
+    let result = ctx.lower_program(&mut program);
+    assert!(
+        result.is_ok(),
+        "Failed to lower matmul dispatch program: {:?}",
+        result.err()
+    );
+
+    let module = result.unwrap();
+    let entry = module
+        .functions
+        .values()
+        .find(|f| f.name.resolve_global().as_deref() == Some("entry"))
+        .expect("entry function should exist");
+
+    let call_callee = entry
+        .blocks
+        .values()
+        .flat_map(|b| b.instructions.iter())
+        .find_map(|inst| match inst {
+            HirInstruction::Call { callee, .. } => Some(callee),
+            _ => None,
+        })
+        .expect("entry should contain a call for matmul dispatch");
+
+    assert!(
+        matches!(call_callee, &HirCallable::Function(_)),
+        "MatMul on named type should dispatch to compiled function, got {:?}",
+        call_callee
+    );
+}
+
+#[test]
+fn test_matmul_missing_impl_reports_clear_error() {
+    let _skip_type_check = skip_type_check();
+    let mut arena = test_arena();
+
+    let left = typed_node(
+        TypedExpression::Literal(TypedLiteral::Integer(2)),
+        Type::Primitive(PrimitiveType::I32),
+        test_span(),
+    );
+    let right = typed_node(
+        TypedExpression::Literal(TypedLiteral::Integer(3)),
+        Type::Primitive(PrimitiveType::I32),
+        test_span(),
+    );
+    let expr = typed_node(
+        TypedExpression::Binary(TypedBinary {
+            op: BinaryOp::MatMul,
+            left: Box::new(left),
+            right: Box::new(right),
+        }),
+        Type::Primitive(PrimitiveType::I32),
+        test_span(),
+    );
+    let body = TypedBlock {
+        statements: vec![typed_node(
+            TypedStatement::Return(Some(Box::new(expr))),
+            Type::Primitive(PrimitiveType::Unit),
+            test_span(),
+        )],
+        span: test_span(),
+    };
+
+    let mut program = create_test_program(&mut arena, "matmul_missing_impl", body);
+
+    let type_registry = Arc::new(TypeRegistry::new());
+    let config = LoweringConfig::default();
+    let module_name = arena.intern_string("test_module");
+    let arena = Arc::new(Mutex::new(arena));
+    let mut ctx = LoweringContext::new(module_name, type_registry, arena, config);
+
+    let result = ctx.lower_program(&mut program);
+    assert!(
+        result.is_ok(),
+        "Lowering should complete while skipping invalid functions: {:?}",
+        result.err()
+    );
+
+    let module = result.unwrap();
+    let matmul_fn_present = module
+        .functions
+        .values()
+        .any(|f| f.name.resolve_global().as_deref() == Some("matmul_missing_impl"));
+    assert!(
+        !matmul_fn_present,
+        "Invalid matmul function should be dropped from lowered module"
+    );
+
 }
 
 #[test]
