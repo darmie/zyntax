@@ -11,7 +11,7 @@
 
 use std::path::Path;
 use zynml::{
-    Grammar2, LanguageGrammar, ZynML, ZynMLConfig, ZynMLError, ZYNML_GRAMMAR, ZYNML_STDLIB_PRELUDE,
+    Grammar2, LanguageGrammar, ZynML, ZynMLConfig, ZYNML_GRAMMAR, ZYNML_STDLIB_PRELUDE,
     ZYNML_STDLIB_TENSOR,
 };
 
@@ -1210,6 +1210,39 @@ mod expressions {
         );
     }
 
+    #[test]
+    fn test_parse_parallel_operator() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json("let merged = left & right");
+        assert!(
+            result.is_ok(),
+            "Should parse parallel '&' operator: {:?}",
+            result.err()
+        );
+
+        let json = result.expect("parallel expression should serialize");
+        assert!(
+            json.contains("\"BitAnd\""),
+            "Parallel '&' should lower to BinaryOp::BitAnd in TypedAST JSON: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn test_parse_parallel_pipe_branches() {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(
+            r#"
+            let merged = (texts |> encode_batch() & texts |> extract_metadata())
+        "#,
+        );
+        assert!(
+            result.is_ok(),
+            "Should parse parallel '&' between pipe branches: {:?}",
+            result.err()
+        );
+    }
+
     // --- Ternary Operator ---
 
     #[test]
@@ -1543,6 +1576,123 @@ mod data_loading {
             result.is_ok(),
             "Should parse model() with config block: {:?}",
             result.err()
+        );
+    }
+}
+
+// ============================================================================
+// Docs Conformance Tests (docs/ml-dsl-plans snippets)
+// ============================================================================
+
+mod docs_conformance {
+    use super::*;
+
+    fn get_grammar() -> LanguageGrammar {
+        LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile")
+    }
+
+    fn assert_parses(snippet: &str) {
+        let grammar = get_grammar();
+        let result = grammar.parse_to_json(snippet);
+        assert!(
+            result.is_ok(),
+            "Doc snippet should parse.\nSnippet:\n{}\nError: {:?}",
+            snippet,
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_docs_vector_search_snippet() {
+        assert_parses(
+            r#"
+            pipeline vector_search(query: tensor[384], top_k: int) -> list {
+                let scores = query |> normalize() |> cosine(index)
+                scores
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_docs_classification_snippet() {
+        assert_parses(
+            r#"
+            pipeline classify(img: tensor[224, 224, 3, uint8]) -> int {
+                let classifier = model("mobilenet_v3.safetensors") {
+                    input: image,
+                    output: tensor[1000]
+                }
+                let probs = img |> preprocess() |> softmax()
+                argmax(probs)
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_docs_anomaly_streaming_snippet() {
+        assert_parses(
+            "stream sensor_data |> window(100) |> map(detect_anomaly) |> sink(alert_system)",
+        );
+    }
+
+    #[test]
+    fn test_docs_feature_engineering_snippet() {
+        assert_parses(
+            r#"
+            pipeline feature_job(data: tensor[128]) -> tensor[128] {
+                let scaled = data |> normalize() |> clip(0, 1)
+                scaled
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_docs_quantized_inference_snippet() {
+        assert_parses(
+            r#"
+            @cache(ttl=1h)
+            pipeline quantized_infer(x: tensor[1, 256, float32]) -> tensor[1, 10, float32] {
+                x |> quantize(int8) |> dequantize(float32)
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_docs_transformer_snippet() {
+        assert_parses(
+            r#"
+            pipeline transformer_step(tokens: tensor[1, 128, int64]) -> tensor[1, 128, float32] {
+                let scores = tokens @ weights
+                scores
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_docs_audio_snippet() {
+        assert_parses(
+            r#"
+            pipeline transcribe(audio_input: audio) -> text {
+                let mel = audio_load("speech.wav")
+                mel
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_docs_gpu_compute_snippet() {
+        assert_parses(
+            r#"
+            let result = compute(x) @device("auto") @workgroup(16, 16) {
+                yield x[0]
+            }
+        "#,
         );
     }
 }
@@ -2177,6 +2327,81 @@ mod example_files {
             result.is_ok(),
             "Should parse neural_network.zynml: {:?}",
             result.err()
+        );
+    }
+}
+
+// ============================================================================
+// Examples Regression Suite
+// ============================================================================
+
+mod examples_regression {
+    use super::*;
+
+    fn examples_dir() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("examples")
+    }
+
+    fn collect_example_files() -> Vec<std::path::PathBuf> {
+        let mut files: Vec<_> = std::fs::read_dir(examples_dir())
+            .expect("Should read examples directory")
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .filter(|path| {
+                path.extension()
+                    .and_then(|ext| ext.to_str())
+                    .is_some_and(|ext| ext == "zynml")
+            })
+            .collect();
+        files.sort();
+        files
+    }
+
+    #[test]
+    fn test_parse_all_examples_language_grammar() {
+        let grammar = LanguageGrammar::compile_zyn(ZYNML_GRAMMAR).expect("Grammar should compile");
+        let files = collect_example_files();
+        assert!(!files.is_empty(), "examples directory should not be empty");
+
+        let mut failures = Vec::new();
+        for path in files {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Should read {}: {}", path.display(), e));
+            if let Err(e) = grammar.parse_to_json_with_filename(&source, &path.to_string_lossy()) {
+                failures.push(format!("{}: {}", path.display(), e));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Some examples failed LanguageGrammar parsing:\n{}",
+            failures.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_parse_all_examples_grammar2_typed_ast() {
+        let grammar2 = Grammar2::from_source(ZYNML_GRAMMAR).expect("Grammar2 should compile");
+        let files = collect_example_files();
+        assert!(!files.is_empty(), "examples directory should not be empty");
+
+        let mut failures = Vec::new();
+        for path in files {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("Should read {}: {}", path.display(), e));
+            match grammar2.parse_with_filename(&source, &path.to_string_lossy()) {
+                Ok(program) => {
+                    if program.declarations.is_empty() {
+                        failures.push(format!("{}: parsed with zero declarations", path.display()));
+                    }
+                }
+                Err(e) => failures.push(format!("{}: {}", path.display(), e)),
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "Some examples failed Grammar2 typed parsing:\n{}",
+            failures.join("\n")
         );
     }
 }
@@ -3482,7 +3707,7 @@ fn test_spec_compliance_summary() {
     println!("  [x] @kernel, @workgroup, @device decorators");
 
     println!("\nPENDING SPEC FEATURES:");
-    println!("  [ ] Parallel execution with & operator");
+    println!("  [x] Parallel execution with & operator");
 
     println!("\n=== End Summary ===\n");
 }

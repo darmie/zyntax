@@ -1,0 +1,7 @@
+// F-string test with prelude
+import prelude
+
+def main() {
+    let name = "World"
+    extern println_str(f"Hello {name}!")
+}

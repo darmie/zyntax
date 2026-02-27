@@ -1,0 +1,7 @@
+// Test prelude with f-string
+import prelude
+
+def main() {
+    let x = 42
+    println(f"Value: {x}")
+}

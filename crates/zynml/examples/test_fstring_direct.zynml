@@ -1,0 +1,6 @@
+// Test f-string with direct extern call
+def main() {
+    let name = "World"
+    let result = extern concat("Hello ", name)
+    extern println_str(result)
+}

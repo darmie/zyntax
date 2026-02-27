@@ -1,0 +1,10 @@
+// F-string test using println (should work with dynamic dispatch)
+import prelude
+
+def main() {
+    let name = "World"
+    println(f"Hello {name}!")
+    
+    let x = 42
+    println(f"The answer is {x}")
+}

@@ -1,0 +1,5 @@
+// Minimal f-string test without prelude
+def main() {
+    let name = "World"
+    extern println_str(f"Hello {name}!")
+}

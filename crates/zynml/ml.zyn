@@ -2211,9 +2211,19 @@ expr_block = { value:expr }
 // Expressions
 // ============================================================================
 
-// Expression with pipe operator (lowest precedence)
-expr = { e:pipe_expr }
+// Expression with parallel operator (lowest precedence)
+expr = { e:parallel_expr }
   -> e
+
+// Parallel operator: a & b
+// Used by ML workflows to describe parallel branches (currently lowered via BinaryOp::BitAnd)
+parallel_expr = { first:pipe_expr ~ rest:parallel_rest* }
+  -> fold_left_ops(first, rest)
+
+parallel_rest = { op:parallel_op ~ operand:pipe_expr }
+  -> make_pair(op, operand)
+
+parallel_op = @{ "&" }
 
 // Pipe operator: x |> f(args) |> g()
 // Transforms: a |> f(b) into f(a, b)

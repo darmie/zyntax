@@ -1,0 +1,6 @@
+// Test prelude import only
+import prelude
+
+def main() {
+    println("Hello")
+}
