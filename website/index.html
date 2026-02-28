@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Zyntax — Compiler Infrastructure</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@200..900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-top: #eaeaf2;
+      --bg-bottom: #ccc8d8;
+      --text-primary: #111118;
+      --text-secondary: #555566;
+      --text-muted: #888899;
+      --accent: #1a1a1a;
+      --accent-hover: #333340;
+      --border: rgba(0,0,0,0.08);
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+      min-height: 100vh;
+      overflow-x: hidden;
+      color: var(--text-primary);
+    }
+
+    /* ── Navigation ── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      padding: 0 clamp(1.5rem, 5vw, 4rem);
+      height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: rgba(234, 234, 242, 0.7);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      text-decoration: none;
+      color: var(--text-primary);
+      font-family: "Unbounded", sans-serif;
+      font-optical-sizing: auto;
+      font-weight: 900;
+      font-size: 1.15rem;
+      letter-spacing: -0.02em;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 2rem;
+      list-style: none;
+    }
+
+    .nav-links a {
+      text-decoration: none;
+      color: var(--text-secondary);
+      font-size: 0.875rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover { color: var(--text-primary); }
+
+    .nav-link-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .coming-soon {
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.15rem 0.4rem;
+      background: rgba(26, 26, 26, 0.08);
+      border-radius: 4px;
+      color: var(--text-muted);
+    }
+
+    .nav-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 1rem;
+      background: var(--accent);
+      color: #fff !important;
+      border-radius: 8px;
+      font-size: 0.8rem !important;
+      font-weight: 600 !important;
+      transition: background 0.2s;
+    }
+
+    .nav-cta:hover { background: var(--accent-hover); }
+
+    .nav-cta svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    /* ── Hero Section ── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      position: relative;
+      padding: 72px clamp(1.5rem, 5vw, 4rem) 0;
+    }
+
+    .hero-content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      align-items: center;
+      width: 100%;
+      max-width: 1400px;
+      margin: 0 auto;
+      gap: 2rem;
+    }
+
+    .hero-text {
+      z-index: 10;
+      padding-right: 2rem;
+    }
+
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.85rem;
+      background: rgba(26, 26, 26, 0.06);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 1.5rem;
+      backdrop-filter: blur(10px);
+    }
+
+    .hero-badge-dot {
+      width: 6px;
+      height: 6px;
+      background: #22c55e;
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .hero-title {
+      font-size: clamp(2.8rem, 5.5vw, 4.5rem);
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+      margin-bottom: 1.25rem;
+      color: var(--text-primary);
+    }
+
+    .hero-title span {
+      display: block;
+      background: linear-gradient(135deg, #333 0%, #888 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-description {
+      font-size: clamp(1rem, 1.2vw, 1.15rem);
+      line-height: 1.7;
+      color: var(--text-secondary);
+      max-width: 520px;
+      margin-bottom: 2rem;
+    }
+
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 3rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.75rem 1.5rem;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+    }
+
+    .btn-secondary {
+      background: rgba(26, 26, 26, 0.06);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(26, 26, 26, 0.1);
+      transform: translateY(-1px);
+    }
+
+    .btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* ── Code snippet ── */
+    .hero-code {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.6rem 1rem;
+      background: rgba(26, 26, 26, 0.04);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      max-width: fit-content;
+    }
+
+    .hero-code code {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      user-select: all;
+    }
+
+    .hero-code-label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* ── Features row ── */
+    .hero-features {
+      display: flex;
+      gap: 2.5rem;
+      margin-top: 3rem;
+      padding-top: 2rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .hero-feature {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .hero-feature-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+
+    .hero-feature-value {
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    /* ── 3D Canvas ── */
+    .hero-visual {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      max-height: 600px;
+    }
+
+    #three-canvas {
+      position: absolute;
+      /* Oversized to allow exploded pieces room on all sides */
+      top: -30%;
+      left: -40%;
+      width: 170%;
+      height: 160%;
+    }
+
+    /* ── Mobile nav toggle ── */
+    .nav-toggle {
+      display: none;
+      background: none;
+      border: none;
+      cursor: pointer;
+      padding: 0.5rem;
+    }
+
+    .nav-toggle span {
+      display: block;
+      width: 20px;
+      height: 2px;
+      background: var(--text-primary);
+      margin: 4px 0;
+      transition: 0.2s;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 1024px) {
+      .hero-content {
+        grid-template-columns: 1fr;
+        text-align: center;
+      }
+
+      .hero-text {
+        padding-right: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      .hero-visual {
+        min-height: 400px;
+        order: -1;
+      }
+
+      .hero-features {
+        justify-content: center;
+      }
+
+      .hero-description {
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .hero-actions {
+        justify-content: center;
+      }
+    }
+
+    @media (max-width: 768px) {
+      nav { padding: 0 1.25rem; }
+
+      .nav-links { display: none; }
+
+      .nav-toggle { display: block; }
+
+      .hero-features {
+        flex-direction: column;
+        gap: 1rem;
+        align-items: center;
+      }
+
+      .hero-visual {
+        min-height: 320px;
+      }
+
+      .hero-actions {
+        flex-direction: column;
+        width: 100%;
+      }
+
+      .btn { width: 100%; justify-content: center; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Navigation ── -->
+  <nav>
+    <a href="#" class="nav-logo">Zyntax</a>
+
+    <ul class="nav-links">
+      <li><a href="#">Docs</a></li>
+      <li><a href="#">The Zyn Book</a></li>
+      <li><a href="#" class="nav-link-badge">Playground <span class="coming-soon">Soon</span></a></li>
+      <li>
+        <a href="https://github.com/darmie/zyntax" class="nav-cta" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+          GitHub
+        </a>
+      </li>
+    </ul>
+
+    <button class="nav-toggle" aria-label="Menu">
+      <span></span><span></span><span></span>
+    </button>
+  </nav>
+
+  <!-- ── Hero Section ── -->
+  <section class="hero">
+    <div class="hero-content">
+
+      <div class="hero-text">
+        <div class="hero-badge">
+          <span class="hero-badge-dot"></span>
+          Apache 2.0 · Open Source
+        </div>
+
+        <h1 class="hero-title">
+          Build languages.<br>
+          <span>Not compilers.</span>
+        </h1>
+
+        <p class="hero-description">
+          A high-performance, multi-paradigm compiler infrastructure with an advanced type system, tiered JIT compilation, and async/await runtime — everything you need to create modern programming languages.
+        </p>
+
+        <div class="hero-actions">
+          <a href="#" class="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+            Read the Zyn Book
+          </a>
+          <a href="https://github.com/darmie/zyntax" class="btn btn-secondary" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 17 10 11 4 5"/>
+              <line x1="12" y1="19" x2="20" y2="19"/>
+            </svg>
+            Get Started
+          </a>
+        </div>
+
+        <div class="hero-code">
+          <span class="hero-code-label">Install</span>
+          <code>cargo install zyntax</code>
+        </div>
+
+        <div class="hero-features">
+          <div class="hero-feature">
+            <span class="hero-feature-label">Compilation</span>
+            <span class="hero-feature-value">3-Tier JIT</span>
+          </div>
+          <div class="hero-feature">
+            <span class="hero-feature-label">Backends</span>
+            <span class="hero-feature-value">Cranelift + LLVM</span>
+          </div>
+          <div class="hero-feature">
+            <span class="hero-feature-label">Type System</span>
+            <span class="hero-feature-value">Generics · Traits · Lifetimes</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-visual">
+        <div id="three-canvas"></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── Three.js ── -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/"
+    }
+  }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+
+    // ── Container ──
+    const container = document.getElementById('three-canvas');
+
+    // ── Scene setup ──
+    const scene = new THREE.Scene();
+
+    const containerRect = container.getBoundingClientRect();
+    const camera = new THREE.PerspectiveCamera(50, containerRect.width / containerRect.height, 0.1, 100);
+    camera.position.set(0, 0.2, 5);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(containerRect.width, containerRect.height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    renderer.setClearColor(0x000000, 0); // transparent background
+    container.appendChild(renderer.domElement);
+
+    // ── Lighting ──
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.6);
+    mainLight.position.set(4, 6, 5);
+    scene.add(mainLight);
+
+    const fillLight = new THREE.DirectionalLight(0xddeeff, 0.4);
+    fillLight.position.set(-4, 2, -3);
+    scene.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    rimLight.position.set(-2, -3, 4);
+    scene.add(rimLight);
+
+    // ── Environment map ──
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    const envScene = new THREE.Scene();
+    const envGradientMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(10, 32, 32),
+      new THREE.MeshBasicMaterial({ side: THREE.BackSide, vertexColors: true })
+    );
+    const envGeo = envGradientMesh.geometry;
+    const envColors = new Float32Array(envGeo.attributes.position.count * 3);
+    for (let i = 0; i < envGeo.attributes.position.count; i++) {
+      const y = envGeo.attributes.position.getY(i);
+      const t = (y + 10) / 20;
+      envColors[i * 3] = 0.65 + t * 0.3;
+      envColors[i * 3 + 1] = 0.65 + t * 0.25;
+      envColors[i * 3 + 2] = 0.7 + t * 0.25;
+    }
+    envGeo.setAttribute('color', new THREE.BufferAttribute(envColors, 3));
+    envScene.add(envGradientMesh);
+    const envMap = pmremGenerator.fromScene(envScene, 0.04).texture;
+    envScene.clear();
+    pmremGenerator.dispose();
+
+    // ── Shadow beneath sphere ──
+    const shadowCanvas = document.createElement('canvas');
+    shadowCanvas.width = 256;
+    shadowCanvas.height = 256;
+    const shadowCtx = shadowCanvas.getContext('2d');
+    const shadowGrad = shadowCtx.createRadialGradient(128, 128, 0, 128, 128, 128);
+    shadowGrad.addColorStop(0, 'rgba(0, 0, 0, 0.35)');
+    shadowGrad.addColorStop(0.4, 'rgba(0, 0, 0, 0.18)');
+    shadowGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    shadowCtx.fillStyle = shadowGrad;
+    shadowCtx.fillRect(0, 0, 256, 256);
+    const shadowTexture = new THREE.CanvasTexture(shadowCanvas);
+
+    const shadowMaterial = new THREE.MeshBasicMaterial({
+      map: shadowTexture,
+      transparent: true,
+      depthWrite: false,
+      opacity: 1,
+    });
+    const shadowPlane = new THREE.Mesh(
+      new THREE.PlaneGeometry(4, 4),
+      shadowMaterial
+    );
+    shadowPlane.rotation.x = -Math.PI / 2;
+    shadowPlane.position.set(0, -2.0, 0);
+    scene.add(shadowPlane);
+
+    // ── Build geodesic hex sphere ──
+    const SPHERE_RADIUS = 1.5;
+    const CELL_DEPTH = 0.15;
+    const GAP = 0.001;
+    const DETAIL = 4;
+
+    const chunkGroup = new THREE.Group();
+    chunkGroup.position.x = 0;
+    scene.add(chunkGroup);
+    const chunks = [];
+
+    const cellMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1a1a1a,
+      roughness: 0.35,
+      metalness: 0.75,
+      envMap,
+      envMapIntensity: 0.35,
+      side: THREE.DoubleSide,
+    });
+
+    const icoGeo = new THREE.IcosahedronGeometry(SPHERE_RADIUS, DETAIL);
+    const icoPos = icoGeo.attributes.position;
+
+    const uniqueVerts = [];
+    const vertMap = new Map();
+
+    function vertKey(v) {
+      return `${v.x.toFixed(5)},${v.y.toFixed(5)},${v.z.toFixed(5)}`;
+    }
+
+    function getVertIndex(v) {
+      const key = vertKey(v);
+      if (vertMap.has(key)) return vertMap.get(key);
+      const idx = uniqueVerts.length;
+      uniqueVerts.push(v.clone());
+      vertMap.set(key, idx);
+      return idx;
+    }
+
+    const triangles = [];
+    const triCount = icoPos.count / 3;
+    for (let t = 0; t < triCount; t++) {
+      const i0 = t * 3, i1 = t * 3 + 1, i2 = t * 3 + 2;
+      const v0 = new THREE.Vector3(icoPos.getX(i0), icoPos.getY(i0), icoPos.getZ(i0));
+      const v1 = new THREE.Vector3(icoPos.getX(i1), icoPos.getY(i1), icoPos.getZ(i1));
+      const v2 = new THREE.Vector3(icoPos.getX(i2), icoPos.getY(i2), icoPos.getZ(i2));
+      const a = getVertIndex(v0), b = getVertIndex(v1), c = getVertIndex(v2);
+      const centroid = new THREE.Vector3().add(v0).add(v1).add(v2).divideScalar(3);
+      triangles.push({ a, b, c, centroid });
+    }
+
+    const vertToTris = new Map();
+    for (let t = 0; t < triangles.length; t++) {
+      const tri = triangles[t];
+      for (const vi of [tri.a, tri.b, tri.c]) {
+        if (!vertToTris.has(vi)) vertToTris.set(vi, []);
+        vertToTris.get(vi).push(t);
+      }
+    }
+
+    function orderPolygon(center, points) {
+      const normal = center.clone().normalize();
+      let up = new THREE.Vector3(0, 1, 0);
+      if (Math.abs(normal.dot(up)) > 0.99) up = new THREE.Vector3(1, 0, 0);
+      const tangentX = new THREE.Vector3().crossVectors(normal, up).normalize();
+      const tangentY = new THREE.Vector3().crossVectors(normal, tangentX).normalize();
+
+      const withAngles = points.map(p => {
+        const rel = p.clone().sub(center);
+        const x = rel.dot(tangentX);
+        const y = rel.dot(tangentY);
+        return { point: p, angle: Math.atan2(y, x) };
+      });
+      withAngles.sort((a, b) => a.angle - b.angle);
+      return withAngles.map(w => w.point);
+    }
+
+    for (const [vi, triIndices] of vertToTris) {
+      const vertPos = uniqueVerts[vi];
+      const centroids = triIndices.map(t => triangles[t].centroid.clone());
+      const ordered = orderPolygon(vertPos, centroids);
+      const n = ordered.length;
+
+      const cellCenter = vertPos.clone();
+      const normal = cellCenter.clone().normalize();
+
+      const shrunk = ordered.map(p => {
+        const dir = p.clone().sub(cellCenter);
+        return cellCenter.clone().add(dir.multiplyScalar(1 - GAP * 3));
+      });
+
+      const outerPoints = shrunk.map(p => p.clone());
+      for (const p of outerPoints) {
+        p.normalize().multiplyScalar(SPHERE_RADIUS);
+      }
+
+      const innerRadius = SPHERE_RADIUS - CELL_DEPTH;
+      const innerPoints = shrunk.map(p => {
+        return p.clone().normalize().multiplyScalar(innerRadius);
+      });
+
+      const positions = [];
+      const normals = [];
+
+      // Outer face
+      const outerCenter = cellCenter.clone().normalize().multiplyScalar(SPHERE_RADIUS);
+      for (let i = 0; i < n; i++) {
+        const next = (i + 1) % n;
+        positions.push(
+          outerCenter.x - cellCenter.x, outerCenter.y - cellCenter.y, outerCenter.z - cellCenter.z,
+          outerPoints[i].x - cellCenter.x, outerPoints[i].y - cellCenter.y, outerPoints[i].z - cellCenter.z,
+          outerPoints[next].x - cellCenter.x, outerPoints[next].y - cellCenter.y, outerPoints[next].z - cellCenter.z
+        );
+        normals.push(normal.x, normal.y, normal.z, normal.x, normal.y, normal.z, normal.x, normal.y, normal.z);
+      }
+
+      // Inner face
+      const innerCenter = cellCenter.clone().normalize().multiplyScalar(SPHERE_RADIUS - CELL_DEPTH);
+      const inNormal = normal.clone().negate();
+      for (let i = 0; i < n; i++) {
+        const next = (i + 1) % n;
+        positions.push(
+          innerCenter.x - cellCenter.x, innerCenter.y - cellCenter.y, innerCenter.z - cellCenter.z,
+          innerPoints[next].x - cellCenter.x, innerPoints[next].y - cellCenter.y, innerPoints[next].z - cellCenter.z,
+          innerPoints[i].x - cellCenter.x, innerPoints[i].y - cellCenter.y, innerPoints[i].z - cellCenter.z
+        );
+        normals.push(inNormal.x, inNormal.y, inNormal.z, inNormal.x, inNormal.y, inNormal.z, inNormal.x, inNormal.y, inNormal.z);
+      }
+
+      // Side walls
+      for (let i = 0; i < n; i++) {
+        const next = (i + 1) % n;
+        const a = outerPoints[i], b = outerPoints[next];
+        const c = innerPoints[next], d = innerPoints[i];
+        const edge = b.clone().sub(a);
+        const sideNorm = new THREE.Vector3().crossVectors(edge, normal).normalize();
+
+        positions.push(
+          a.x - cellCenter.x, a.y - cellCenter.y, a.z - cellCenter.z,
+          b.x - cellCenter.x, b.y - cellCenter.y, b.z - cellCenter.z,
+          d.x - cellCenter.x, d.y - cellCenter.y, d.z - cellCenter.z,
+        );
+        normals.push(sideNorm.x, sideNorm.y, sideNorm.z, sideNorm.x, sideNorm.y, sideNorm.z, sideNorm.x, sideNorm.y, sideNorm.z);
+
+        positions.push(
+          b.x - cellCenter.x, b.y - cellCenter.y, b.z - cellCenter.z,
+          c.x - cellCenter.x, c.y - cellCenter.y, c.z - cellCenter.z,
+          d.x - cellCenter.x, d.y - cellCenter.y, d.z - cellCenter.z,
+        );
+        normals.push(sideNorm.x, sideNorm.y, sideNorm.z, sideNorm.x, sideNorm.y, sideNorm.z, sideNorm.x, sideNorm.y, sideNorm.z);
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+
+      const mesh = new THREE.Mesh(geo, cellMaterial);
+      mesh.position.copy(cellCenter);
+      chunkGroup.add(mesh);
+
+      const direction = normal.clone();
+      const yNorm = (cellCenter.y / SPHERE_RADIUS + 1) / 2;
+
+      chunks.push({
+        mesh,
+        homePos: cellCenter.clone(),
+        direction,
+        offset: Math.random() * Math.PI * 2,
+        liftDistance: 0.25 + Math.random() * 0.45,
+        stagger: yNorm * 0.3 + Math.random() * 0.1,
+      });
+    }
+
+    icoGeo.dispose();
+
+    // ── Hover-driven animation ──
+    const clock = new THREE.Clock();
+    let isHovering = false;
+    let displaceFactor = 0;
+    const EXPAND_SPEED = 2.5;
+    const RETRACT_SPEED = 1.8;
+
+    const hitSphere = new THREE.Mesh(
+      new THREE.SphereGeometry(SPHERE_RADIUS * 1.15, 16, 16),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    chunkGroup.add(hitSphere);
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2(9999, 9999);
+
+    let mouseVelX = 0;
+    let prevMouseX = null;
+    let targetRotSpeed = 0;
+    let currentRotSpeed = 0;
+
+    renderer.domElement.addEventListener('mousemove', (e) => {
+      const rect = container.getBoundingClientRect();
+      mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+      if (prevMouseX !== null) {
+        mouseVelX = e.clientX - prevMouseX;
+      }
+      prevMouseX = e.clientX;
+    });
+    renderer.domElement.addEventListener('mouseleave', () => {
+      mouse.set(9999, 9999);
+      isHovering = false;
+    });
+
+    function easeOutQuart(t) { return 1 - Math.pow(1 - t, 4); }
+    function easeInOutCubic(t) {
+      return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = clock.getDelta();
+      const elapsed = clock.getElapsedTime();
+
+      raycaster.setFromCamera(mouse, camera);
+      const hits = raycaster.intersectObject(hitSphere);
+      isHovering = hits.length > 0;
+
+      if (isHovering) {
+        displaceFactor = Math.min(1, displaceFactor + dt * EXPAND_SPEED);
+      } else {
+        displaceFactor = Math.max(0, displaceFactor - dt * RETRACT_SPEED);
+      }
+
+      const d = easeInOutCubic(displaceFactor);
+
+      const vibrateIntensity = d * 0.012 * (1 - d * 0.5);
+      chunkGroup.position.x = Math.sin(elapsed * 47) * vibrateIntensity;
+      chunkGroup.position.y = Math.cos(elapsed * 53) * vibrateIntensity;
+      chunkGroup.position.z = Math.sin(elapsed * 41 + 1) * vibrateIntensity * 0.5;
+
+      for (const chunk of chunks) {
+        const { mesh, homePos, direction, offset, liftDistance, stagger } = chunk;
+
+        const staggeredD = Math.max(0, Math.min(1, (d - stagger * 0.3) / (1 - stagger * 0.3)));
+
+        const drift = Math.sin(elapsed * 1.5 + offset) * 0.03 * staggeredD;
+        const bob = Math.sin(elapsed * 2.2 + offset * 2) * 0.015 * staggeredD;
+        const lift = staggeredD * liftDistance + drift + bob;
+
+        mesh.position.copy(homePos).addScaledVector(direction, lift);
+
+        const tiltAmount = staggeredD * 0.15;
+        const tiltX = Math.sin(offset) * tiltAmount;
+        const tiltZ = Math.cos(offset) * tiltAmount;
+        mesh.rotation.set(tiltX, 0, tiltZ);
+      }
+
+      const shadowOpacity = 1 - d;
+      shadowMaterial.opacity = shadowOpacity;
+      shadowPlane.visible = shadowOpacity > 0.01;
+
+      const BASE_ROT_SPEED = 0.15;
+      const MOUSE_ROT_SCALE = 0.08;
+
+      targetRotSpeed = BASE_ROT_SPEED + mouseVelX * MOUSE_ROT_SCALE;
+      currentRotSpeed += (targetRotSpeed - currentRotSpeed) * Math.min(dt * 8, 1);
+      mouseVelX *= 0.9;
+
+      chunkGroup.rotation.y += currentRotSpeed * dt;
+      chunkGroup.rotation.x = Math.sin(elapsed * 0.04) * 0.08;
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // ── Responsive resize ──
+    function onResize() {
+      const rect = container.getBoundingClientRect();
+      camera.aspect = rect.width / rect.height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(rect.width, rect.height);
+    }
+
+    window.addEventListener('resize', onResize);
+
+    // Use ResizeObserver for container size changes
+    const resizeObserver = new ResizeObserver(onResize);
+    resizeObserver.observe(container);
+  </script>
+</body>
+</html>
