@@ -87,8 +87,6 @@ jobs:
       - name: Build site
         run: |
           export PATH="$HOME/.markflow:$PATH"
-          # Raise ARG_MAX for large pre-baked content (16 chapters exceed default ~2MB limit)
-          ulimit -s unlimited
           mkdir -p site
 
           # Copy website landing page to site root
