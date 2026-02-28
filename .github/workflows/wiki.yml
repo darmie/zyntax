@@ -93,8 +93,7 @@ jobs:
           cp website/index.html site/index.html
 
           # Build book docs with Markflow into /book subdirectory
-          markflow build --prebake --source ./book \
-            --output ./site/book --config .env.markflow
+          markflow build --prebake --source ./book --output ./site/book --config .env.markflow
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
