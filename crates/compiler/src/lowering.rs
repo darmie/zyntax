@@ -2053,6 +2053,34 @@ impl LoweringContext {
         }
     }
 
+    fn try_parse_builtin_simd_type(name: InternedString) -> Option<HirType> {
+        let raw = name.resolve_global()?;
+        let (elem_ty, lanes) = match raw.as_str() {
+            "f32x4" => (HirType::F32, 4),
+            "f64x2" => (HirType::F64, 2),
+            "i32x4" => (HirType::I32, 4),
+            "i64x2" => (HirType::I64, 2),
+            _ => return None,
+        };
+        Some(HirType::Vector(Box::new(elem_ty), lanes))
+    }
+
+    fn looks_like_simd_alias(name: InternedString) -> bool {
+        let Some(raw) = name.resolve_global() else {
+            return false;
+        };
+        let Some((prefix, lanes_str)) = raw.split_once('x') else {
+            return false;
+        };
+        if lanes_str.parse::<u32>().is_err() {
+            return false;
+        }
+        matches!(
+            prefix,
+            "f16" | "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
+        )
+    }
+
     /// Convert frontend type to HIR type
     /// Convert a type to its ABI representation (for function signatures)
     /// Abstract types are converted to their underlying types for zero-cost abstraction
@@ -2200,6 +2228,14 @@ impl LoweringContext {
                         nullability: zyntax_typed_ast::type_registry::NullabilityKind::NonNull,
                     };
                     self.convert_type(&named_type)
+                } else if let Some(simd_ty) = Self::try_parse_builtin_simd_type(*name) {
+                    simd_ty
+                } else if Self::looks_like_simd_alias(*name) {
+                    log::warn!(
+                        "Unsupported SIMD alias '{}' (supported: f32x4, f64x2, i32x4, i64x2); preserving as opaque",
+                        name.resolve_global().unwrap_or_default()
+                    );
+                    HirType::Opaque(*name)
                 } else {
                     log::warn!(
                         "Could not resolve type '{}', defaulting to I64",
@@ -5017,6 +5053,7 @@ pub mod passes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zyntax_typed_ast::AstArena;
 
     // Test passes for topological sort
     struct PassA;
@@ -5188,5 +5225,43 @@ mod tests {
         pipeline.passes.push(Box::new(PassMissing));
 
         pipeline.sort_passes(); // Should panic
+    }
+
+    #[test]
+    fn test_builtin_simd_aliases_convert_to_hir_vectors() {
+        let mut arena = AstArena::new();
+
+        let f32x4 = arena.intern_string("f32x4");
+        let f64x2 = arena.intern_string("f64x2");
+        let i32x4 = arena.intern_string("i32x4");
+        let i64x2 = arena.intern_string("i64x2");
+
+        assert!(matches!(
+            LoweringContext::try_parse_builtin_simd_type(f32x4),
+            Some(HirType::Vector(elem, 4)) if matches!(*elem, HirType::F32)
+        ));
+        assert!(matches!(
+            LoweringContext::try_parse_builtin_simd_type(f64x2),
+            Some(HirType::Vector(elem, 2)) if matches!(*elem, HirType::F64)
+        ));
+        assert!(matches!(
+            LoweringContext::try_parse_builtin_simd_type(i32x4),
+            Some(HirType::Vector(elem, 4)) if matches!(*elem, HirType::I32)
+        ));
+        assert!(matches!(
+            LoweringContext::try_parse_builtin_simd_type(i64x2),
+            Some(HirType::Vector(elem, 2)) if matches!(*elem, HirType::I64)
+        ));
+    }
+
+    #[test]
+    fn test_simd_alias_detection_for_unsupported_shapes() {
+        let mut arena = AstArena::new();
+        let unsupported = arena.intern_string("i16x8");
+        let nonsimd = arena.intern_string("Tensor");
+
+        assert!(LoweringContext::looks_like_simd_alias(unsupported));
+        assert!(LoweringContext::try_parse_builtin_simd_type(unsupported).is_none());
+        assert!(!LoweringContext::looks_like_simd_alias(nonsimd));
     }
 }

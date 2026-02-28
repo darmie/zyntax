@@ -226,6 +226,42 @@ fn test_vector_f32x4_add_compilation() {
         .expect("Failed to compile f32x4 add function");
 }
 
+/// Test SIMD vector arithmetic compilation (f64x2 lanes)
+#[test]
+fn test_vector_f64x2_add_compilation() {
+    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
+    let func = create_vector_arithmetic_function("vec_f64x2_add", BinaryOp::FAdd, HirType::F64, 2);
+    backend
+        .compile_function(func.id, &func)
+        .expect("Failed to compile f64x2 add function");
+}
+
+/// Test SIMD vector arithmetic compilation (i64x2 lanes)
+#[test]
+fn test_vector_i64x2_add_compilation() {
+    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
+    let func = create_vector_arithmetic_function("vec_i64x2_add", BinaryOp::Add, HirType::I64, 2);
+    backend
+        .compile_function(func.id, &func)
+        .expect("Failed to compile i64x2 add function");
+}
+
+/// Unsupported vector lane shapes should fail with a clear diagnostic.
+#[test]
+fn test_vector_unsupported_lane_shape_rejected() {
+    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
+    let func = create_vector_arithmetic_function("vec_i16x8_add", BinaryOp::Add, HirType::I16, 8);
+    let err = backend
+        .compile_function(func.id, &func)
+        .expect_err("Expected unsupported SIMD lane shape to be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("unsupported SIMD vector lane shape"),
+        "unexpected error: {}",
+        msg
+    );
+}
+
 /// Test scalar float remainder codegen (f64 + f32).
 #[test]
 fn test_scalar_float_remainder_compilation() {
