@@ -1,4 +1,4 @@
-// Simple hello.zynml without f-strings
+// ZynML hello world with tensor operations and f-strings
 import tensor
 
 def main() {
@@ -8,42 +8,32 @@ def main() {
     let a = Tensor::arange(1.0, 5.0, 1.0)  // [1.0, 2.0, 3.0, 4.0]
     let b = Tensor::arange(5.0, 9.0, 1.0)  // [5.0, 6.0, 7.0, 8.0]
 
-    println("Tensor a:")
-    println(a)
-
-    println("Tensor b:")
-    println(b)
+    println(f"Tensor a: {a}")
+    println(f"Tensor b: {b}")
 
     // Arithmetic operations using operator overloading
     let sum = a + b
-    println("a + b:")
-    println(sum)
+    println(f"a + b: {sum}")
 
     let diff = b - a
-    println("b - a:")
-    println(diff)
+    println(f"b - a: {diff}")
 
     let prod = a * b
-    println("a * b (element-wise):")
-    println(prod)
+    println(f"a * b (element-wise): {prod}")
 
     // Reduction operations
     let total = a.sum()
-    println("Sum of a:")
-    println(total)
+    println(f"Sum of a: {total}")
 
     let avg = a.mean()
-    println("Mean of a:")
-    println(avg)
+    println(f"Mean of a: {avg}")
 
     // Create matrices
     let matrix = Tensor::zeros([2, 3])
-    println("2x3 zeros matrix:")
-    println(matrix)
+    println(f"2x3 zeros matrix: {matrix}")
 
     let ones = Tensor::ones([3, 2])
-    println("3x2 ones matrix:")
-    println(ones)
+    println(f"3x2 ones matrix: {ones}")
 
     println("Done!")
 }

@@ -2257,9 +2257,17 @@ impl<'g> GrammarInterpreter<'g> {
                 Ok(acc)
             }
             "fold_concat" => {
-                // fold_concat(parts) - fold string parts into nested concat calls
-                // e.g., fold_concat(["a", "b", "c"]) -> concat(concat("a", "b"), "c")
-                // Used by f-string desugaring
+                // fold_concat(parts) - f-string desugaring using "closure" approach
+                //
+                // Produces: __fstring__(part1, part2, ...) — a special call node that
+                // the SSA intercepts. When println(f"...") is encountered, SSA emits
+                // individual print_dynamic() calls for each part (with DynamicBox
+                // wrapping that respects Display traits for opaque types like Tensor).
+                //
+                // f"text {expr}" → __fstring__("text", expr)
+                //
+                // The __fstring_format__ wrappers on interpolated expressions are
+                // stripped since print_dynamic already handles Display trait dispatch.
                 if args.len() != 1 {
                     return Err(
                         "fold_concat() requires exactly 1 argument (parts list)".to_string()
@@ -2297,32 +2305,48 @@ impl<'g> GrammarInterpreter<'g> {
                         .map(|e| ParsedValue::Expression(Box::new(e)));
                 }
 
-                // Fold left: concat(concat(a, b), c)
-                let concat_name = state.intern("concat");
-                let mut iter = parts_list.into_iter();
-                let first = iter.next().unwrap();
-                let mut acc = self.parsed_value_to_expr(first, state)?;
+                // Build __fstring__(part1, part2, ...) call.
+                // Strip __fstring_format__ wrappers — the SSA handles Display dispatch.
+                let fstring_name = state.intern("__fstring__");
+                let mut fstring_args = Vec::new();
 
-                for part in iter {
+                for part in parts_list {
                     let part_expr = self.parsed_value_to_expr(part, state)?;
-                    // Create concat(acc, part)
-                    acc = typed_node(
-                        TypedExpression::Call(TypedCall {
-                            callee: Box::new(typed_node(
-                                TypedExpression::Variable(concat_name),
-                                Type::Unknown,
-                                span,
-                            )),
-                            positional_args: vec![acc, part_expr],
-                            named_args: vec![],
-                            type_args: vec![],
-                        }),
-                        Type::Primitive(zyntax_typed_ast::PrimitiveType::String),
-                        span,
-                    );
+
+                    // Strip __fstring_format__ wrapper: __fstring_format__(expr) → expr
+                    let unwrapped_expr = if let TypedExpression::Call(ref call) = part_expr.node {
+                        if let TypedExpression::Variable(callee_name) = &call.callee.node {
+                            let callee_str = callee_name.resolve_global().unwrap_or_default();
+                            if callee_str == "__fstring_format__" && call.positional_args.len() == 1
+                            {
+                                call.positional_args[0].clone()
+                            } else {
+                                part_expr
+                            }
+                        } else {
+                            part_expr
+                        }
+                    } else {
+                        part_expr
+                    };
+
+                    fstring_args.push(unwrapped_expr);
                 }
 
-                Ok(ParsedValue::Expression(Box::new(acc)))
+                Ok(ParsedValue::Expression(Box::new(typed_node(
+                    TypedExpression::Call(TypedCall {
+                        callee: Box::new(typed_node(
+                            TypedExpression::Variable(fstring_name),
+                            Type::Unknown,
+                            span,
+                        )),
+                        positional_args: fstring_args,
+                        named_args: vec![],
+                        type_args: vec![],
+                    }),
+                    Type::Primitive(zyntax_typed_ast::PrimitiveType::String),
+                    span,
+                ))))
             }
             _ => Err(format!("unknown helper function: {}", function)),
         }

@@ -2651,6 +2651,99 @@ impl SsaBuilder {
                 let callee = &call.callee;
                 let args = &call.positional_args;
 
+                // F-string closure inlining: println(f"text {expr}") desugars to
+                // println(__fstring__("text", expr)). Intercept this pattern and
+                // emit individual print_dynamic() calls for each part, which properly
+                // handle DynamicBox wrapping with Display trait dispatch for opaque types.
+                if let TypedExpression::Variable(func_name) = &callee.node {
+                    let outer_name = func_name.resolve_global().unwrap_or_default();
+                    if (outer_name == "println" || outer_name == "print"
+                        || outer_name == "eprintln" || outer_name == "eprint")
+                        && args.len() == 1
+                    {
+                        if let TypedExpression::Call(inner_call) = &args[0].node {
+                            if let TypedExpression::Variable(inner_name) = &inner_call.callee.node {
+                                let inner_str = inner_name.resolve_global().unwrap_or_default();
+                                if inner_str == "__fstring__" {
+                                    // Flatten: emit print(part) for each f-string part
+                                    let is_err = outer_name.starts_with('e');
+                                    let print_symbol = if is_err {
+                                        "$IO$eprint_dynamic".to_string()
+                                    } else {
+                                        "$IO$print_dynamic".to_string()
+                                    };
+                                    let println_symbol = if is_err {
+                                        "$IO$eprintln_dynamic".to_string()
+                                    } else {
+                                        "$IO$println_dynamic".to_string()
+                                    };
+
+                                    let parts = &inner_call.positional_args;
+                                    let last_idx = parts.len().saturating_sub(1);
+
+                                    for (i, part) in parts.iter().enumerate() {
+                                        let val = self.translate_expression(block_id, part)?;
+                                        // Last part of println: use println_dynamic (adds newline)
+                                        // All other parts: use print_dynamic (no newline)
+                                        let symbol = if i == last_idx
+                                            && (outer_name == "println" || outer_name == "eprintln")
+                                        {
+                                            &println_symbol
+                                        } else {
+                                            &print_symbol
+                                        };
+
+                                        let result = self.create_value(
+                                            HirType::Void,
+                                            HirValueKind::Instruction,
+                                        );
+                                        let call_inst = HirInstruction::Call {
+                                            result: Some(result),
+                                            callee: crate::hir::HirCallable::Symbol(
+                                                symbol.clone(),
+                                            ),
+                                            args: vec![val],
+                                            type_args: vec![],
+                                            const_args: vec![],
+                                            is_tail: false,
+                                        };
+                                        self.add_instruction(block_id, call_inst);
+                                    }
+
+                                    // If println with no parts (empty f-string), or println
+                                    // where the last part was handled by print (not println),
+                                    // emit a final newline
+                                    if parts.is_empty()
+                                        && (outer_name == "println" || outer_name == "eprintln")
+                                    {
+                                        let newline_interned =
+                                            zyntax_typed_ast::InternedString::new_global("");
+                                        let newline_val =
+                                            self.create_string_global(newline_interned);
+                                        let result = self.create_value(
+                                            HirType::Void,
+                                            HirValueKind::Instruction,
+                                        );
+                                        let call_inst = HirInstruction::Call {
+                                            result: Some(result),
+                                            callee: crate::hir::HirCallable::Symbol(
+                                                println_symbol,
+                                            ),
+                                            args: vec![newline_val],
+                                            type_args: vec![],
+                                            const_args: vec![],
+                                            is_tail: false,
+                                        };
+                                        self.add_instruction(block_id, call_inst);
+                                    }
+
+                                    return Ok(self.create_undef(HirType::Void));
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Check if callee is a function name (direct call) vs expression (indirect call)
                 // Path expressions should be resolved to Variable during lowering/type resolution
                 let (hir_callable, indirect_callee_val) = if let TypedExpression::Variable(
@@ -3858,6 +3951,36 @@ impl SsaBuilder {
 
             TypedExpression::Lambda(lambda) => self.translate_closure(block_id, lambda, &expr.ty),
 
+            TypedExpression::Block(block) => {
+                // Block expression: evaluate all statements, return value of last expression.
+                // Used by f-string desugaring (closure approach): the block contains
+                // print() calls for each f-string part and ends with an empty string.
+                let mut last_val = self.create_undef(HirType::Void);
+                for stmt in &block.statements {
+                    match &stmt.node {
+                        zyntax_typed_ast::typed_ast::TypedStatement::Expression(e) => {
+                            last_val = self.translate_expression(block_id, e)?;
+                        }
+                        zyntax_typed_ast::typed_ast::TypedStatement::Let(let_stmt) => {
+                            if let Some(init) = &let_stmt.initializer {
+                                let val = self.translate_expression(block_id, init)?;
+                                self.write_variable(let_stmt.name, block_id, val);
+                                self.var_types
+                                    .insert(let_stmt.name, self.convert_type(&let_stmt.ty));
+                            }
+                        }
+                        zyntax_typed_ast::typed_ast::TypedStatement::Return(ret_expr) => {
+                            if let Some(ret) = ret_expr {
+                                let val = self.translate_expression(block_id, ret)?;
+                                last_val = val;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(last_val)
+            }
+
             _ => {
                 // Fallback for any remaining unhandled expressions
                 Ok(self.create_undef(self.convert_type(&expr.ty)))
@@ -4977,6 +5100,13 @@ impl SsaBuilder {
                     use crate::hir::HirStructType;
                     use zyntax_typed_ast::type_registry::TypeKind;
 
+                    // Extern/opaque types (ZRTL-backed like Tensor) → Ptr(Opaque)
+                    if let Some(zyntax_typed_ast::type_registry::Type::Extern { name: extern_name, .. }) =
+                        self.type_registry.resolve_alias(type_def.name)
+                    {
+                        return HirType::Ptr(Box::new(HirType::Opaque(*extern_name)));
+                    }
+
                     // Abstract types are zero-cost wrappers with struct layout
                     // They must be treated as structs for field access to work
                     // The backend will optimize away the wrapper at codegen time
@@ -5032,6 +5162,14 @@ impl SsaBuilder {
                         name.resolve_global().unwrap_or_default(),
                         type_def.kind
                     );
+
+                    // Extern/opaque types (ZRTL-backed like Tensor) → Ptr(Opaque)
+                    // Extern types are registered with TypeKind::Atomic and an alias to Type::Extern
+                    if let Some(zyntax_typed_ast::type_registry::Type::Extern { name: extern_name, .. }) =
+                        self.type_registry.resolve_alias(type_def.name)
+                    {
+                        return HirType::Ptr(Box::new(HirType::Opaque(*extern_name)));
+                    }
 
                     // Abstract types are zero-cost wrappers with struct layout
                     if let TypeKind::Abstract { .. } = &type_def.kind {
@@ -5507,6 +5645,21 @@ impl SsaBuilder {
             }
             Type::Named { id, .. } => {
                 if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
+                    // Check if this is an extern type with a runtime prefix alias
+                    if let Some(Type::Extern { name: extern_name, .. }) =
+                        self.type_registry.resolve_alias(type_def.name)
+                    {
+                        let extern_str = extern_name.resolve_global().unwrap_or_else(|| {
+                            let arena = self.arena.lock().unwrap();
+                            arena
+                                .resolve_string(*extern_name)
+                                .map(|s| s.to_string())
+                                .unwrap_or_default()
+                        });
+                        log::debug!("[trait_dispatch] Type::Named (extern alias) prefix: '{}'", extern_str);
+                        return Some(extern_str);
+                    }
+
                     // Use the type name
                     let name = type_def.name.resolve_global().unwrap_or_else(|| {
                         let arena = self.arena.lock().unwrap();
@@ -5694,7 +5847,6 @@ impl SsaBuilder {
             }
         }
 
-        // Field not found
         Err(crate::CompilerError::Analysis(format!(
             "Field {:?} not found in type {:?}",
             field_name, type_def.name

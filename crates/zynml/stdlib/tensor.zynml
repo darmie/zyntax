@@ -83,17 +83,23 @@ impl Tensor {
 
     // Create tensor filled with zeros
     // Usage: Tensor::zeros([3, 4])
-    // ZRTL expects (ptr, ndim) - wrapper unpacks List struct fields
     def zeros(shape: List<i64>): Tensor {
         extern tensor_zeros(shape.data, shape.len)
     }
 
     // Create tensor filled with ones
     // Usage: Tensor::ones([3, 4])
-    // ZRTL expects (ptr, ndim) - wrapper unpacks List struct fields
     def ones(shape: List<i64>): Tensor {
         extern tensor_ones(shape.data, shape.len)
     }
+
+    // Dimension-specific convenience constructors
+    extern def zeros_1d(n: i64): Tensor
+    extern def zeros_2d(rows: i64, cols: i64): Tensor
+    extern def zeros_3d(d0: i64, d1: i64, d2: i64): Tensor
+    extern def ones_1d(n: i64): Tensor
+    extern def ones_2d(rows: i64, cols: i64): Tensor
+    extern def ones_3d(d0: i64, d1: i64, d2: i64): Tensor
 
     // Create tensor with values in range [start, end) with step
     // Usage: Tensor::arange(0.0, 10.0, 1.0)

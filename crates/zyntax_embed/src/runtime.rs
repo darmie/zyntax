@@ -1020,7 +1020,57 @@ impl ZyntaxRuntime {
             };
             if let TypedDeclaration::Class(class) = &decl_node.node {
                 // Check if type is already registered (e.g., abstract types from parser)
-                if program.type_registry.get_type_by_name(class.name).is_some() {
+                // If it exists but has 0 fields and the new one has fields, update it
+                // (generic types like List<T> may be pre-registered as placeholders without fields)
+                if let Some(existing) = program.type_registry.get_type_by_name(class.name) {
+                    if existing.fields.is_empty() && !class.fields.is_empty() {
+                        // Pre-registered placeholder with no fields - update with actual fields
+                        let existing_id = existing.id;
+                        let field_defs: Vec<FieldDef> = class
+                            .fields
+                            .iter()
+                            .map(|f| FieldDef {
+                                name: f.name,
+                                ty: f.ty.clone(),
+                                visibility: f.visibility,
+                                mutability: f.mutability,
+                                is_static: f.is_static,
+                                span: f.span,
+                                getter: None,
+                                setter: None,
+                                is_synthetic: false,
+                            })
+                            .collect();
+
+                        let type_params: Vec<TypeParam> = class
+                            .type_params
+                            .iter()
+                            .map(|tp| TypeParam {
+                                name: tp.name,
+                                bounds: vec![],
+                                variance: Variance::Invariant,
+                                default: tp.default.clone(),
+                                span: tp.span,
+                            })
+                            .collect();
+
+                        let type_def = TypeDefinition {
+                            id: existing_id,
+                            name: class.name,
+                            kind: TypeKind::Struct {
+                                fields: field_defs.clone(),
+                                is_tuple: false,
+                            },
+                            type_params,
+                            constraints: vec![],
+                            fields: field_defs,
+                            methods: vec![],
+                            constructors: vec![],
+                            metadata: Default::default(),
+                            span: class.span,
+                        };
+                        program.type_registry.register_type(type_def);
+                    }
                     continue;
                 }
 
@@ -1801,9 +1851,17 @@ impl ZyntaxRuntime {
         for decl in &program.declarations {
             if let TypedDeclaration::Class(class_decl) = &decl.node {
                 // Check if type is already registered
-                if type_registry.get_type_by_name(class_decl.name).is_some() {
-                    continue;
-                }
+                // If it exists but has 0 fields and the new one has fields, update it
+                // (generic types like List<T> may be pre-registered as placeholders without fields)
+                let existing_id = if let Some(existing) = type_registry.get_type_by_name(class_decl.name) {
+                    if existing.fields.is_empty() && !class_decl.fields.is_empty() {
+                        Some(existing.id)
+                    } else {
+                        continue;
+                    }
+                } else {
+                    None
+                };
 
                 // Convert TypedTypeParam to TypeParam
                 let type_params: Vec<TypeParam> = class_decl
@@ -1840,7 +1898,8 @@ impl ZyntaxRuntime {
                     .collect();
 
                 // Create TypeDefinition for the struct
-                let type_id = TypeId::next();
+                // Use existing ID if updating a placeholder, otherwise generate new
+                let type_id = existing_id.unwrap_or_else(TypeId::next);
                 let type_def = TypeDefinition {
                     id: type_id,
                     name: class_decl.name,
