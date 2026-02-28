@@ -82,14 +82,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Markflow
-        run: |
-          curl -sL https://raw.githubusercontent.com/darmie/markflow/main/install.sh | bash
-          # Fix broken pipe: echo to closed grep pipe on Linux (grep -m1 exits early, SIGPIPE kills echo)
-          sed -i 's/echo "$content" | grep/{ echo "$content" || true; } | grep/g' "$HOME/.markflow/markflow"
+        run: curl -sL https://raw.githubusercontent.com/darmie/markflow/main/install.sh | bash
 
       - name: Build site
         run: |
           export PATH="$HOME/.markflow:$PATH"
+          # Raise ARG_MAX for large pre-baked content (16 chapters exceed default ~2MB limit)
+          ulimit -s unlimited
           mkdir -p site
 
           # Copy website landing page to site root
