@@ -82,7 +82,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Markflow
-        run: curl -sL https://raw.githubusercontent.com/darmie/markflow/main/install.sh | bash
+        run: |
+          curl -sL https://raw.githubusercontent.com/darmie/markflow/main/install.sh | bash
+          # Fix broken pipe: echo to closed grep pipe on Linux (grep -m1 exits early, SIGPIPE kills echo)
+          sed -i 's/echo "$content" | grep/{ echo "$content" || true; } | grep/g' "$HOME/.markflow/markflow"
 
       - name: Build site
         run: |
