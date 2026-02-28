@@ -67,6 +67,30 @@ jobs:
       - name: Run examples parse regression suite
         run: RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests examples_regression:: -- --nocapture
 
+  type-lowering-conformance:
+    name: type + lowering conformance
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Grammar2 typed parsing conformance
+        run: RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests grammar2_parsing:: -- --nocapture
+
+      - name: Run type-system conformance
+        run: RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests type_system:: -- --nocapture
+
+      - name: Run lowering/runtime cast conformance
+        run: |
+          RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests execution::test_execute_implicit_numeric_casts_in_assignments -- --nocapture
+          RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests execution::test_execute_implicit_numeric_casts_in_call_args -- --nocapture
+
   runtime-smoke:
     name: runtime smoke
     runs-on: ubuntu-latest
