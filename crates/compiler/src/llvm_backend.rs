@@ -2541,7 +2541,8 @@ impl<'ctx> LLVMBackend<'ctx> {
                                     self.builder.build_call(box_fn, &[arg_val.into()], "box")
                                 {
                                     call_site
-                                        .try_as_basic_value().basic()
+                                        .try_as_basic_value()
+                                        .basic()
                                         .unwrap_or(arg_val)
                                         .into()
                                 } else {
