@@ -299,15 +299,18 @@ pub fn register_impl_blocks(
                     }
                     Type::Extern { name, .. } => {
                         // Look up extern type by name
+                        // Extern types have runtime_prefix names like "$Tensor",
+                        // but TypeDefinitions are registered under the bare name "Tensor"
                         let name_str = name.resolve_global().unwrap_or_default();
+                        let bare_name = name_str.strip_prefix('$').unwrap_or(&name_str);
                         if let Some(type_def) = program.type_registry.get_type_by_name(*name) {
                             Some(type_def.id)
                         } else {
-                            // Try with a fresh InternedString
-                            let fresh_name =
-                                zyntax_typed_ast::InternedString::new_global(&name_str);
+                            // Try with bare name (strip $ prefix)
+                            let bare_interned =
+                                zyntax_typed_ast::InternedString::new_global(bare_name);
                             if let Some(type_def) =
-                                program.type_registry.get_type_by_name(fresh_name)
+                                program.type_registry.get_type_by_name(bare_interned)
                             {
                                 Some(type_def.id)
                             } else {
