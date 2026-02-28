@@ -1,4 +1,4 @@
-name: Publish Wiki
+name: Publish Wiki & Deploy Site
 
 on:
   push:
@@ -6,10 +6,17 @@ on:
       - main
     paths:
       - 'book/**'
-  workflow_dispatch:  # Allow manual trigger
+      - 'website/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
   publish-wiki:
@@ -64,3 +71,40 @@ jobs:
         with:
           path: wiki/
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy-site:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Markflow
+        run: |
+          curl -sL https://raw.githubusercontent.com/darmie/markflow/main/install.sh | bash
+          echo "$HOME/.markflow" >> $GITHUB_PATH
+
+      - name: Build site
+        run: |
+          mkdir -p site
+
+          # Copy website landing page to site root
+          cp website/index.html site/index.html
+
+          # Build book docs with Markflow into /book subdirectory
+          markflow build --prebake --source ./book \
+            --output ./site/book --config ./book/.env
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
