@@ -73,10 +73,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run docs snippet parse conformance
-        run: RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests docs_conformance:: -- --nocapture
+        run: |
+          RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests docs_conformance:: -- --nocapture
 
       - name: Run examples parse regression suite
-        run: RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests examples_regression:: -- --nocapture
+        run: |
+          RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests examples_regression:: -- --nocapture
 
   type-lowering-conformance:
     name: type + lowering conformance
@@ -92,10 +94,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run Grammar2 typed parsing conformance
-        run: RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests grammar2_parsing:: -- --nocapture
+        run: |
+          RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests grammar2_parsing:: -- --nocapture
 
       - name: Run type-system conformance
-        run: RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests type_system:: -- --nocapture
+        run: |
+          RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests type_system:: -- --nocapture
 
       - name: Run lowering/runtime cast conformance
         run: |
