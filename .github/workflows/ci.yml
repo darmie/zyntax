@@ -102,6 +102,22 @@ jobs:
           RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests execution::test_execute_implicit_numeric_casts_in_assignments -- --nocapture
           RUST_MIN_STACK=134217728 cargo test -p zynml --test e2e_tests execution::test_execute_implicit_numeric_casts_in_call_args -- --nocapture
 
+  simd-contract:
+    name: SIMD contract (Cranelift)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Cranelift SIMD vector contract tests
+        run: cargo test -p zyntax_compiler --test cranelift_backend_tests vector_ -- --nocapture
+
   runtime-smoke:
     name: runtime smoke
     runs-on: ubuntu-latest

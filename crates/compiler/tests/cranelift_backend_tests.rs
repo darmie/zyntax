@@ -209,41 +209,65 @@ fn test_arithmetic_operations() {
 /// Test SIMD vector arithmetic compilation (integer lanes)
 #[test]
 fn test_vector_i32x4_add_compilation() {
-    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
-    let func = create_vector_arithmetic_function("vec_i32x4_add", BinaryOp::Add, HirType::I32, 4);
-    backend
-        .compile_function(func.id, &func)
-        .expect("Failed to compile i32x4 add function");
+    assert_vector_binary_compiles("vec_i32x4_add", BinaryOp::Add, HirType::I32, 4);
+}
+
+#[test]
+fn test_vector_i32x4_sub_compilation() {
+    assert_vector_binary_compiles("vec_i32x4_sub", BinaryOp::Sub, HirType::I32, 4);
+}
+
+#[test]
+fn test_vector_i32x4_mul_compilation() {
+    assert_vector_binary_compiles("vec_i32x4_mul", BinaryOp::Mul, HirType::I32, 4);
 }
 
 /// Test SIMD vector arithmetic compilation (floating lanes)
 #[test]
 fn test_vector_f32x4_add_compilation() {
-    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
-    let func = create_vector_arithmetic_function("vec_f32x4_add", BinaryOp::FAdd, HirType::F32, 4);
-    backend
-        .compile_function(func.id, &func)
-        .expect("Failed to compile f32x4 add function");
+    assert_vector_binary_compiles("vec_f32x4_add", BinaryOp::FAdd, HirType::F32, 4);
+}
+
+#[test]
+fn test_vector_f32x4_sub_compilation() {
+    assert_vector_binary_compiles("vec_f32x4_sub", BinaryOp::FSub, HirType::F32, 4);
+}
+
+#[test]
+fn test_vector_f32x4_mul_compilation() {
+    assert_vector_binary_compiles("vec_f32x4_mul", BinaryOp::FMul, HirType::F32, 4);
 }
 
 /// Test SIMD vector arithmetic compilation (f64x2 lanes)
 #[test]
 fn test_vector_f64x2_add_compilation() {
-    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
-    let func = create_vector_arithmetic_function("vec_f64x2_add", BinaryOp::FAdd, HirType::F64, 2);
-    backend
-        .compile_function(func.id, &func)
-        .expect("Failed to compile f64x2 add function");
+    assert_vector_binary_compiles("vec_f64x2_add", BinaryOp::FAdd, HirType::F64, 2);
+}
+
+#[test]
+fn test_vector_f64x2_sub_compilation() {
+    assert_vector_binary_compiles("vec_f64x2_sub", BinaryOp::FSub, HirType::F64, 2);
+}
+
+#[test]
+fn test_vector_f64x2_mul_compilation() {
+    assert_vector_binary_compiles("vec_f64x2_mul", BinaryOp::FMul, HirType::F64, 2);
 }
 
 /// Test SIMD vector arithmetic compilation (i64x2 lanes)
 #[test]
 fn test_vector_i64x2_add_compilation() {
-    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
-    let func = create_vector_arithmetic_function("vec_i64x2_add", BinaryOp::Add, HirType::I64, 2);
-    backend
-        .compile_function(func.id, &func)
-        .expect("Failed to compile i64x2 add function");
+    assert_vector_binary_compiles("vec_i64x2_add", BinaryOp::Add, HirType::I64, 2);
+}
+
+#[test]
+fn test_vector_i64x2_sub_compilation() {
+    assert_vector_binary_compiles("vec_i64x2_sub", BinaryOp::Sub, HirType::I64, 2);
+}
+
+#[test]
+fn test_vector_i64x2_mul_compilation() {
+    assert_vector_binary_compiles("vec_i64x2_mul", BinaryOp::Mul, HirType::I64, 2);
 }
 
 /// Unsupported vector lane shapes should fail with a clear diagnostic.
@@ -504,6 +528,14 @@ fn create_vector_arithmetic_function(
     });
 
     func
+}
+
+fn assert_vector_binary_compiles(name: &str, op: BinaryOp, elem_ty: HirType, lanes: u32) {
+    let mut backend = CraneliftBackend::new().expect("Failed to create backend");
+    let func = create_vector_arithmetic_function(name, op, elem_ty, lanes);
+    backend
+        .compile_function(func.id, &func)
+        .expect("Failed to compile vector binary function");
 }
 
 /// Helper function to create scalar float arithmetic operations.
