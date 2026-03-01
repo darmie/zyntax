@@ -94,6 +94,7 @@ jobs:
           # Copy website landing page to site root
           cp website/index.html site/index.html
           touch site/.nojekyll
+          echo "zyntax.org" > site/CNAME
 
           # Build book docs with Markflow into /book subdirectory
           markflow build --prebake --source ./book --output ./site/book --config .env.markflow
