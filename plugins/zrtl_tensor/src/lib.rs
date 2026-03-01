@@ -598,6 +598,33 @@ pub extern "C" fn tensor_linspace_f32(start: f32, end: f32, n: usize) -> TensorP
     tensor
 }
 
+/// Create an n×n identity matrix (f32)
+#[no_mangle]
+pub extern "C" fn tensor_eye(n: i64) -> TensorPtr {
+    if n <= 0 {
+        return TENSOR_NULL;
+    }
+
+    let n = n as usize;
+    let shape = [n, n];
+    let tensor = tensor_new(shape.as_ptr(), 2, DType::F32 as u8);
+    if tensor.is_null() {
+        return TENSOR_NULL;
+    }
+
+    unsafe {
+        let t = &*tensor;
+        let ptr = t.data as *mut f32;
+        // Matrix is already zero-initialized by tensor_new (alloc_zeroed)
+        // Just set diagonal elements to 1.0
+        for i in 0..n {
+            *ptr.add(i * n + i) = 1.0;
+        }
+    }
+
+    tensor
+}
+
 /// Create a tensor with random values from uniform distribution [0, 1) (auto-seeded)
 #[no_mangle]
 pub extern "C" fn tensor_rand_f32_auto(
@@ -2480,6 +2507,7 @@ zrtl_plugin! {
         ("$Tensor$arange_f32", tensor_arange_f32, (f32, f32, f32) -> opaque),
         ("$Tensor$arange", tensor_arange, (f64, f64, f64) -> opaque),  // f64 wrapper for convenience
         ("$Tensor$linspace_f32", tensor_linspace_f32, (f32, f32, u64) -> opaque),  // start, end, n (usize)
+        ("$Tensor$eye", tensor_eye, (i64) -> opaque),  // n (creates n×n identity matrix)
         ("$Tensor$rand_f32", tensor_rand_f32_auto, (i64, u32) -> opaque),  // shape_ptr, ndim (auto-seeded)
         ("$Tensor$randn_f32", tensor_randn_f32_auto, (i64, u32) -> opaque),  // shape_ptr, ndim (auto-seeded)
         ("$Tensor$rand_f32_seeded", tensor_rand_f32, (i64, u32, u64) -> opaque),  // shape_ptr, ndim, seed

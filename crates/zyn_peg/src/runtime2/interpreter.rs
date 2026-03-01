@@ -827,6 +827,10 @@ impl<'g> GrammarInterpreter<'g> {
             TypedExpression::Compute(_) => Type::Any,
             // Struct literal gets its type from the struct name - use Unresolved for compiler to resolve
             TypedExpression::Struct(lit) => Type::Unresolved(lit.name),
+            // Unary operations (negation, not) have the same type as their operand
+            TypedExpression::Unary(unary) => unary.operand.ty.clone(),
+            // Binary operations have the same type as their left operand
+            TypedExpression::Binary(binary) => binary.left.ty.clone(),
             _ => Type::Primitive(PrimitiveType::Unit),
         };
 

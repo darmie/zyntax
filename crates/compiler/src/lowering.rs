@@ -1180,22 +1180,74 @@ impl LoweringContext {
                         ..
                     } = &receiver_type
                     {
+                        // Also get the type name for matching extern impls
+                        let receiver_type_name = self.type_registry
+                            .get_type_by_id(*receiver_type_id)
+                            .map(|td| td.name);
                         // Look up the trait implementation
                         for (_trait_id, impls) in self.type_registry.iter_implementations() {
                             for impl_def in impls {
-                                if let Type::Named {
-                                    id: impl_type_id, ..
-                                } = &impl_def.for_type
-                                {
-                                    if *impl_type_id == *receiver_type_id {
-                                        // Find the method in this impl
-                                        for method in &impl_def.methods {
-                                            if method.signature.name == method_call.method {
-                                                // Update the expression type
-                                                expr.ty = method.signature.return_type.clone();
-                                                break;
-                                            }
+                                let impl_matches = match &impl_def.for_type {
+                                    Type::Named { id: impl_type_id, .. } => {
+                                        *impl_type_id == *receiver_type_id
+                                    }
+                                    Type::Extern { name, .. } => {
+                                        receiver_type_name.map_or(false, |n| n == *name)
+                                    }
+                                    Type::Unresolved(name) => {
+                                        receiver_type_name.map_or(false, |n| n == *name)
+                                    }
+                                    _ => false,
+                                };
+                                if impl_matches {
+                                    // Find the method in this impl
+                                    for method in &impl_def.methods {
+                                        if method.signature.name == method_call.method {
+                                            expr.ty = method.signature.return_type.clone();
+                                            break;
                                         }
+                                    }
+                                }
+                            }
+                        }
+                        // Also check inherent methods on the type definition (for extern struct methods)
+                        if matches!(expr.ty, Type::Any | Type::Unknown) {
+                            if let Some(type_def) = self.type_registry.get_type_by_id(*receiver_type_id) {
+                                for method in &type_def.methods {
+                                    if method.name == method_call.method {
+                                        expr.ty = method.return_type.clone();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    } else if let Type::Extern { name: extern_name, .. } = &receiver_type {
+                        // Look up methods in impl blocks for extern types (e.g., Tensor)
+                        // This enables chained method calls like t.reshape([2,3]).transpose()
+                        for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                            for impl_def in impls {
+                                let impl_for_this_extern = match &impl_def.for_type {
+                                    Type::Extern { name, .. } => name == extern_name,
+                                    Type::Unresolved(name) => name == extern_name,
+                                    _ => false,
+                                };
+                                if impl_for_this_extern {
+                                    for method in &impl_def.methods {
+                                        if method.signature.name == method_call.method {
+                                            expr.ty = method.signature.return_type.clone();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Also check inherent methods on the type definition
+                        if matches!(expr.ty, Type::Any | Type::Unknown) {
+                            if let Some(type_def) = self.type_registry.get_type_by_name(*extern_name) {
+                                for method in &type_def.methods {
+                                    if method.name == method_call.method {
+                                        expr.ty = method.return_type.clone();
+                                        break;
                                     }
                                 }
                             }

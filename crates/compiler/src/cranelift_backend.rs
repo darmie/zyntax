@@ -1239,9 +1239,27 @@ impl CraneliftBackend {
                             });
 
                             let value = match op {
-                                BinaryOp::Add => builder.ins().iadd(lhs, rhs),
-                                BinaryOp::Sub => builder.ins().isub(lhs, rhs),
-                                BinaryOp::Mul => builder.ins().imul(lhs, rhs),
+                                BinaryOp::Add => {
+                                    if ty.is_float() {
+                                        builder.ins().fadd(lhs, rhs)
+                                    } else {
+                                        builder.ins().iadd(lhs, rhs)
+                                    }
+                                }
+                                BinaryOp::Sub => {
+                                    if ty.is_float() {
+                                        builder.ins().fsub(lhs, rhs)
+                                    } else {
+                                        builder.ins().isub(lhs, rhs)
+                                    }
+                                }
+                                BinaryOp::Mul => {
+                                    if ty.is_float() {
+                                        builder.ins().fmul(lhs, rhs)
+                                    } else {
+                                        builder.ins().imul(lhs, rhs)
+                                    }
+                                }
                                 BinaryOp::Div => {
                                     if ty.is_float() {
                                         builder.ins().fdiv(lhs, rhs)
@@ -5814,7 +5832,7 @@ impl CraneliftBackend {
                             sig.params
                                 .push(cranelift_codegen::ir::AbiParam::new(arg_ty));
                         }
-                        // For now, assume void return unless we have result
+                        // For now, assume i64 return unless we have no result
                         if result.is_some() {
                             sig.returns
                                 .push(cranelift_codegen::ir::AbiParam::new(types::I64));

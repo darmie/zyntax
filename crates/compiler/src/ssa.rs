@@ -522,6 +522,10 @@ impl SsaBuilder {
             // Store parameter type for SSA variable tracking
             self.var_types.insert(param.name, param.ty.clone());
 
+            // Also store typed AST type for binary op float detection
+            let typed_ast_type = self.hir_type_to_typed_ast_type(&param.ty);
+            self.var_typed_ast_types.insert(param.name, typed_ast_type);
+
             eprintln!(
                 "[PARAM DEBUG] Inserted into var_types: var_types['{}'] = {:?}",
                 param.name.resolve_global().unwrap_or_default(),
@@ -1406,10 +1410,26 @@ impl SsaBuilder {
                     let hir_type = self.convert_type(&let_stmt.ty);
                     self.var_types.insert(let_stmt.name, hir_type.clone());
 
-                    // For TypedAST type, use initializer's type if variable type is Any
+                    // For TypedAST type, use initializer's type if variable type is Any/Unknown
                     // This works around the issue where type inference doesn't update the AST
-                    let typed_ast_type = if matches!(let_stmt.ty, Type::Any) {
-                        value.ty.clone()
+                    let typed_ast_type = if matches!(let_stmt.ty, Type::Any | Type::Unknown) {
+                        // For unary expressions, the node type may also be Unknown;
+                        // in that case, look through to the operand's type
+                        let init_ty = &value.ty;
+                        if matches!(init_ty, Type::Any | Type::Unknown) {
+                            if let TypedExpression::Unary(unary) = &value.node {
+                                let operand_ty = self.resolve_actual_type(&unary.operand.node, &unary.operand.ty);
+                                if !matches!(operand_ty, Type::Any | Type::Unknown) {
+                                    operand_ty
+                                } else {
+                                    init_ty.clone()
+                                }
+                            } else {
+                                init_ty.clone()
+                            }
+                        } else {
+                            init_ty.clone()
+                        }
                     } else {
                         let_stmt.ty.clone()
                     };
@@ -2628,8 +2648,32 @@ impl SsaBuilder {
             TypedExpression::Unary(unary) => {
                 let op = &unary.op;
                 let operand = &unary.operand;
+
+                // Resolve actual operand type for trait dispatch
+                let operand_actual_ty = self.resolve_actual_type(&operand.node, &operand.ty);
+
+                // Try trait dispatch for non-primitive types (e.g., -tensor → $Tensor$neg)
+                let mut operand_with_type = operand.clone();
+                operand_with_type.ty = operand_actual_ty;
+
+                if let Some(trait_call) = self.try_unary_operator_trait_dispatch(
+                    block_id,
+                    op,
+                    &operand_with_type,
+                    &expr.ty,
+                )? {
+                    return Ok(trait_call);
+                }
+
+                // Regular unary operations for primitive types
                 let operand_val = self.translate_expression(block_id, operand)?;
-                let result_type = self.convert_type(&expr.ty);
+                // For unary ops, result type = operand type (e.g., -int → int)
+                // Use operand type when expression type is Unknown/Any
+                let result_type = if matches!(expr.ty, Type::Unknown | Type::Any) {
+                    self.convert_type(&operand_with_type.ty)
+                } else {
+                    self.convert_type(&expr.ty)
+                };
 
                 let hir_op = self.convert_unary_op(op);
                 let result = self.create_value(result_type.clone(), HirValueKind::Instruction);
@@ -3674,20 +3718,32 @@ impl SsaBuilder {
                     } else if let Type::Named { id, .. } = &receiver_type {
                         // Fall back to looking up in trait implementations for named types
                         let receiver_type_id = *id;
+                        // Also get the type name for matching extern impls
+                        let receiver_type_name = self.type_registry
+                            .get_type_by_id(receiver_type_id)
+                            .map(|td| td.name);
                         let mut method_return_type = None;
                         for (_trait_id, impls) in self.type_registry.iter_implementations() {
                             for impl_def in impls {
-                                if let Type::Named {
-                                    id: impl_type_id, ..
-                                } = &impl_def.for_type
-                                {
-                                    if *impl_type_id == receiver_type_id {
-                                        for method in &impl_def.methods {
-                                            if method.signature.name == method_call.method {
-                                                method_return_type =
-                                                    Some(method.signature.return_type.clone());
-                                                break;
-                                            }
+                                let impl_matches = match &impl_def.for_type {
+                                    Type::Named { id: impl_type_id, .. } => {
+                                        *impl_type_id == receiver_type_id
+                                    }
+                                    Type::Extern { name, .. } => {
+                                        // Extern type impls match by name
+                                        receiver_type_name.map_or(false, |n| n == *name)
+                                    }
+                                    Type::Unresolved(name) => {
+                                        receiver_type_name.map_or(false, |n| n == *name)
+                                    }
+                                    _ => false,
+                                };
+                                if impl_matches {
+                                    for method in &impl_def.methods {
+                                        if method.signature.name == method_call.method {
+                                            method_return_type =
+                                                Some(method.signature.return_type.clone());
+                                            break;
                                         }
                                     }
                                 }
@@ -5537,6 +5593,115 @@ impl SsaBuilder {
         self.add_instruction(block_id, inst);
         self.add_use(left_val, result.unwrap_or(left_val));
         self.add_use(right_val, result.unwrap_or(right_val));
+
+        Ok(Some(
+            result.unwrap_or_else(|| self.create_undef(HirType::Void)),
+        ))
+    }
+
+    /// Try to dispatch a unary operator to a trait method call.
+    /// Returns Some(result_value) if the operator should be dispatched via trait,
+    /// or None if the regular unary instruction should be used.
+    fn try_unary_operator_trait_dispatch(
+        &mut self,
+        block_id: HirId,
+        op: &zyntax_typed_ast::typed_ast::UnaryOp,
+        operand: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        _result_ty: &Type,
+    ) -> CompilerResult<Option<HirId>> {
+        use zyntax_typed_ast::typed_ast::UnaryOp as FrontendOp;
+
+        // Only consider trait dispatch for non-primitive types
+        let operand_type = &operand.ty;
+        if !self.is_trait_dispatchable_type(operand_type) {
+            return Ok(None);
+        }
+
+        // Get the method and trait names for this operator
+        let (method_name, trait_name) = match op {
+            FrontendOp::Minus => ("neg", "Neg"),
+            FrontendOp::Not => ("not", "Not"),
+            _ => return Ok(None),
+        };
+
+        // Get the type name for constructing the method symbol
+        let type_name = self.get_type_symbol_prefix(operand_type);
+        if type_name.is_none() {
+            return Ok(None);
+        }
+        let type_name = type_name.unwrap();
+
+        // Build candidate names (same pattern as binary dispatch):
+        // 1) Type$method
+        // 2) Type$Trait$method
+        // 3) $Type$method (runtime symbol for extern-backed types)
+        let mut function_candidates = Vec::with_capacity(2);
+        let runtime_symbol = if let Some(stripped) = type_name.strip_prefix('$') {
+            function_candidates.push(format!("{}${}", stripped, method_name));
+            function_candidates.push(format!("{}${}${}", stripped, trait_name, method_name));
+            format!("{}${}", type_name, method_name)
+        } else {
+            function_candidates.push(format!("{}${}", type_name, method_name));
+            function_candidates.push(format!("{}${}${}", type_name, trait_name, method_name));
+            format!("${}${}", type_name, method_name)
+        };
+
+        let mut matched_function: Option<(HirId, String)> = None;
+        for candidate in &function_candidates {
+            let candidate_interned = InternedString::new_global(candidate);
+            if let Some(&func_id) = self.function_symbols.get(&candidate_interned) {
+                matched_function = Some((func_id, candidate.clone()));
+                break;
+            }
+        }
+
+        let callee = if let Some((func_id, matched_name)) = matched_function {
+            log::debug!(
+                "[SSA] Unary trait dispatch: using function '{}' for type {}",
+                matched_name,
+                type_name
+            );
+            crate::hir::HirCallable::Function(func_id)
+        } else if type_name.starts_with('$') {
+            log::debug!(
+                "[SSA] Unary trait dispatch: using runtime symbol '{}' for type {}",
+                runtime_symbol,
+                type_name
+            );
+            crate::hir::HirCallable::Symbol(runtime_symbol)
+        } else {
+            return Ok(None);
+        };
+
+        // Translate the operand
+        let operand_val = self.translate_expression(block_id, operand)?;
+
+        // Result type should be the same as the operand type (e.g., -Tensor = Tensor)
+        let hir_result_type = self.convert_type(operand_type);
+        log::debug!(
+            "[SSA] Unary trait dispatch result type: {:?} (from operand type: {:?})",
+            hir_result_type,
+            operand_type
+        );
+
+        // Create call instruction to the trait method
+        let result = if hir_result_type != HirType::Void {
+            Some(self.create_value(hir_result_type.clone(), HirValueKind::Instruction))
+        } else {
+            None
+        };
+
+        let inst = HirInstruction::Call {
+            result,
+            callee,
+            args: vec![operand_val],
+            type_args: vec![],
+            const_args: vec![],
+            is_tail: false,
+        };
+
+        self.add_instruction(block_id, inst);
+        self.add_use(operand_val, result.unwrap_or(operand_val));
 
         Ok(Some(
             result.unwrap_or_else(|| self.create_undef(HirType::Void)),

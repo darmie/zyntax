@@ -49,6 +49,7 @@
     arange: "$Tensor$arange",             // arange(1.0, 10.0, 1.0) shorthand - f64 version
     tensor_arange: "$Tensor$arange",      // f64 version for convenience
     tensor_linspace: "$Tensor$linspace_f32",
+    tensor_eye: "$Tensor$eye",
     tensor_rand: "$Tensor$rand_f32",
     tensor_randn: "$Tensor$randn_f32",
     tensor_reshape: "$Tensor$reshape",
@@ -2382,8 +2383,13 @@ await_expr = { "await" ~ operand:postfix_expr }
   }
 
 // Unary prefix operators
-unary_prefix_expr = { unary_op? ~ operand:postfix_expr }
-  -> operand
+unary_prefix_expr = { unary_with_op | postfix_expr }
+
+unary_with_op = { op:unary_op ~ operand:postfix_expr }
+  -> TypedExpression::Unary {
+      op: op,
+      operand: Box::new(operand),
+  }
 
 unary_op = @{ "-" | "!" }
 
