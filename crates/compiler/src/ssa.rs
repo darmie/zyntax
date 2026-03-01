@@ -96,6 +96,9 @@ pub struct SsaBuilder {
     /// `process_statement` picks it up and redirects the current block so
     /// that subsequent statements land in the correct block.
     simd_continue_block: Option<HirId>,
+    /// Default parameter info for functions with optional parameters.
+    /// Maps function name -> Vec<TypedParameter> (for filling in defaults at call sites).
+    function_default_params: IndexMap<InternedString, Vec<zyntax_typed_ast::typed_ast::TypedParameter>>,
 }
 
 /// Context for pattern matching
@@ -343,6 +346,7 @@ impl SsaBuilder {
             extern_link_names: IndexMap::new(),
             compute_yield_stack: Vec::new(),
             simd_continue_block: None,
+            function_default_params: IndexMap::new(),
         }
     }
 
@@ -379,6 +383,7 @@ impl SsaBuilder {
             extern_link_names: IndexMap::new(),
             compute_yield_stack: Vec::new(),
             simd_continue_block: None,
+            function_default_params: IndexMap::new(),
             function,
         };
         // Pre-register all existing blocks in the definitions map
@@ -424,6 +429,12 @@ impl SsaBuilder {
     /// Maps alias names (e.g., "tensor_add") to ZRTL symbols (e.g., "$Tensor$add")
     pub fn with_extern_link_names(mut self, link_names: IndexMap<InternedString, String>) -> Self {
         self.extern_link_names = link_names;
+        self
+    }
+
+    /// Set default parameter info for functions with optional parameters
+    pub fn with_function_default_params(mut self, params: IndexMap<InternedString, Vec<zyntax_typed_ast::typed_ast::TypedParameter>>) -> Self {
+        self.function_default_params = params;
         self
     }
 
@@ -508,12 +519,6 @@ impl SsaBuilder {
         let entry_block = self.function.entry_block;
 
         for (param_index, param) in params.iter().enumerate() {
-            eprintln!(
-                "[PARAM DEBUG] Param '{}' has HIR type: {:?}",
-                param.name.resolve_global().unwrap_or_default(),
-                param.ty
-            );
-
             let param_value_id = self.create_value(
                 param.ty.clone(),
                 HirValueKind::Parameter(param_index as u32),
@@ -526,18 +531,7 @@ impl SsaBuilder {
             let typed_ast_type = self.hir_type_to_typed_ast_type(&param.ty);
             self.var_typed_ast_types.insert(param.name, typed_ast_type);
 
-            eprintln!(
-                "[PARAM DEBUG] Inserted into var_types: var_types['{}'] = {:?}",
-                param.name.resolve_global().unwrap_or_default(),
-                self.var_types.get(&param.name)
-            );
-
             // Define parameter in entry block so it's available to all code
-            eprintln!(
-                "[PARAM DEBUG] write_variable({}, entry_block={:?})",
-                param.name.resolve_global().unwrap_or_default(),
-                entry_block
-            );
             self.write_variable(param.name, entry_block, param_value_id);
         }
 
@@ -591,21 +585,10 @@ impl SsaBuilder {
         let mut found_entry = false;
         for node_idx in cfg.graph.node_indices() {
             let typed_block = &cfg.graph[node_idx];
-            eprintln!(
-                "[SSA DEBUG] CFG block: typed_block.id={:?}, entry_block={:?}, match={}",
-                typed_block.id,
-                entry_block,
-                typed_block.id == entry_block
-            );
             if typed_block.id == entry_block {
                 found_entry = true;
                 // Track current block - try expressions may create continuation blocks
                 let mut current_block = entry_block;
-                eprintln!(
-                    "[SSA DEBUG] Processing entry block {:?} with {} statements",
-                    entry_block,
-                    typed_block.statements.len()
-                );
                 for stmt in &typed_block.statements {
                     current_block = self.process_statement(current_block, stmt)?;
                 }
@@ -2889,7 +2872,7 @@ impl SsaBuilder {
 
                 // Check if callee is a function name (direct call) vs expression (indirect call)
                 // Path expressions should be resolved to Variable during lowering/type resolution
-                let (hir_callable, indirect_callee_val) = if let TypedExpression::Variable(
+                let (hir_callable, indirect_callee_val, callee_func_key) = if let TypedExpression::Variable(
                     func_name,
                 ) = &callee.node
                 {
@@ -2925,10 +2908,10 @@ impl SsaBuilder {
                     } else if name_str.starts_with('$') {
                         // Check if this is an external runtime symbol (e.g., "$haxe$trace$int")
                         // External symbols start with '$' and are resolved at link time
-                        (crate::hir::HirCallable::Symbol(name_str), None)
+                        (crate::hir::HirCallable::Symbol(name_str), None, Some(*func_name))
                     } else if let Some(&func_id) = self.function_symbols.get(func_name) {
                         // Direct function call to known function
-                        (crate::hir::HirCallable::Function(func_id), None)
+                        (crate::hir::HirCallable::Function(func_id), None, Some(*func_name))
                     } else if let Some(link_name) = self.extern_link_names.get(func_name) {
                         // External function with link_name (e.g., tensor_add -> $Tensor$add)
                         log::debug!(
@@ -2936,7 +2919,7 @@ impl SsaBuilder {
                             name_str,
                             link_name
                         );
-                        (crate::hir::HirCallable::Symbol(link_name.clone()), None)
+                        (crate::hir::HirCallable::Symbol(link_name.clone()), None, Some(*func_name))
                     } else {
                         // Debug: Log what we're looking for and what's available
                         if !self.extern_link_names.is_empty() {
@@ -2953,6 +2936,7 @@ impl SsaBuilder {
                         (
                             crate::hir::HirCallable::Indirect(callee_val),
                             Some(callee_val),
+                            Some(*func_name),
                         )
                     }
                 } else {
@@ -2961,6 +2945,7 @@ impl SsaBuilder {
                     (
                         crate::hir::HirCallable::Indirect(callee_val),
                         Some(callee_val),
+                        None,
                     )
                 };
 
@@ -2969,6 +2954,28 @@ impl SsaBuilder {
                 for arg in args {
                     let arg_val = self.translate_expression(block_id, arg)?;
                     arg_vals.push(arg_val);
+                }
+
+                // Fill in default values for missing optional arguments
+                if let Some(func_key) = callee_func_key {
+                    if let Some(params) = self.function_default_params.get(&func_key).cloned() {
+                        // Filter to non-self params only
+                        let non_self_params: Vec<_> = params.iter()
+                            .filter(|p| {
+                                let name = p.name.resolve_global().unwrap_or_default();
+                                name != "self"
+                            })
+                            .collect();
+                        while arg_vals.len() < non_self_params.len() {
+                            let idx = arg_vals.len();
+                            if let Some(default_expr) = &non_self_params[idx].default_value {
+                                let default_val = self.translate_expression(block_id, default_expr)?;
+                                arg_vals.push(default_val);
+                            } else {
+                                break; // No more defaults available
+                            }
+                        }
+                    }
                 }
 
                 // Translate type arguments for generic calls
@@ -3407,7 +3414,7 @@ impl SsaBuilder {
                 for (i, field) in struct_lit.fields.iter().enumerate() {
                     let field_val = self.translate_expression(block_id, &field.value)?;
 
-                    eprintln!("[SSA STRUCT LIT] Inserting field {}", i);
+                    log::trace!("[SSA STRUCT LIT] Inserting field {}", i);
 
                     // Create new struct value with the field inserted
                     let next_struct =
@@ -3430,7 +3437,7 @@ impl SsaBuilder {
                     current_struct = next_struct;
                 }
 
-                eprintln!("[SSA STRUCT LIT] Returning struct value");
+                log::trace!("[SSA STRUCT LIT] Returning struct value");
 
                 // Return the final struct value (not a pointer!)
                 Ok(current_struct)
@@ -4968,9 +4975,7 @@ impl SsaBuilder {
         let type_id = match receiver_type {
             Type::Named { id, .. } => *id,
             Type::Extern { name, .. } => {
-                // For extern types, method calls go through the impl block
-                // The mangled name format is: {TypeName}${method_name} (no leading $)
-                // E.g., Tensor$add for Tensor.add()
+                // For extern types, first try the inherent method name
                 let arena = self.arena.lock().unwrap();
                 let type_name_str = arena.resolve_string(*name).ok_or_else(|| {
                     crate::CompilerError::Analysis("Could not resolve extern type name".into())
@@ -4979,12 +4984,82 @@ impl SsaBuilder {
                     crate::CompilerError::Analysis("Could not resolve method name".into())
                 })?;
 
-                // Strip $ prefix if present (extern type names often have runtime_prefix like "$Tensor")
-                let base_type_name = type_name_str.strip_prefix('$').unwrap_or(&type_name_str);
-                // Format: {TypeName}${method_name} (matches lowering.rs format)
-                let mangled = format!("{}${}", base_type_name, method_name_str);
+                let base_type_name = type_name_str.strip_prefix('$').unwrap_or(&type_name_str).to_string();
+                let method_name_owned = method_name_str.to_string();
+                let inherent_mangled = format!("{}${}", base_type_name, method_name_owned);
                 drop(arena);
-                return Ok(InternedString::new_global(&mangled));
+
+                let inherent_name = InternedString::new_global(&inherent_mangled);
+
+                // Check if the inherent name resolves to a known function or extern
+                if self.function_symbols.contains_key(&inherent_name)
+                    || self.extern_link_names.contains_key(&inherent_name)
+                {
+                    return Ok(inherent_name);
+                }
+
+                // Inherent name not found — check trait implementations
+                for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                    for impl_def in impls {
+                        // Match impl blocks by comparing type name strings
+                        let impl_matches = match &impl_def.for_type {
+                            Type::Named { id: impl_type_id, .. } => {
+                                self.type_registry.get_type_by_id(*impl_type_id)
+                                    .map(|td| {
+                                        td.name.resolve_global()
+                                            .map(|n| n == base_type_name)
+                                            .unwrap_or(false)
+                                    })
+                                    .unwrap_or(false)
+                            }
+                            Type::Extern { name: impl_name, .. } => {
+                                self.arena.lock().unwrap()
+                                    .resolve_string(*impl_name)
+                                    .map(|n| {
+                                        let n = n.strip_prefix('$').unwrap_or(n);
+                                        n == base_type_name
+                                    })
+                                    .unwrap_or(false)
+                            }
+                            _ => false,
+                        };
+
+                        if impl_matches {
+                            for method in &impl_def.methods {
+                                if method.signature.name == method_name {
+                                    let trait_def = self
+                                        .type_registry
+                                        .get_trait_by_id(impl_def.trait_id)
+                                        .ok_or_else(|| {
+                                            crate::CompilerError::Analysis(format!(
+                                                "Trait {:?} not found in registry",
+                                                impl_def.trait_id
+                                            ))
+                                        })?;
+
+                                    let trait_mangled = {
+                                        let arena = self.arena.lock().unwrap();
+                                        let trait_name_str =
+                                            arena.resolve_string(trait_def.name).unwrap_or_default();
+                                        format!(
+                                            "{}${}${}",
+                                            base_type_name, trait_name_str, method_name_owned
+                                        )
+                                    };
+
+                                    log::trace!(
+                                        "[METHOD DISPATCH] Found trait method for extern type '{}' (trait: {:?})",
+                                        base_type_name, impl_def.trait_id
+                                    );
+                                    return Ok(InternedString::new_global(&trait_mangled));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fall back to inherent name (may fail at link time with a clear error)
+                return Ok(inherent_name);
             }
             Type::Unknown | Type::Any => {
                 let method_name_str = self
@@ -5008,29 +5083,18 @@ impl SsaBuilder {
 
         // First, check for inherent methods (impl Type { ... } without trait)
         // Inherent methods take priority over trait methods
-        eprintln!(
+        log::trace!(
             "[METHOD DISPATCH] Looking up type_id {:?} in type_registry",
             type_id
         );
         if let Some(type_def) = self.type_registry.get_type_by_id(type_id) {
-            eprintln!(
+            log::trace!(
                 "[METHOD DISPATCH] Checking type {} ({:?}), {} inherent methods",
                 type_def.name.resolve_global().unwrap_or_default(),
                 type_id,
                 type_def.methods.len()
             );
-            eprintln!(
-                "[METHOD DISPATCH] Looking for method: {} ({:?})",
-                method_name.resolve_global().unwrap_or_default(),
-                method_name
-            );
             for method in &type_def.methods {
-                eprintln!(
-                    "[METHOD DISPATCH]   Available method: {} ({:?}), match={}",
-                    method.name.resolve_global().unwrap_or_default(),
-                    method.name,
-                    method.name == method_name
-                );
                 if method.name == method_name {
                     // Found inherent method!
                     // Format for inherent methods: {TypeName}${method_name}
@@ -5041,7 +5105,7 @@ impl SsaBuilder {
                         format!("{}${}", type_name_str, method_name_str)
                     };
 
-                    eprintln!(
+                    log::trace!(
                         "[METHOD DISPATCH] Found inherent method '{}' for type '{}'",
                         method_name, type_def.name
                     );
@@ -5049,22 +5113,42 @@ impl SsaBuilder {
                 }
             }
         } else {
-            eprintln!(
+            log::trace!(
                 "[METHOD DISPATCH] Type {:?} not found in type_registry!",
                 type_id
             );
         }
+
+        // Resolve the type name for name-based matching
+        let type_name_for_match = self.type_registry.get_type_by_id(type_id)
+            .and_then(|td| td.name.resolve_global().map(|s| s.to_string()));
 
         // Look up which traits this type implements
         // Check all implementations in the type registry
         for (_trait_id, impls) in self.type_registry.iter_implementations() {
             for impl_def in impls {
                 // Check if this impl is for our type
-                if let Type::Named {
-                    id: impl_type_id, ..
-                } = &impl_def.for_type
-                {
-                    if *impl_type_id == type_id {
+                // Match by TypeId for Named types, or by name for Extern types
+                let impl_matches = match &impl_def.for_type {
+                    Type::Named { id: impl_type_id, .. } => *impl_type_id == type_id,
+                    Type::Extern { name: impl_name, .. } => {
+                        // Extern impl blocks match Named receiver types by name
+                        if let Some(ref tn) = type_name_for_match {
+                            self.arena.lock().unwrap()
+                                .resolve_string(*impl_name)
+                                .map(|n| {
+                                    let n = n.strip_prefix('$').unwrap_or(n);
+                                    n == tn.as_str()
+                                })
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    }
+                    _ => false,
+                };
+
+                if impl_matches {
                         // Check if this impl has the method we're looking for
                         for method in &impl_def.methods {
                             if method.signature.name == method_name {
@@ -5104,14 +5188,13 @@ impl SsaBuilder {
                                     )
                                 };
 
-                                eprintln!(
+                                log::trace!(
                                     "[METHOD DISPATCH] Found trait method (trait: {:?})",
                                     impl_def.trait_id
                                 );
                                 return Ok(InternedString::new_global(&mangled));
                             }
                         }
-                    }
                 }
             }
         }

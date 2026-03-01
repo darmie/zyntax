@@ -140,37 +140,6 @@ impl InferenceContext {
         let t1 = self.apply_substitutions(&t1);
         let t2 = self.apply_substitutions(&t2);
 
-        // Debug: catch problematic unification
-        if matches!(&t1, Type::Primitive(crate::PrimitiveType::Unit))
-            && matches!(&t2, Type::Named { .. })
-        {
-            eprintln!(
-                "[UNIFY DEBUG] Attempting to unify Unit with Named: {:?}",
-                t2
-            );
-            eprintln!(
-                "[UNIFY DEBUG] Call location: {}:{}:{}",
-                file!(),
-                line!(),
-                column!()
-            );
-            // This will fail and generate the error
-        }
-        if matches!(&t2, Type::Primitive(crate::PrimitiveType::Unit))
-            && matches!(&t1, Type::Named { .. })
-        {
-            eprintln!(
-                "[UNIFY DEBUG] Attempting to unify Named with Unit: {:?}",
-                t1
-            );
-            eprintln!(
-                "[UNIFY DEBUG] Call location: {}:{}:{}",
-                file!(),
-                line!(),
-                column!()
-            );
-        }
-
         match (&t1, &t2) {
             // Same type
             (Type::Primitive(p1), Type::Primitive(p2)) if p1 == p2 => Ok(t1),
@@ -376,6 +345,11 @@ impl InferenceContext {
 
             // Error type propagates
             (Type::Error, _) | (_, Type::Error) => Ok(Type::Error),
+
+            // Never is the bottom type — it unifies with anything
+            // (e.g., return/panic expressions produce Never, which should be
+            // compatible with any expected type in if/match branches)
+            (Type::Never, t) | (t, Type::Never) => Ok(t.clone()),
 
             // Otherwise, type mismatch
             _ => Err(InferenceError::TypeMismatch {

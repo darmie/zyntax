@@ -2963,18 +2963,36 @@ impl ConstraintSolver {
         // Get all traits implemented by this type
         let implemented_traits = self.type_registry.get_implementations(receiver_ty);
 
-        for trait_id in implemented_traits {
-            if let Some(trait_def) = self.type_registry.get_trait_by_id(trait_id) {
-                // Look for the method in this trait
+        // First, check trait definitions for declared methods
+        for trait_id in &implemented_traits {
+            if let Some(trait_def) = self.type_registry.get_trait_by_id(*trait_id) {
                 for method in &trait_def.methods {
                     if method.name == method_name {
-                        // Found the method - verify bounds and instantiate
                         return self.resolve_and_verify_method(
                             receiver_ty,
                             method.clone(),
                             type_args,
-                            &[], // No receiver type args for trait methods
+                            &[],
                         );
+                    }
+                }
+            }
+        }
+
+        // Trait defs may have 0 methods (e.g., extern trait impls from stdlib).
+        // Fall back to checking impl methods directly for matching types.
+        for (_trait_id, impls) in self.type_registry.iter_implementations() {
+            for impl_def in impls {
+                if self.type_registry.impl_matches_type(&impl_def.for_type, receiver_ty) {
+                    for method_impl in &impl_def.methods {
+                        if method_impl.signature.name == method_name {
+                            return self.resolve_and_verify_method(
+                                receiver_ty,
+                                method_impl.signature.clone(),
+                                type_args,
+                                &[],
+                            );
+                        }
                     }
                 }
             }

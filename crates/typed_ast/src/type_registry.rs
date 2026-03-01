@@ -1214,10 +1214,47 @@ impl TypeRegistry {
     pub fn get_implementations(&self, for_type: &Type) -> Vec<TypeId> {
         let mut implemented_traits = HashSet::new();
 
+        // Resolve the queried type's name for cross-variant matching
+        // (Type::Named vs Type::Extern can refer to the same type)
+        let query_type_name: Option<String> = match for_type {
+            Type::Named { id, .. } => {
+                self.types.get(id).and_then(|td| td.name.resolve_global().map(|s| s.to_string()))
+            }
+            Type::Extern { name, .. } => {
+                name.resolve_global().map(|s| s.strip_prefix('$').unwrap_or(&s).to_string())
+            }
+            _ => None,
+        };
+
         // Find direct implementations
         for (trait_id, impls) in &self.implementations {
             for impl_def in impls {
-                if impl_def.for_type == *for_type {
+                let matches = if impl_def.for_type == *for_type {
+                    true
+                } else if let Some(ref qname) = query_type_name {
+                    // Cross-variant name match (Named ↔ Extern)
+                    match &impl_def.for_type {
+                        Type::Named { id, .. } => {
+                            self.types.get(id)
+                                .and_then(|td| td.name.resolve_global())
+                                .map(|n| n == qname.as_str())
+                                .unwrap_or(false)
+                        }
+                        Type::Extern { name, .. } => {
+                            name.resolve_global()
+                                .map(|n| {
+                                    let n = n.strip_prefix('$').unwrap_or(&n).to_string();
+                                    n == *qname
+                                })
+                                .unwrap_or(false)
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+
+                if matches {
                     implemented_traits.insert(*trait_id);
 
                     // Add super-traits recursively
@@ -1227,6 +1264,29 @@ impl TypeRegistry {
         }
 
         implemented_traits.into_iter().collect()
+    }
+
+    /// Check if an impl's for_type matches a given receiver type.
+    /// Handles cross-variant matching between Named and Extern types by name.
+    pub fn impl_matches_type(&self, impl_for_type: &Type, receiver_ty: &Type) -> bool {
+        if impl_for_type == receiver_ty {
+            return true;
+        }
+        // Resolve names for cross-variant matching
+        let impl_name = match impl_for_type {
+            Type::Named { id, .. } => self.types.get(id).and_then(|td| td.name.resolve_global()),
+            Type::Extern { name, .. } => name.resolve_global().map(|s| s.strip_prefix('$').unwrap_or(&s).to_string()),
+            _ => None,
+        };
+        let recv_name = match receiver_ty {
+            Type::Named { id, .. } => self.types.get(id).and_then(|td| td.name.resolve_global()),
+            Type::Extern { name, .. } => name.resolve_global().map(|s| s.strip_prefix('$').unwrap_or(&s).to_string()),
+            _ => None,
+        };
+        match (impl_name, recv_name) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
     }
 
     /// Get super-traits of a trait recursively

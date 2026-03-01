@@ -1749,8 +1749,15 @@ impl<'g> GrammarInterpreter<'g> {
             .get_field_optional("ty", fields, state)?
             .unwrap_or(Type::Any);
 
-        // Check for kind
-        let kind = if let Some(expr) = self.get_field("kind", fields) {
+        // Parse default_value first (needed to determine ParameterKind)
+        let default_value = self
+            .get_field_optional_expr("default_value", fields, state)?
+            .map(|expr| Box::new(expr));
+
+        // Determine kind: Optional if default exists, else check explicit kind field
+        let kind = if default_value.is_some() {
+            ParameterKind::Optional
+        } else if let Some(expr) = self.get_field("kind", fields) {
             match self.eval_expr(expr, state)? {
                 ParsedValue::Text(s) if s.contains("KeywordOnly") => ParameterKind::KeywordOnly,
                 ParsedValue::Text(s) if s.contains("Rest") => ParameterKind::Rest,
@@ -1759,11 +1766,6 @@ impl<'g> GrammarInterpreter<'g> {
         } else {
             ParameterKind::Regular
         };
-
-        // Parse default_value if present
-        let default_value = self
-            .get_field_optional_expr("default_value", fields, state)?
-            .map(|expr| Box::new(expr));
 
         Ok(ParsedValue::Parameter(TypedParameter {
             name,

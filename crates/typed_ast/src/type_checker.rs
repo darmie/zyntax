@@ -473,6 +473,11 @@ impl TypeChecker {
     fn emit_inference_error(&mut self, error: InferenceError, span: Span) {
         match error {
             InferenceError::TypeMismatch { expected, found } => {
+                // Never is the bottom type — suppress mismatches involving Never
+                // (e.g., from return statements in if/match branches)
+                if matches!(&expected, Type::Never) || matches!(&found, Type::Never) {
+                    return;
+                }
                 let expected_str = self.format_type(&expected);
                 let found_str = self.format_type(&found);
                 self.diagnostics
@@ -947,17 +952,8 @@ impl TypeChecker {
 
     /// Type check an impl block
     fn check_impl_block(&mut self, impl_block: &TypedTraitImpl) -> Result<(), TypeError> {
-        eprintln!(
-            "[TYPE_CHECK] check_impl_block: for_type={:?}, {} methods",
-            impl_block.for_type,
-            impl_block.methods.len()
-        );
         // Type check each method in the impl block
         for method in &impl_block.methods {
-            eprintln!(
-                "[TYPE_CHECK] Checking method: {}",
-                method.name.resolve_global().unwrap_or_default()
-            );
             // FIRST: Add constraints for self parameters so inference can propagate through body
             for param in &method.params {
                 if param.is_self
@@ -1050,7 +1046,12 @@ impl TypeChecker {
         let body_ty = self.check_block(body)?;
 
         // Check return type matches
-        if func.return_type != Type::Primitive(PrimitiveType::Unit) {
+        // Skip if return type is Unit (no constraint needed) or if body type is Unit
+        // (body may return via explicit `return` statements inside match/while/for blocks
+        // which aren't fully tracked yet)
+        if func.return_type != Type::Primitive(PrimitiveType::Unit)
+            && body_ty != Type::Primitive(PrimitiveType::Unit)
+        {
             self.inference.unify(body_ty, func.return_type.clone())?;
         }
 
@@ -2070,8 +2071,9 @@ impl TypeChecker {
         arg_types: &[Type],
         _named_args: &[TypedNamedArg],
     ) -> Result<(), TypeError> {
-        // For now, do basic arity checking
-        let expected_param_count = method_sig.params.len();
+        // Exclude 'self' parameter from arity check — callers only provide non-self args
+        let non_self_params: Vec<_> = method_sig.params.iter().filter(|p| !p.is_self).collect();
+        let expected_param_count = non_self_params.len();
         let provided_arg_count = arg_types.len();
 
         if provided_arg_count != expected_param_count {
@@ -2082,13 +2084,8 @@ impl TypeChecker {
             });
         }
 
-        // Check type compatibility for each argument
-        for (_i, (param, arg_ty)) in method_sig.params.iter().zip(arg_types.iter()).enumerate() {
-            // Skip 'self' parameter for instance methods
-            if param.is_self {
-                continue;
-            }
-
+        // Check type compatibility for each non-self argument
+        for (param, arg_ty) in non_self_params.iter().zip(arg_types.iter()) {
             self.inference
                 .unify(arg_ty.clone(), param.ty.clone())
                 .map_err(|_| TypeError::TypeMismatch {

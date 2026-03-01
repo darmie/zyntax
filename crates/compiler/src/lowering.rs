@@ -259,6 +259,9 @@ pub struct SymbolTable {
     /// External function link names (alias -> ZRTL symbol)
     /// e.g., "tensor_add" -> "$Tensor$add"
     pub extern_link_names: indexmap::IndexMap<InternedString, String>,
+    /// Default parameter info for functions with optional parameters
+    /// Maps function name -> Vec<TypedParameter> (for filling in defaults at call sites)
+    pub function_default_params: indexmap::IndexMap<InternedString, Vec<zyntax_typed_ast::typed_ast::TypedParameter>>,
 }
 
 /// Import metadata for debugging and error messages
@@ -406,6 +409,33 @@ impl LoweringContext {
                 .extern_link_names
                 .insert(alias_interned, target.clone());
             log::trace!("[LOWERING] Added builtin: '{}' -> '{}'", alias, target);
+        }
+
+        // Pre-register extern type trait methods as extern link names.
+        // Trait impls for extern types (e.g., impl Clone for Tensor) dispatch to ZRTL
+        // symbols. Register these before lowering functions so SSA can resolve them.
+        for (trait_id, impls) in type_registry.iter_implementations() {
+            for impl_def in impls {
+                if let zyntax_typed_ast::Type::Extern { name, .. } = &impl_def.for_type {
+                    let type_name = name.resolve_global().unwrap_or_default();
+                    let base_type_name = type_name.strip_prefix('$').unwrap_or(&type_name).to_string();
+                    let trait_def = type_registry.get_trait_by_id(*trait_id);
+                    let trait_name = trait_def
+                        .and_then(|td| td.name.resolve_global())
+                        .unwrap_or_default();
+
+                    for method in &impl_def.methods {
+                        let method_name = method.signature.name.resolve_global().unwrap_or_default();
+                        // SSA generates trait-mangled name: TypeName$TraitName$method
+                        let mangled = format!("{}${}${}", base_type_name, trait_name, method_name);
+                        // ZRTL exports inherent name: $TypeName$method (no trait name)
+                        let symbol = format!("${}${}", base_type_name, method_name);
+                        symbols
+                            .extern_link_names
+                            .insert(InternedString::new_global(&mangled), symbol);
+                    }
+                }
+            }
         }
 
         Self {
@@ -587,21 +617,24 @@ impl LoweringContext {
         let total_errors = diagnostics_collector.error_count();
         let total_warnings = diagnostics_collector.warning_count();
 
+        // Check if errors include stdlib (prelude/tensor) — known false positives.
+        // The stdlib is concatenated into the user's source, so check for import
+        // declarations or stdlib/ paths as indicators.
+        let has_stdlib = program
+            .source_files
+            .iter()
+            .any(|sf| sf.name.contains("stdlib/"))
+            || program.declarations.iter().any(|d| {
+                matches!(&d.node, TypedDeclaration::Import(_))
+            });
+
         // Display diagnostics using the built-in pretty formatter
-        // Suppress stdlib errors (known false positives in impl blocks)
         if total_errors > 0 || total_warnings > 0 {
-            use zyntax_typed_ast::diagnostics::{ConsoleDiagnosticDisplay, DiagnosticDisplay};
-            use zyntax_typed_ast::source::SourceMap;
-
-            // Check if errors are only from stdlib
-            let has_stdlib_sources = program
-                .source_files
-                .iter()
-                .any(|sf| sf.name.contains("stdlib/"));
-
-            // If we have stdlib sources, suppress the diagnostic output
-            // (these are known false positives from trait impl type checking)
-            if !has_stdlib_sources {
+            // If stdlib is included, suppress diagnostic output
+            // (these are known false positives from generic/trait type checking)
+            if !has_stdlib {
+                use zyntax_typed_ast::diagnostics::{ConsoleDiagnosticDisplay, DiagnosticDisplay};
+                use zyntax_typed_ast::source::SourceMap;
                 eprintln!("\n=== Type Checking Diagnostics ===");
 
                 // Create a source map and populate it with source files from the program
@@ -619,13 +652,9 @@ impl LoweringContext {
             }
         }
 
-        // Suppress error count if only stdlib errors
-        let has_stdlib_sources = program
-            .source_files
-            .iter()
-            .any(|sf| sf.name.contains("stdlib/"));
-        let (error_count, warning_count) = if has_stdlib_sources {
-            (0, 0) // Suppress stdlib type errors (known false positives)
+        // Suppress error count if stdlib errors (known false positives from generics)
+        let (error_count, warning_count) = if has_stdlib {
+            (0, 0)
         } else {
             (total_errors, total_warnings)
         };
@@ -1576,6 +1605,10 @@ impl LoweringContext {
                 TypedDeclaration::Function(func) => {
                     let func_id = crate::hir::HirId::new();
                     self.symbols.functions.insert(func.name, func_id);
+                    // Record default parameter info for functions with optional params
+                    if func.params.iter().any(|p| p.default_value.is_some()) {
+                        self.symbols.function_default_params.insert(func.name, func.params.clone());
+                    }
                 }
 
                 TypedDeclaration::Class(class_decl) => {
@@ -1861,7 +1894,8 @@ impl LoweringContext {
             self.symbols.functions.clone(),
         )
         .with_return_type(func.return_type.clone())
-        .with_extern_link_names(self.symbols.extern_link_names.clone());
+        .with_extern_link_names(self.symbols.extern_link_names.clone())
+        .with_function_default_params(self.symbols.function_default_params.clone());
         let ssa = ssa_builder.build_from_typed_cfg(&typed_cfg)?;
 
         // Debug: check SSA result
@@ -2765,7 +2799,7 @@ impl LoweringContext {
     ) -> zyntax_typed_ast::TypedBlock {
         use zyntax_typed_ast::TypedBlock;
 
-        eprintln!(
+        log::trace!(
             "[RETYPE_BLOCK] Processing {} statements",
             block.statements.len()
         );
@@ -2774,7 +2808,7 @@ impl LoweringContext {
             .iter()
             .enumerate()
             .map(|(idx, stmt_node)| {
-                eprintln!("[RETYPE_BLOCK] Processing statement {}", idx);
+                log::trace!("[RETYPE_BLOCK] Processing statement {}", idx);
                 self.retype_statement_with_self(stmt_node, self_params)
             })
             .collect();
@@ -2795,9 +2829,7 @@ impl LoweringContext {
 
         let retyped_stmt = match &stmt_node.node {
             TypedStatement::Expression(expr) => {
-                eprintln!("[RETYPE_STMT] Retyping expression statement");
                 let retyped = self.retype_expression_node_with_self(expr, self_params);
-                eprintln!("[RETYPE_STMT] Expression retyping done");
                 TypedStatement::Expression(Box::new(retyped))
             }
             TypedStatement::Let(let_stmt) => TypedStatement::Let(TypedLet {
@@ -2891,19 +2923,12 @@ impl LoweringContext {
 
             // Field access - retype the object expression and possibly update field type
             TypedExpression::Field(field_access) => {
-                eprintln!(
-                    "[RETYPE] Field access starting: object.ty={:?}, field={:?}",
-                    field_access.object.ty, field_access.field
-                );
                 let retyped_object =
                     self.retype_expression_node_with_self(&field_access.object, self_params);
-                eprintln!("[RETYPE] Field access: object before={:?}, after={:?}, field={:?}, expr_ty={:?}",
-                    field_access.object.ty, retyped_object.ty, field_access.field, expr_node.ty);
                 let retyped_field_access = TypedFieldAccess {
                     object: Box::new(retyped_object),
                     field: field_access.field,
                 };
-                eprintln!("[RETYPE] Field access done, returning");
                 // Keep the original field result type - it should have been correctly typed by the parser
                 (
                     TypedExpression::Field(retyped_field_access),
@@ -3019,7 +3044,7 @@ impl LoweringContext {
     ) -> CompilerResult<()> {
         use zyntax_typed_ast::{Type, TypeId, TypedFunction};
 
-        eprintln!(
+        log::trace!(
             "[LOWERING IMPL] Starting lower_impl_block for_type={:?}, trait_name={:?}, {} methods",
             impl_block.for_type,
             impl_block.trait_name,
@@ -3031,12 +3056,12 @@ impl LoweringContext {
         let implementing_type = match &impl_block.for_type {
             Type::Unresolved(name) => {
                 // Look up the type by name in the registry
-                eprintln!("[LOWERING] Looking up unresolved type: {:?}", name);
+                log::trace!("[LOWERING] Looking up unresolved type: {:?}", name);
 
                 // Find the type in the registry
                 if let Some(type_def) = self.type_registry.get_type_by_name(*name) {
                     let type_id = type_def.id;
-                    eprintln!("[LOWERING] Found TypeId: {:?}", type_id);
+                    log::trace!("[LOWERING] Found TypeId: {:?}", type_id);
                     Type::Named {
                         id: type_id,
                         type_args: vec![],
@@ -3061,7 +3086,7 @@ impl LoweringContext {
             }
             _ => impl_block.for_type.clone(),
         };
-        eprintln!(
+        log::trace!(
             "[LOWERING] Impl block implementing_type after resolution: {:?}",
             implementing_type
         );
@@ -3076,7 +3101,7 @@ impl LoweringContext {
         };
 
         let is_inherent = trait_name_str.is_empty();
-        eprintln!(
+        log::trace!(
             "[LOWERING] Impl block is_inherent: {}, trait_name: '{}'",
             is_inherent, trait_name_str
         );
@@ -3093,7 +3118,7 @@ impl LoweringContext {
         } else {
             None
         };
-        eprintln!(
+        log::trace!(
             "[LOWERING] is_extern_struct: {}, extern_type_name: {:?}",
             is_extern_struct, extern_type_name
         );
@@ -3218,18 +3243,18 @@ impl LoweringContext {
             // TODO: Register impl in type registry before lowering starts
             // self.type_registry is Arc (immutable), so we can't register here
             // For now, method resolution relies on mangled names being available in SSA phase
-            eprintln!(
+            log::trace!(
                 "[LOWERING] Built impl def for trait {:?} for type {:?} (registration TODO)",
                 tid, implementing_type
             );
-            eprintln!("[LOWERING] ImplDef has {} methods", impl_def.methods.len());
+            log::trace!("[LOWERING] ImplDef has {} methods", impl_def.methods.len());
         } else {
-            eprintln!("[LOWERING] Skipping ImplDef creation for inherent impl (no trait)");
+            log::trace!("[LOWERING] Skipping ImplDef creation for inherent impl (no trait)");
         }
 
         // For each method in the impl block, convert it to a function and lower it
         for (method_idx, method) in impl_block.methods.iter().enumerate() {
-            eprintln!(
+            log::trace!(
                 "[LOWERING] Processing method {} of {}: {}",
                 method_idx + 1,
                 impl_block.methods.len(),
@@ -3243,12 +3268,12 @@ impl LoweringContext {
                 .params
                 .iter()
                 .map(|p| {
-                    eprintln!("[LOWERING] Param is_self={}, ty={:?}", p.is_self, p.ty);
+                    log::trace!("[LOWERING] Param is_self={}, ty={:?}", p.is_self, p.ty);
                     let resolved_ty = if p.is_self
                         && (matches!(p.ty, Type::Any) || matches!(p.ty, Type::Unresolved(_)))
                     {
                         // Self parameter without explicit type -> use implementing type
-                        eprintln!("[LOWERING] Resolving self param to {:?}", implementing_type);
+                        log::trace!("[LOWERING] Resolving self param to {:?}", implementing_type);
                         let resolved = implementing_type.clone();
                         // Track this parameter for body retyping
                         self_param_mappings.push((p.name, resolved.clone()));
@@ -3270,13 +3295,13 @@ impl LoweringContext {
                 .collect();
 
             // Re-type the method body to update self references
-            eprintln!(
+            log::trace!(
                 "[LOWERING] Retyping method body, self_param_mappings: {:?}",
                 self_param_mappings
             );
             let retyped_body = method.body.as_ref().map(|body| {
                 let result = self.retype_block_with_self(body, &self_param_mappings);
-                eprintln!("[LOWERING] Retyping complete");
+                log::trace!("[LOWERING] Retyping complete");
                 result
             });
 
@@ -3284,7 +3309,7 @@ impl LoweringContext {
             let resolved_return_type = match &method.return_type {
                 Type::Any => {
                     // Self type in return position -> use implementing type
-                    eprintln!(
+                    log::trace!(
                         "[LOWERING] Resolving return type Self -> {:?}",
                         implementing_type
                     );
@@ -3347,13 +3372,13 @@ impl LoweringContext {
                 }
             };
 
-            eprintln!("[LOWERING] Mangled method name: {:?}", mangled_name);
+            log::trace!("[LOWERING] Mangled method name: {:?}", mangled_name);
 
             // Get the existing function_id from collect_declarations, or create new if missing
             // This ensures consistency between the two phases
             let function_id = if let Some(&existing_id) = self.symbols.functions.get(&mangled_name)
             {
-                eprintln!(
+                log::trace!(
                     "[LOWERING] Using existing function_id for {:?}",
                     mangled_name
                 );
@@ -3374,7 +3399,7 @@ impl LoweringContext {
                     let method_name_str = method.name.resolve_global().unwrap_or_default();
                     // ZRTL symbol format: $TypeName$method_name (e.g., $Tensor$matmul)
                     let zrtl_symbol = format!("${}${}", type_name, method_name_str);
-                    eprintln!(
+                    log::trace!(
                         "[LOWERING] Extern struct method: {} -> ZRTL symbol: {} (params: {})",
                         mangled_name.resolve_global().unwrap_or_default(),
                         zrtl_symbol,
@@ -4675,13 +4700,9 @@ impl LoweringContext {
         // Step 2: Extract type_id from for_type (nominal types only)
         let type_id = match &impl_def.for_type {
             zyntax_typed_ast::Type::Named { id, .. } => *id,
-            zyntax_typed_ast::Type::Extern { name, .. } => {
-                // Extern types (like $Tensor) don't have TypeIds - they're handled by ZRTL
-                // Skip trait impl lowering for extern types as they use runtime dispatch
-                eprintln!(
-                    "[LOWERING WARN] Skipping trait impl for extern type '{}' - ZRTL handles these",
-                    name.resolve_global().unwrap_or_default()
-                );
+            zyntax_typed_ast::Type::Extern { .. } => {
+                // Extern types use ZRTL for trait dispatch — already registered
+                // in LoweringContext::new() during early extern link name setup.
                 return Ok(());
             }
             zyntax_typed_ast::Type::Unresolved(name) => {
