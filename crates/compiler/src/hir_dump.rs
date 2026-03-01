@@ -924,23 +924,63 @@ fn fmt_instruction(inst: &HirInstruction, mapper: &mut IdMapper) -> String {
             let s = mapper.value(scalar);
             format!("{}: {} = vector_splat {}", r, fmt_type(ty), s)
         }
-        HirInstruction::VectorExtractLane { result, ty, vector, lane } => {
+        HirInstruction::VectorExtractLane {
+            result,
+            ty,
+            vector,
+            lane,
+        } => {
             let r = mapper.value(result);
             let v = mapper.value(vector);
-            format!("{}: {} = extract_lane {}, lane {}", r, fmt_type(ty), v, lane)
+            format!(
+                "{}: {} = extract_lane {}, lane {}",
+                r,
+                fmt_type(ty),
+                v,
+                lane
+            )
         }
-        HirInstruction::VectorInsertLane { result, ty, vector, scalar, lane } => {
+        HirInstruction::VectorInsertLane {
+            result,
+            ty,
+            vector,
+            scalar,
+            lane,
+        } => {
             let r = mapper.value(result);
             let v = mapper.value(vector);
             let s = mapper.value(scalar);
-            format!("{}: {} = insert_lane {}, lane {}, {}", r, fmt_type(ty), v, lane, s)
+            format!(
+                "{}: {} = insert_lane {}, lane {}, {}",
+                r,
+                fmt_type(ty),
+                v,
+                lane,
+                s
+            )
         }
-        HirInstruction::VectorHorizontalReduce { result, ty, vector, op } => {
+        HirInstruction::VectorHorizontalReduce {
+            result,
+            ty,
+            vector,
+            op,
+        } => {
             let r = mapper.value(result);
             let v = mapper.value(vector);
-            format!("{}: {} = hreduce.{} {}", r, fmt_type(ty), fmt_binary_op(op), v)
+            format!(
+                "{}: {} = hreduce.{} {}",
+                r,
+                fmt_type(ty),
+                fmt_binary_op(op),
+                v
+            )
         }
-        HirInstruction::VectorLoad { result, ty, ptr, align } => {
+        HirInstruction::VectorLoad {
+            result,
+            ty,
+            ptr,
+            align,
+        } => {
             let r = mapper.value(result);
             let p = mapper.value(ptr);
             format!("{}: {} = vload {}, align {}", r, fmt_type(ty), p, align)

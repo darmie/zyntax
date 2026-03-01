@@ -2594,16 +2594,29 @@ fn test_vector_splat_f32x4() {
     let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
     let lane_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
-    let splat = HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar };
-    let extract = HirInstruction::VectorExtractLane { result: lane_id, ty: HirType::F32, vector: vec_id, lane: 0 };
+    let splat = HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
+    };
+    let extract = HirInstruction::VectorExtractLane {
+        result: lane_id,
+        ty: HirType::F32,
+        vector: vec_id,
+        lane: 0,
+    };
 
     let block = func.blocks.get_mut(&entry).unwrap();
     block.add_instruction(splat);
     block.add_instruction(extract);
-    block.set_terminator(HirTerminator::Return { values: vec![lane_id] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![lane_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorSplat f32x4 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorSplat f32x4 should compile");
 }
 
 /// Contract: VectorSplat i32 → i32x4, extract lane 3, return i32.
@@ -2617,17 +2630,25 @@ fn test_vector_splat_i32x4() {
     let lane_id = func.create_value(HirType::I32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
+    });
     block.add_instruction(HirInstruction::VectorExtractLane {
         result: lane_id,
         ty: HirType::I32,
         vector: vec_id,
         lane: 3,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![lane_id] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![lane_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorSplat i32x4 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorSplat i32x4 should compile");
 }
 
 /// Contract: VectorExtractLane at a non-zero lane index (lane 2 of f32x4).
@@ -2641,17 +2662,25 @@ fn test_vector_extract_lane_f32x4() {
     let lane_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
+    });
     block.add_instruction(HirInstruction::VectorExtractLane {
         result: lane_id,
         ty: HirType::F32,
         vector: vec_id,
         lane: 2,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![lane_id] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![lane_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorExtractLane lane 2 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorExtractLane lane 2 should compile");
 }
 
 /// Contract: VectorInsertLane into f64x2 at lane 1, then extract it back.
@@ -2667,7 +2696,11 @@ fn test_vector_insert_lane_f64x2() {
 
     let block = func.blocks.get_mut(&entry).unwrap();
     // splat p_a into both lanes of f64x2
-    block.add_instruction(HirInstruction::VectorSplat { result: splat_id, ty: vec_ty.clone(), scalar: p_a });
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: splat_id,
+        ty: vec_ty.clone(),
+        scalar: p_a,
+    });
     // replace lane 1 with p_b
     block.add_instruction(HirInstruction::VectorInsertLane {
         result: insert_id,
@@ -2683,10 +2716,14 @@ fn test_vector_insert_lane_f64x2() {
         vector: insert_id,
         lane: 1,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![extract_id] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![extract_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorInsertLane f64x2 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorInsertLane f64x2 should compile");
 }
 
 /// Contract: VectorHorizontalReduce FAdd over f32x4.
@@ -2697,21 +2734,29 @@ fn test_vector_horizontal_reduce_add_f32x4() {
     let vec_ty = HirType::Vector(Box::new(HirType::F32), 4);
     let entry = func.entry_block;
 
-    let vec_id  = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
-    let sum_id  = func.create_value(HirType::F32, HirValueKind::Instruction);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let sum_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
+    });
     block.add_instruction(HirInstruction::VectorHorizontalReduce {
         result: sum_id,
         ty: HirType::F32,
         vector: vec_id,
         op: BinaryOp::FAdd,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![sum_id] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![sum_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorHorizontalReduce FAdd f32x4 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorHorizontalReduce FAdd f32x4 should compile");
 }
 
 /// Contract: VectorHorizontalReduce Mul over i32x4.
@@ -2721,21 +2766,29 @@ fn test_vector_horizontal_reduce_mul_i32x4() {
     let vec_ty = HirType::Vector(Box::new(HirType::I32), 4);
     let entry = func.entry_block;
 
-    let vec_id  = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
     let prod_id = func.create_value(HirType::I32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
+    });
     block.add_instruction(HirInstruction::VectorHorizontalReduce {
         result: prod_id,
         ty: HirType::I32,
         vector: vec_id,
         op: BinaryOp::Mul,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![prod_id] });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![prod_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorHorizontalReduce Mul i32x4 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorHorizontalReduce Mul i32x4 should compile");
 }
 
 // ============================================================
@@ -2756,7 +2809,10 @@ unsafe fn jit_f32_to_f32(
     backend.compile_function(id, &func).ok()?;
     backend.finalize_definitions().ok()?;
     let raw = backend.get_function_ptr(id)?;
-    Some(std::mem::transmute::<*const u8, unsafe extern "C" fn(f32) -> f32>(raw))
+    Some(std::mem::transmute::<
+        *const u8,
+        unsafe extern "C" fn(f32) -> f32,
+    >(raw))
 }
 
 /// Helper: compile, finalize, and return a `fn(i32) -> i32` function pointer.
@@ -2768,7 +2824,10 @@ unsafe fn jit_i32_to_i32(
     backend.compile_function(id, &func).ok()?;
     backend.finalize_definitions().ok()?;
     let raw = backend.get_function_ptr(id)?;
-    Some(std::mem::transmute::<*const u8, unsafe extern "C" fn(i32) -> i32>(raw))
+    Some(std::mem::transmute::<
+        *const u8,
+        unsafe extern "C" fn(i32) -> i32,
+    >(raw))
 }
 
 /// Execution: VectorSplat f32 → extract lane 0 → should return the original scalar.
@@ -2778,19 +2837,28 @@ fn test_vector_splat_f32x4_executes() {
     let vec_ty = HirType::Vector(Box::new(HirType::F32), 4);
     let entry = func.entry_block;
 
-    let vec_id  = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
     let lane_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
-    block.add_instruction(HirInstruction::VectorExtractLane {
-        result: lane_id, ty: HirType::F32, vector: vec_id, lane: 0,
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![lane_id] });
+    block.add_instruction(HirInstruction::VectorExtractLane {
+        result: lane_id,
+        ty: HirType::F32,
+        vector: vec_id,
+        lane: 0,
+    });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![lane_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    let fn_ptr = unsafe { jit_f32_to_f32(&mut backend, func) }
-        .expect("JIT compilation/finalization failed");
+    let fn_ptr =
+        unsafe { jit_f32_to_f32(&mut backend, func) }.expect("JIT compilation/finalization failed");
 
     let result = unsafe { fn_ptr(3.0f32) };
     assert!(
@@ -2806,19 +2874,28 @@ fn test_vector_extract_lane_f32x4_executes() {
     let vec_ty = HirType::Vector(Box::new(HirType::F32), 4);
     let entry = func.entry_block;
 
-    let vec_id  = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
     let lane_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
-    block.add_instruction(HirInstruction::VectorExtractLane {
-        result: lane_id, ty: HirType::F32, vector: vec_id, lane: 2,
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![lane_id] });
+    block.add_instruction(HirInstruction::VectorExtractLane {
+        result: lane_id,
+        ty: HirType::F32,
+        vector: vec_id,
+        lane: 2,
+    });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![lane_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    let fn_ptr = unsafe { jit_f32_to_f32(&mut backend, func) }
-        .expect("JIT compilation/finalization failed");
+    let fn_ptr =
+        unsafe { jit_f32_to_f32(&mut backend, func) }.expect("JIT compilation/finalization failed");
 
     let result = unsafe { fn_ptr(7.0f32) };
     assert!(
@@ -2838,15 +2915,24 @@ fn test_vector_horizontal_add_f32x4_executes() {
     let sum_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
-    block.add_instruction(HirInstruction::VectorHorizontalReduce {
-        result: sum_id, ty: HirType::F32, vector: vec_id, op: BinaryOp::FAdd,
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![sum_id] });
+    block.add_instruction(HirInstruction::VectorHorizontalReduce {
+        result: sum_id,
+        ty: HirType::F32,
+        vector: vec_id,
+        op: BinaryOp::FAdd,
+    });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![sum_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    let fn_ptr = unsafe { jit_f32_to_f32(&mut backend, func) }
-        .expect("JIT compilation/finalization failed");
+    let fn_ptr =
+        unsafe { jit_f32_to_f32(&mut backend, func) }.expect("JIT compilation/finalization failed");
 
     // splat(2.0) → [2, 2, 2, 2]; sum = 8.0
     let result = unsafe { fn_ptr(2.0f32) };
@@ -2863,23 +2949,35 @@ fn test_vector_horizontal_mul_i32x4_executes() {
     let vec_ty = HirType::Vector(Box::new(HirType::I32), 4);
     let entry = func.entry_block;
 
-    let vec_id  = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
     let prod_id = func.create_value(HirType::I32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar });
-    block.add_instruction(HirInstruction::VectorHorizontalReduce {
-        result: prod_id, ty: HirType::I32, vector: vec_id, op: BinaryOp::Mul,
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![prod_id] });
+    block.add_instruction(HirInstruction::VectorHorizontalReduce {
+        result: prod_id,
+        ty: HirType::I32,
+        vector: vec_id,
+        op: BinaryOp::Mul,
+    });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![prod_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    let fn_ptr = unsafe { jit_i32_to_i32(&mut backend, func) }
-        .expect("JIT compilation/finalization failed");
+    let fn_ptr =
+        unsafe { jit_i32_to_i32(&mut backend, func) }.expect("JIT compilation/finalization failed");
 
     // splat(3) → [3, 3, 3, 3]; product = 81
     let result = unsafe { fn_ptr(3) };
-    assert_eq!(result, 81, "Expected hreduce_mul(splat(3)) == 81, got {result}");
+    assert_eq!(
+        result, 81,
+        "Expected hreduce_mul(splat(3)) == 81, got {result}"
+    );
 }
 
 // ============================================================
@@ -2907,7 +3005,10 @@ fn make_ptr_to_f32_func(fn_name: &str) -> (HirFunction, HirId) {
         is_pure: false,
     };
     let mut func = HirFunction::new(name, sig);
-    let ptr_id = func.create_value(HirType::Ptr(Box::new(HirType::F32)), HirValueKind::Parameter(0));
+    let ptr_id = func.create_value(
+        HirType::Ptr(Box::new(HirType::F32)),
+        HirValueKind::Parameter(0),
+    );
     (func, ptr_id)
 }
 
@@ -2920,7 +3021,10 @@ unsafe fn jit_ptr_to_f32(
     backend.compile_function(id, &func).ok()?;
     backend.finalize_definitions().ok()?;
     let raw = backend.get_function_ptr(id)?;
-    Some(std::mem::transmute::<*const u8, unsafe extern "C" fn(*const f32) -> f32>(raw))  // safe: ABI matches
+    Some(std::mem::transmute::<
+        *const u8,
+        unsafe extern "C" fn(*const f32) -> f32,
+    >(raw)) // safe: ABI matches
 }
 
 /// Contract: VectorLoad compiles for F32X4 without error.
@@ -2930,18 +3034,30 @@ fn test_vector_load_f32x4_compiles() {
     let vec_ty = HirType::Vector(Box::new(HirType::F32), 4);
     let entry = func.entry_block;
 
-    let vec_id   = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
-    let sum_id   = func.create_value(HirType::F32, HirValueKind::Instruction);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let sum_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorLoad { result: vec_id, ty: vec_ty, ptr, align: 4 });
-    block.add_instruction(HirInstruction::VectorHorizontalReduce {
-        result: sum_id, ty: HirType::F32, vector: vec_id, op: BinaryOp::FAdd,
+    block.add_instruction(HirInstruction::VectorLoad {
+        result: vec_id,
+        ty: vec_ty,
+        ptr,
+        align: 4,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![sum_id] });
+    block.add_instruction(HirInstruction::VectorHorizontalReduce {
+        result: sum_id,
+        ty: HirType::F32,
+        vector: vec_id,
+        op: BinaryOp::FAdd,
+    });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![sum_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorLoad F32X4 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorLoad F32X4 should compile");
 }
 
 /// Contract: VectorStore compiles for F32X4 without error.
@@ -2953,17 +3069,35 @@ fn test_vector_store_f32x4_compiles() {
     let vec_ty = HirType::Vector(Box::new(HirType::F32), 4);
     let entry = func.entry_block;
 
-    let vec_id  = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
     let load_id = func.create_value(HirType::F32, HirValueKind::Instruction);
     let block = func.blocks.get_mut(&entry).unwrap();
     // Load a scalar from ptr, splat it, store the vector back to ptr
-    block.add_instruction(HirInstruction::Load { result: load_id, ty: HirType::F32, ptr, align: 4, volatile: false });
-    block.add_instruction(HirInstruction::VectorSplat { result: vec_id, ty: vec_ty, scalar: load_id });
-    block.add_instruction(HirInstruction::VectorStore { value: vec_id, ptr, align: 4 });
-    block.set_terminator(HirTerminator::Return { values: vec![load_id] });
+    block.add_instruction(HirInstruction::Load {
+        result: load_id,
+        ty: HirType::F32,
+        ptr,
+        align: 4,
+        volatile: false,
+    });
+    block.add_instruction(HirInstruction::VectorSplat {
+        result: vec_id,
+        ty: vec_ty,
+        scalar: load_id,
+    });
+    block.add_instruction(HirInstruction::VectorStore {
+        value: vec_id,
+        ptr,
+        align: 4,
+    });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![load_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    backend.compile_function(func.id, &func).expect("VectorStore F32X4 should compile");
+    backend
+        .compile_function(func.id, &func)
+        .expect("VectorStore F32X4 should compile");
 }
 
 /// Execution: VectorLoad loads 4 floats from memory, hreduce_add returns their sum.
@@ -2977,15 +3111,25 @@ fn test_vector_load_f32x4_executes() {
     let sum_id = func.create_value(HirType::F32, HirValueKind::Instruction);
 
     let block = func.blocks.get_mut(&entry).unwrap();
-    block.add_instruction(HirInstruction::VectorLoad { result: vec_id, ty: vec_ty, ptr, align: 4 });
-    block.add_instruction(HirInstruction::VectorHorizontalReduce {
-        result: sum_id, ty: HirType::F32, vector: vec_id, op: BinaryOp::FAdd,
+    block.add_instruction(HirInstruction::VectorLoad {
+        result: vec_id,
+        ty: vec_ty,
+        ptr,
+        align: 4,
     });
-    block.set_terminator(HirTerminator::Return { values: vec![sum_id] });
+    block.add_instruction(HirInstruction::VectorHorizontalReduce {
+        result: sum_id,
+        ty: HirType::F32,
+        vector: vec_id,
+        op: BinaryOp::FAdd,
+    });
+    block.set_terminator(HirTerminator::Return {
+        values: vec![sum_id],
+    });
 
     let mut backend = CraneliftBackend::new().expect("backend");
-    let fn_ptr = unsafe { jit_ptr_to_f32(&mut backend, func) }
-        .expect("JIT compilation/finalization failed");
+    let fn_ptr =
+        unsafe { jit_ptr_to_f32(&mut backend, func) }.expect("JIT compilation/finalization failed");
 
     // [1.0, 2.0, 3.0, 4.0] → sum = 10.0
     let data = [1.0f32, 2.0f32, 3.0f32, 4.0f32];
@@ -3026,20 +3170,29 @@ fn test_vector_store_f32x4_executes() {
         is_pure: false,
     };
     let mut func = HirFunction::new(name, sig);
-    let ptr_id    = func.create_value(HirType::Ptr(Box::new(HirType::F32)), HirValueKind::Parameter(0));
+    let ptr_id = func.create_value(
+        HirType::Ptr(Box::new(HirType::F32)),
+        HirValueKind::Parameter(0),
+    );
     let scalar_id = func.create_value(HirType::F32, HirValueKind::Parameter(1));
-    let vec_ty    = HirType::Vector(Box::new(HirType::F32), 4);
-    let vec_id    = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
+    let vec_ty = HirType::Vector(Box::new(HirType::F32), 4);
+    let vec_id = func.create_value(vec_ty.clone(), HirValueKind::Instruction);
     let entry = func.entry_block;
     {
         let block = func.blocks.get_mut(&entry).unwrap();
         block.add_instruction(HirInstruction::VectorSplat {
-            result: vec_id, ty: vec_ty, scalar: scalar_id,
+            result: vec_id,
+            ty: vec_ty,
+            scalar: scalar_id,
         });
         block.add_instruction(HirInstruction::VectorStore {
-            value: vec_id, ptr: ptr_id, align: 4,
+            value: vec_id,
+            ptr: ptr_id,
+            align: 4,
         });
-        block.set_terminator(HirTerminator::Return { values: vec![scalar_id] });
+        block.set_terminator(HirTerminator::Return {
+            values: vec![scalar_id],
+        });
     }
 
     let mut backend = CraneliftBackend::new().expect("backend");
@@ -3084,40 +3237,87 @@ fn test_emit_elementwise_simd_loop_f32_mul() {
     let fn_name = create_test_string("simd_loop_mul");
     let sig = HirFunctionSignature {
         params: vec![
-            HirParam { id: HirId::new(), name: create_test_string("ptr"),    ty: HirType::Ptr(Box::new(HirType::F32)), attributes: ParamAttributes::default() },
-            HirParam { id: HirId::new(), name: create_test_string("len"),    ty: HirType::I64, attributes: ParamAttributes::default() },
-            HirParam { id: HirId::new(), name: create_test_string("scalar"), ty: HirType::F32, attributes: ParamAttributes::default() },
+            HirParam {
+                id: HirId::new(),
+                name: create_test_string("ptr"),
+                ty: HirType::Ptr(Box::new(HirType::F32)),
+                attributes: ParamAttributes::default(),
+            },
+            HirParam {
+                id: HirId::new(),
+                name: create_test_string("len"),
+                ty: HirType::I64,
+                attributes: ParamAttributes::default(),
+            },
+            HirParam {
+                id: HirId::new(),
+                name: create_test_string("scalar"),
+                ty: HirType::F32,
+                attributes: ParamAttributes::default(),
+            },
         ],
         returns: vec![HirType::F32],
-        type_params: vec![], const_params: vec![], lifetime_params: vec![],
-        is_variadic: false, is_async: false, effects: vec![], is_pure: false,
+        type_params: vec![],
+        const_params: vec![],
+        lifetime_params: vec![],
+        is_variadic: false,
+        is_async: false,
+        effects: vec![],
+        is_pure: false,
     };
 
     let mut func = HirFunction::new(fn_name, sig);
     let entry = func.entry_block;
 
-    let data_ptr = func.create_value(HirType::Ptr(Box::new(HirType::F32)), HirValueKind::Parameter(0));
-    let len_val  = func.create_value(HirType::I64,  HirValueKind::Parameter(1));
-    let scalar   = func.create_value(HirType::F32,  HirValueKind::Parameter(2));
+    let data_ptr = func.create_value(
+        HirType::Ptr(Box::new(HirType::F32)),
+        HirValueKind::Parameter(0),
+    );
+    let len_val = func.create_value(HirType::I64, HirValueKind::Parameter(1));
+    let scalar = func.create_value(HirType::F32, HirValueKind::Parameter(2));
 
     // Build a minimal SsaBuilder just to call emit_elementwise_simd_loop
     let mut builder = SsaBuilder::new_from_function(func);
     let after_block = builder
-        .emit_elementwise_simd_loop(entry, data_ptr, len_val, scalar, BinaryOp::FMul, HirType::F32)
+        .emit_elementwise_simd_loop(
+            entry,
+            data_ptr,
+            len_val,
+            scalar,
+            BinaryOp::FMul,
+            HirType::F32,
+        )
         .expect("emit_elementwise_simd_loop failed");
 
     // After the loop: compute sum of first 4 elements via VectorLoad + hreduce
     // (just to produce a return value; the real test is the buffer contents)
     let vec_ty = HirType::Vector(Box::new(HirType::F32), 4);
-    let vec_id  = builder.alloc_value(vec_ty.clone(), HirValueKind::Instruction);
-    let sum_id  = builder.alloc_value(HirType::F32,   HirValueKind::Instruction);
-    builder.push_instruction(after_block, HirInstruction::VectorLoad {
-        result: vec_id, ty: vec_ty, ptr: data_ptr, align: 4,
-    });
-    builder.push_instruction(after_block, HirInstruction::VectorHorizontalReduce {
-        result: sum_id, ty: HirType::F32, vector: vec_id, op: BinaryOp::FAdd,
-    });
-    builder.set_terminator(after_block, HirTerminator::Return { values: vec![sum_id] });
+    let vec_id = builder.alloc_value(vec_ty.clone(), HirValueKind::Instruction);
+    let sum_id = builder.alloc_value(HirType::F32, HirValueKind::Instruction);
+    builder.push_instruction(
+        after_block,
+        HirInstruction::VectorLoad {
+            result: vec_id,
+            ty: vec_ty,
+            ptr: data_ptr,
+            align: 4,
+        },
+    );
+    builder.push_instruction(
+        after_block,
+        HirInstruction::VectorHorizontalReduce {
+            result: sum_id,
+            ty: HirType::F32,
+            vector: vec_id,
+            op: BinaryOp::FAdd,
+        },
+    );
+    builder.set_terminator(
+        after_block,
+        HirTerminator::Return {
+            values: vec![sum_id],
+        },
+    );
 
     let func = builder.finish();
     let fn_id = func.id;

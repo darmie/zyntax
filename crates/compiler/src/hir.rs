@@ -622,7 +622,6 @@ pub enum HirInstruction {
     // ========================================================================
     // SIMD / Vector Instructions
     // ========================================================================
-
     /// Broadcast a scalar value to all lanes of a SIMD vector.
     ///
     /// `ty` must be `HirType::Vector(elem_ty, lanes)`.

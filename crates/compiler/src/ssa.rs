@@ -1418,7 +1418,8 @@ impl SsaBuilder {
                         let init_ty = &value.ty;
                         if matches!(init_ty, Type::Any | Type::Unknown) {
                             if let TypedExpression::Unary(unary) = &value.node {
-                                let operand_ty = self.resolve_actual_type(&unary.operand.node, &unary.operand.ty);
+                                let operand_ty = self
+                                    .resolve_actual_type(&unary.operand.node, &unary.operand.ty);
                                 if !matches!(operand_ty, Type::Any | Type::Unknown) {
                                     operand_ty
                                 } else {
@@ -1652,9 +1653,7 @@ impl SsaBuilder {
         false
     }
 
-    fn extract_kernel_type(
-        body: &zyntax_typed_ast::typed_ast::TypedBlock,
-    ) -> ComputeKernelType {
+    fn extract_kernel_type(body: &zyntax_typed_ast::typed_ast::TypedBlock) -> ComputeKernelType {
         use zyntax_typed_ast::typed_ast::{TypedExpression, TypedStatement};
 
         for stmt in &body.statements {
@@ -1669,11 +1668,7 @@ impl SsaBuilder {
                             // First positional arg names the kernel kind
                             if let Some(first_arg) = call.positional_args.first() {
                                 if let TypedExpression::Variable(kind_name) = &first_arg.node {
-                                    match kind_name
-                                        .resolve_global()
-                                        .as_deref()
-                                        .unwrap_or("")
-                                    {
+                                    match kind_name.resolve_global().as_deref().unwrap_or("") {
                                         "elementwise" => return ComputeKernelType::Elementwise,
                                         "reduce" => return ComputeKernelType::Reduce,
                                         _ => {}
@@ -1758,14 +1753,20 @@ impl SsaBuilder {
         // ----------------------------------------------------------------
         // Block IDs
         // ----------------------------------------------------------------
-        let header_block    = HirId::new();
+        let header_block = HirId::new();
         let vec_check_block = HirId::new();
-        let vec_body_block  = HirId::new();
+        let vec_body_block = HirId::new();
         let scalar_body_block = HirId::new();
-        let after_block     = HirId::new();
+        let after_block = HirId::new();
 
         // Register all new blocks in the function
-        for &blk in &[header_block, vec_check_block, vec_body_block, scalar_body_block, after_block] {
+        for &blk in &[
+            header_block,
+            vec_check_block,
+            vec_body_block,
+            scalar_body_block,
+            after_block,
+        ] {
             self.function.blocks.insert(blk, HirBlock::new(blk));
             self.definitions.insert(blk, IndexMap::new());
         }
@@ -1773,48 +1774,70 @@ impl SsaBuilder {
         // ----------------------------------------------------------------
         // Preamble: allocate loop-counter stack slot, initialise to 0
         // ----------------------------------------------------------------
-        let i_slot = self.create_value(HirType::Ptr(Box::new(HirType::I64)), HirValueKind::Instruction);
-        self.add_instruction(entry_block, HirInstruction::Alloca {
-            result: i_slot,
-            ty: HirType::I64,
-            count: None,
-            align: 8,
-        });
+        let i_slot = self.create_value(
+            HirType::Ptr(Box::new(HirType::I64)),
+            HirValueKind::Instruction,
+        );
+        self.add_instruction(
+            entry_block,
+            HirInstruction::Alloca {
+                result: i_slot,
+                ty: HirType::I64,
+                count: None,
+                align: 8,
+            },
+        );
         let zero = self.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(0)));
-        self.add_instruction(entry_block, HirInstruction::Store {
-            value: zero,
-            ptr: i_slot,
-            align: 8,
-            volatile: false,
-        });
+        self.add_instruction(
+            entry_block,
+            HirInstruction::Store {
+                value: zero,
+                ptr: i_slot,
+                align: 8,
+                volatile: false,
+            },
+        );
 
         // entry_block → header
         {
             let blk = self.function.blocks.get_mut(&entry_block).unwrap();
-            blk.terminator = HirTerminator::Branch { target: header_block };
-            blk.successors  = vec![header_block];
+            blk.terminator = HirTerminator::Branch {
+                target: header_block,
+            };
+            blk.successors = vec![header_block];
         }
-        self.function.blocks.get_mut(&header_block).unwrap().predecessors.push(entry_block);
+        self.function
+            .blocks
+            .get_mut(&header_block)
+            .unwrap()
+            .predecessors
+            .push(entry_block);
 
         // ----------------------------------------------------------------
         // header_block: load i; if i < len → vec_check else → after
         // ----------------------------------------------------------------
         let i_val = self.create_value(HirType::I64, HirValueKind::Instruction);
-        self.add_instruction(header_block, HirInstruction::Load {
-            result: i_val,
-            ty: HirType::I64,
-            ptr: i_slot,
-            align: 8,
-            volatile: false,
-        });
+        self.add_instruction(
+            header_block,
+            HirInstruction::Load {
+                result: i_val,
+                ty: HirType::I64,
+                ptr: i_slot,
+                align: 8,
+                volatile: false,
+            },
+        );
         let cond_lt_len = self.create_value(HirType::Bool, HirValueKind::Instruction);
-        self.add_instruction(header_block, HirInstruction::Binary {
-            op: BinaryOp::Lt,
-            result: cond_lt_len,
-            ty: HirType::I64,
-            left: i_val,
-            right: len,
-        });
+        self.add_instruction(
+            header_block,
+            HirInstruction::Binary {
+                op: BinaryOp::Lt,
+                result: cond_lt_len,
+                ty: HirType::I64,
+                left: i_val,
+                right: len,
+            },
+        );
         {
             let blk = self.function.blocks.get_mut(&header_block).unwrap();
             blk.terminator = HirTerminator::CondBranch {
@@ -1824,29 +1847,45 @@ impl SsaBuilder {
             };
             blk.successors = vec![vec_check_block, after_block];
         }
-        self.function.blocks.get_mut(&vec_check_block).unwrap().predecessors.push(header_block);
-        self.function.blocks.get_mut(&after_block).unwrap().predecessors.push(header_block);
+        self.function
+            .blocks
+            .get_mut(&vec_check_block)
+            .unwrap()
+            .predecessors
+            .push(header_block);
+        self.function
+            .blocks
+            .get_mut(&after_block)
+            .unwrap()
+            .predecessors
+            .push(header_block);
 
         // ----------------------------------------------------------------
         // vec_check_block: if i + 3 < len → vec_body else → scalar_body
         // ----------------------------------------------------------------
         let three = self.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(3)));
         let i_plus_3 = self.create_value(HirType::I64, HirValueKind::Instruction);
-        self.add_instruction(vec_check_block, HirInstruction::Binary {
-            op: BinaryOp::Add,
-            result: i_plus_3,
-            ty: HirType::I64,
-            left: i_val,
-            right: three,
-        });
+        self.add_instruction(
+            vec_check_block,
+            HirInstruction::Binary {
+                op: BinaryOp::Add,
+                result: i_plus_3,
+                ty: HirType::I64,
+                left: i_val,
+                right: three,
+            },
+        );
         let vec_cond = self.create_value(HirType::Bool, HirValueKind::Instruction);
-        self.add_instruction(vec_check_block, HirInstruction::Binary {
-            op: BinaryOp::Lt,
-            result: vec_cond,
-            ty: HirType::I64,
-            left: i_plus_3,
-            right: len,
-        });
+        self.add_instruction(
+            vec_check_block,
+            HirInstruction::Binary {
+                op: BinaryOp::Lt,
+                result: vec_cond,
+                ty: HirType::I64,
+                left: i_plus_3,
+                right: len,
+            },
+        );
         {
             let blk = self.function.blocks.get_mut(&vec_check_block).unwrap();
             blk.terminator = HirTerminator::CondBranch {
@@ -1856,8 +1895,18 @@ impl SsaBuilder {
             };
             blk.successors = vec![vec_body_block, scalar_body_block];
         }
-        self.function.blocks.get_mut(&vec_body_block).unwrap().predecessors.push(vec_check_block);
-        self.function.blocks.get_mut(&scalar_body_block).unwrap().predecessors.push(vec_check_block);
+        self.function
+            .blocks
+            .get_mut(&vec_body_block)
+            .unwrap()
+            .predecessors
+            .push(vec_check_block);
+        self.function
+            .blocks
+            .get_mut(&scalar_body_block)
+            .unwrap()
+            .predecessors
+            .push(vec_check_block);
 
         // ----------------------------------------------------------------
         // vec_body_block: ptr = gep(data_ptr, i), vload, splat, vec_op, vstore, i+=4
@@ -1873,59 +1922,77 @@ impl SsaBuilder {
                     HirValueKind::Constant(HirConstant::I64(elem_size as i64)),
                 );
                 let off = self.create_value(HirType::I64, HirValueKind::Instruction);
-                self.add_instruction(vec_body_block, HirInstruction::Binary {
-                    op: BinaryOp::Mul,
-                    result: off,
-                    ty: HirType::I64,
-                    left: i_val,
-                    right: esz_val,
-                });
+                self.add_instruction(
+                    vec_body_block,
+                    HirInstruction::Binary {
+                        op: BinaryOp::Mul,
+                        result: off,
+                        ty: HirType::I64,
+                        left: i_val,
+                        right: esz_val,
+                    },
+                );
                 off
             };
             let elem_ptr = self.create_value(
                 HirType::Ptr(Box::new(elem_ty.clone())),
                 HirValueKind::Instruction,
             );
-            self.add_instruction(vec_body_block, HirInstruction::GetElementPtr {
-                result: elem_ptr,
-                ty: HirType::U8,    // byte-level offset
-                ptr: data_ptr,
-                indices: vec![byte_offset],
-            });
+            self.add_instruction(
+                vec_body_block,
+                HirInstruction::GetElementPtr {
+                    result: elem_ptr,
+                    ty: HirType::U8, // byte-level offset
+                    ptr: data_ptr,
+                    indices: vec![byte_offset],
+                },
+            );
 
             // VectorLoad
             let vec_val = self.create_value(vec_ty.clone(), HirValueKind::Instruction);
-            self.add_instruction(vec_body_block, HirInstruction::VectorLoad {
-                result: vec_val,
-                ty: vec_ty.clone(),
-                ptr: elem_ptr,
-                align: elem_size,
-            });
+            self.add_instruction(
+                vec_body_block,
+                HirInstruction::VectorLoad {
+                    result: vec_val,
+                    ty: vec_ty.clone(),
+                    ptr: elem_ptr,
+                    align: elem_size,
+                },
+            );
 
             // Splat scalar into vec type
             let splat_val = self.create_value(vec_ty.clone(), HirValueKind::Instruction);
-            self.add_instruction(vec_body_block, HirInstruction::VectorSplat {
-                result: splat_val,
-                ty: vec_ty.clone(),
-                scalar,
-            });
+            self.add_instruction(
+                vec_body_block,
+                HirInstruction::VectorSplat {
+                    result: splat_val,
+                    ty: vec_ty.clone(),
+                    scalar,
+                },
+            );
 
             // Vector binary op
             let vec_result = self.create_value(vec_ty.clone(), HirValueKind::Instruction);
-            self.add_instruction(vec_body_block, HirInstruction::Binary {
-                op: vec_op.clone(),
-                result: vec_result,
-                ty: vec_ty.clone(),
-                left: vec_val,
-                right: splat_val,
-            });
+            self.add_instruction(
+                vec_body_block,
+                HirInstruction::Binary {
+                    op: vec_op.clone(),
+                    result: vec_result,
+                    ty: vec_ty.clone(),
+                    left: vec_val,
+                    right: splat_val,
+                },
+            );
 
             // VectorStore back to same ptr
-            self.add_instruction(vec_body_block, HirInstruction::VectorStore {
-                value: vec_result,
-                ptr: elem_ptr,
-                align: elem_size,
-            });
+            self.add_instruction(
+                vec_body_block,
+                HirInstruction::VectorStore {
+                    value: vec_result,
+                    ptr: elem_ptr,
+                    align: elem_size,
+                },
+            );
 
             // i += 4  →  store new i, jump to header
             let stride_val = self.create_value(
@@ -1933,24 +2000,37 @@ impl SsaBuilder {
                 HirValueKind::Constant(HirConstant::I64(stride)),
             );
             let i_next = self.create_value(HirType::I64, HirValueKind::Instruction);
-            self.add_instruction(vec_body_block, HirInstruction::Binary {
-                op: BinaryOp::Add,
-                result: i_next,
-                ty: HirType::I64,
-                left: i_val,
-                right: stride_val,
-            });
-            self.add_instruction(vec_body_block, HirInstruction::Store {
-                value: i_next,
-                ptr: i_slot,
-                align: 8,
-                volatile: false,
-            });
+            self.add_instruction(
+                vec_body_block,
+                HirInstruction::Binary {
+                    op: BinaryOp::Add,
+                    result: i_next,
+                    ty: HirType::I64,
+                    left: i_val,
+                    right: stride_val,
+                },
+            );
+            self.add_instruction(
+                vec_body_block,
+                HirInstruction::Store {
+                    value: i_next,
+                    ptr: i_slot,
+                    align: 8,
+                    volatile: false,
+                },
+            );
             let blk = self.function.blocks.get_mut(&vec_body_block).unwrap();
-            blk.terminator = HirTerminator::Branch { target: header_block };
-            blk.successors  = vec![header_block];
+            blk.terminator = HirTerminator::Branch {
+                target: header_block,
+            };
+            blk.successors = vec![header_block];
         }
-        self.function.blocks.get_mut(&header_block).unwrap().predecessors.push(vec_body_block);
+        self.function
+            .blocks
+            .get_mut(&header_block)
+            .unwrap()
+            .predecessors
+            .push(vec_body_block);
 
         // ----------------------------------------------------------------
         // scalar_body_block: ptr = gep(data_ptr, i), load, scalar_op, store, i+=1
@@ -1964,67 +2044,95 @@ impl SsaBuilder {
                     HirValueKind::Constant(HirConstant::I64(elem_size as i64)),
                 );
                 let off = self.create_value(HirType::I64, HirValueKind::Instruction);
-                self.add_instruction(scalar_body_block, HirInstruction::Binary {
-                    op: BinaryOp::Mul,
-                    result: off,
-                    ty: HirType::I64,
-                    left: i_val,
-                    right: esz_val,
-                });
+                self.add_instruction(
+                    scalar_body_block,
+                    HirInstruction::Binary {
+                        op: BinaryOp::Mul,
+                        result: off,
+                        ty: HirType::I64,
+                        left: i_val,
+                        right: esz_val,
+                    },
+                );
                 off
             };
             let elem_ptr = self.create_value(
                 HirType::Ptr(Box::new(elem_ty.clone())),
                 HirValueKind::Instruction,
             );
-            self.add_instruction(scalar_body_block, HirInstruction::GetElementPtr {
-                result: elem_ptr,
-                ty: HirType::U8,
-                ptr: data_ptr,
-                indices: vec![byte_offset],
-            });
+            self.add_instruction(
+                scalar_body_block,
+                HirInstruction::GetElementPtr {
+                    result: elem_ptr,
+                    ty: HirType::U8,
+                    ptr: data_ptr,
+                    indices: vec![byte_offset],
+                },
+            );
             let scalar_val = self.create_value(elem_ty.clone(), HirValueKind::Instruction);
-            self.add_instruction(scalar_body_block, HirInstruction::Load {
-                result: scalar_val,
-                ty: elem_ty.clone(),
-                ptr: elem_ptr,
-                align: elem_size,
-                volatile: false,
-            });
+            self.add_instruction(
+                scalar_body_block,
+                HirInstruction::Load {
+                    result: scalar_val,
+                    ty: elem_ty.clone(),
+                    ptr: elem_ptr,
+                    align: elem_size,
+                    volatile: false,
+                },
+            );
             let result_val = self.create_value(elem_ty.clone(), HirValueKind::Instruction);
-            self.add_instruction(scalar_body_block, HirInstruction::Binary {
-                op: vec_op.clone(),
-                result: result_val,
-                ty: elem_ty.clone(),
-                left: scalar_val,
-                right: scalar,
-            });
-            self.add_instruction(scalar_body_block, HirInstruction::Store {
-                value: result_val,
-                ptr: elem_ptr,
-                align: elem_size,
-                volatile: false,
-            });
+            self.add_instruction(
+                scalar_body_block,
+                HirInstruction::Binary {
+                    op: vec_op.clone(),
+                    result: result_val,
+                    ty: elem_ty.clone(),
+                    left: scalar_val,
+                    right: scalar,
+                },
+            );
+            self.add_instruction(
+                scalar_body_block,
+                HirInstruction::Store {
+                    value: result_val,
+                    ptr: elem_ptr,
+                    align: elem_size,
+                    volatile: false,
+                },
+            );
             let one = self.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(1)));
             let i_next = self.create_value(HirType::I64, HirValueKind::Instruction);
-            self.add_instruction(scalar_body_block, HirInstruction::Binary {
-                op: BinaryOp::Add,
-                result: i_next,
-                ty: HirType::I64,
-                left: i_val,
-                right: one,
-            });
-            self.add_instruction(scalar_body_block, HirInstruction::Store {
-                value: i_next,
-                ptr: i_slot,
-                align: 8,
-                volatile: false,
-            });
+            self.add_instruction(
+                scalar_body_block,
+                HirInstruction::Binary {
+                    op: BinaryOp::Add,
+                    result: i_next,
+                    ty: HirType::I64,
+                    left: i_val,
+                    right: one,
+                },
+            );
+            self.add_instruction(
+                scalar_body_block,
+                HirInstruction::Store {
+                    value: i_next,
+                    ptr: i_slot,
+                    align: 8,
+                    volatile: false,
+                },
+            );
             let blk = self.function.blocks.get_mut(&scalar_body_block).unwrap();
-            blk.terminator = HirTerminator::Branch { target: header_block };
-            blk.successors  = vec![header_block];
+            blk.terminator = HirTerminator::Branch {
+                target: header_block,
+            };
+            blk.successors = vec![header_block];
         }
-        self.function.blocks.get_mut(&header_block).unwrap().predecessors.push(scalar_body_block);
+        self.function
+            .blocks
+            .get_mut(&header_block)
+            .unwrap()
+            .predecessors
+            .push(scalar_body_block);
 
         Ok(after_block)
     }
@@ -2234,10 +2342,7 @@ impl SsaBuilder {
 
     /// Load the element count (field 1, byte offset 8) from a `List<T>` pointer.
     fn emit_list_len(&mut self, block_id: HirId, list_ptr: HirId) -> CompilerResult<HirId> {
-        let offset_8 = self.create_value(
-            HirType::I64,
-            HirValueKind::Constant(HirConstant::I64(8)),
-        );
+        let offset_8 = self.create_value(HirType::I64, HirValueKind::Constant(HirConstant::I64(8)));
         let len_field_ptr = self.create_value(
             HirType::Ptr(Box::new(HirType::I64)),
             HirValueKind::Instruction,
@@ -2701,8 +2806,10 @@ impl SsaBuilder {
                 // handle DynamicBox wrapping with Display trait dispatch for opaque types.
                 if let TypedExpression::Variable(func_name) = &callee.node {
                     let outer_name = func_name.resolve_global().unwrap_or_default();
-                    if (outer_name == "println" || outer_name == "print"
-                        || outer_name == "eprintln" || outer_name == "eprint")
+                    if (outer_name == "println"
+                        || outer_name == "print"
+                        || outer_name == "eprintln"
+                        || outer_name == "eprint")
                         && args.len() == 1
                     {
                         if let TypedExpression::Call(inner_call) = &args[0].node {
@@ -2737,15 +2844,11 @@ impl SsaBuilder {
                                             &print_symbol
                                         };
 
-                                        let result = self.create_value(
-                                            HirType::Void,
-                                            HirValueKind::Instruction,
-                                        );
+                                        let result = self
+                                            .create_value(HirType::Void, HirValueKind::Instruction);
                                         let call_inst = HirInstruction::Call {
                                             result: Some(result),
-                                            callee: crate::hir::HirCallable::Symbol(
-                                                symbol.clone(),
-                                            ),
+                                            callee: crate::hir::HirCallable::Symbol(symbol.clone()),
                                             args: vec![val],
                                             type_args: vec![],
                                             const_args: vec![],
@@ -2764,15 +2867,11 @@ impl SsaBuilder {
                                             zyntax_typed_ast::InternedString::new_global("");
                                         let newline_val =
                                             self.create_string_global(newline_interned);
-                                        let result = self.create_value(
-                                            HirType::Void,
-                                            HirValueKind::Instruction,
-                                        );
+                                        let result = self
+                                            .create_value(HirType::Void, HirValueKind::Instruction);
                                         let call_inst = HirInstruction::Call {
                                             result: Some(result),
-                                            callee: crate::hir::HirCallable::Symbol(
-                                                println_symbol,
-                                            ),
+                                            callee: crate::hir::HirCallable::Symbol(println_symbol),
                                             args: vec![newline_val],
                                             type_args: vec![],
                                             const_args: vec![],
@@ -2949,12 +3048,11 @@ impl SsaBuilder {
 
                             if let Some(arr_arg) = arr_arg {
                                 // Evaluate the array arg → *List<T> pointer.
-                                let list_ptr =
-                                    self.translate_expression(block_id, arr_arg)?;
+                                let list_ptr = self.translate_expression(block_id, arr_arg)?;
 
                                 // Extract data pointer (field 0 of the List struct).
-                                let data_ptr = self
-                                    .emit_list_data_ptr(block_id, list_ptr, &elem_ty)?;
+                                let data_ptr =
+                                    self.emit_list_data_ptr(block_id, list_ptr, &elem_ty)?;
 
                                 // Extract length (field 1 of the List struct).
                                 let len = self.emit_list_len(block_id, list_ptr)?;
@@ -3719,16 +3817,17 @@ impl SsaBuilder {
                         // Fall back to looking up in trait implementations for named types
                         let receiver_type_id = *id;
                         // Also get the type name for matching extern impls
-                        let receiver_type_name = self.type_registry
+                        let receiver_type_name = self
+                            .type_registry
                             .get_type_by_id(receiver_type_id)
                             .map(|td| td.name);
                         let mut method_return_type = None;
                         for (_trait_id, impls) in self.type_registry.iter_implementations() {
                             for impl_def in impls {
                                 let impl_matches = match &impl_def.for_type {
-                                    Type::Named { id: impl_type_id, .. } => {
-                                        *impl_type_id == receiver_type_id
-                                    }
+                                    Type::Named {
+                                        id: impl_type_id, ..
+                                    } => *impl_type_id == receiver_type_id,
                                     Type::Extern { name, .. } => {
                                         // Extern type impls match by name
                                         receiver_type_name.map_or(false, |n| n == *name)
@@ -5157,8 +5256,10 @@ impl SsaBuilder {
                     use zyntax_typed_ast::type_registry::TypeKind;
 
                     // Extern/opaque types (ZRTL-backed like Tensor) → Ptr(Opaque)
-                    if let Some(zyntax_typed_ast::type_registry::Type::Extern { name: extern_name, .. }) =
-                        self.type_registry.resolve_alias(type_def.name)
+                    if let Some(zyntax_typed_ast::type_registry::Type::Extern {
+                        name: extern_name,
+                        ..
+                    }) = self.type_registry.resolve_alias(type_def.name)
                     {
                         return HirType::Ptr(Box::new(HirType::Opaque(*extern_name)));
                     }
@@ -5221,8 +5322,10 @@ impl SsaBuilder {
 
                     // Extern/opaque types (ZRTL-backed like Tensor) → Ptr(Opaque)
                     // Extern types are registered with TypeKind::Atomic and an alias to Type::Extern
-                    if let Some(zyntax_typed_ast::type_registry::Type::Extern { name: extern_name, .. }) =
-                        self.type_registry.resolve_alias(type_def.name)
+                    if let Some(zyntax_typed_ast::type_registry::Type::Extern {
+                        name: extern_name,
+                        ..
+                    }) = self.type_registry.resolve_alias(type_def.name)
                     {
                         return HirType::Ptr(Box::new(HirType::Opaque(*extern_name)));
                     }
@@ -5811,8 +5914,9 @@ impl SsaBuilder {
             Type::Named { id, .. } => {
                 if let Some(type_def) = self.type_registry.get_type_by_id(*id) {
                     // Check if this is an extern type with a runtime prefix alias
-                    if let Some(Type::Extern { name: extern_name, .. }) =
-                        self.type_registry.resolve_alias(type_def.name)
+                    if let Some(Type::Extern {
+                        name: extern_name, ..
+                    }) = self.type_registry.resolve_alias(type_def.name)
                     {
                         let extern_str = extern_name.resolve_global().unwrap_or_else(|| {
                             let arena = self.arena.lock().unwrap();
@@ -5821,7 +5925,10 @@ impl SsaBuilder {
                                 .map(|s| s.to_string())
                                 .unwrap_or_default()
                         });
-                        log::debug!("[trait_dispatch] Type::Named (extern alias) prefix: '{}'", extern_str);
+                        log::debug!(
+                            "[trait_dispatch] Type::Named (extern alias) prefix: '{}'",
+                            extern_str
+                        );
                         return Some(extern_str);
                     }
 

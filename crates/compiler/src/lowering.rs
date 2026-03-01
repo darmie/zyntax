@@ -1181,16 +1181,17 @@ impl LoweringContext {
                     } = &receiver_type
                     {
                         // Also get the type name for matching extern impls
-                        let receiver_type_name = self.type_registry
+                        let receiver_type_name = self
+                            .type_registry
                             .get_type_by_id(*receiver_type_id)
                             .map(|td| td.name);
                         // Look up the trait implementation
                         for (_trait_id, impls) in self.type_registry.iter_implementations() {
                             for impl_def in impls {
                                 let impl_matches = match &impl_def.for_type {
-                                    Type::Named { id: impl_type_id, .. } => {
-                                        *impl_type_id == *receiver_type_id
-                                    }
+                                    Type::Named {
+                                        id: impl_type_id, ..
+                                    } => *impl_type_id == *receiver_type_id,
                                     Type::Extern { name, .. } => {
                                         receiver_type_name.map_or(false, |n| n == *name)
                                     }
@@ -1212,7 +1213,9 @@ impl LoweringContext {
                         }
                         // Also check inherent methods on the type definition (for extern struct methods)
                         if matches!(expr.ty, Type::Any | Type::Unknown) {
-                            if let Some(type_def) = self.type_registry.get_type_by_id(*receiver_type_id) {
+                            if let Some(type_def) =
+                                self.type_registry.get_type_by_id(*receiver_type_id)
+                            {
                                 for method in &type_def.methods {
                                     if method.name == method_call.method {
                                         expr.ty = method.return_type.clone();
@@ -1221,7 +1224,10 @@ impl LoweringContext {
                                 }
                             }
                         }
-                    } else if let Type::Extern { name: extern_name, .. } = &receiver_type {
+                    } else if let Type::Extern {
+                        name: extern_name, ..
+                    } = &receiver_type
+                    {
                         // Look up methods in impl blocks for extern types (e.g., Tensor)
                         // This enables chained method calls like t.reshape([2,3]).transpose()
                         for (_trait_id, impls) in self.type_registry.iter_implementations() {
@@ -1243,7 +1249,9 @@ impl LoweringContext {
                         }
                         // Also check inherent methods on the type definition
                         if matches!(expr.ty, Type::Any | Type::Unknown) {
-                            if let Some(type_def) = self.type_registry.get_type_by_name(*extern_name) {
+                            if let Some(type_def) =
+                                self.type_registry.get_type_by_name(*extern_name)
+                            {
                                 for method in &type_def.methods {
                                     if method.name == method_call.method {
                                         expr.ty = method.return_type.clone();

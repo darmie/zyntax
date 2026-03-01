@@ -527,7 +527,12 @@ impl CraneliftBackend {
     }
 
     /// Declare a function signature without compiling its body
-    fn declare_function(&mut self, id: HirId, function: &HirFunction, module: &HirModule) -> CompilerResult<()> {
+    fn declare_function(
+        &mut self,
+        id: HirId,
+        function: &HirFunction,
+        module: &HirModule,
+    ) -> CompilerResult<()> {
         let mut sig = self.translate_signature(function)?;
 
         if function.is_external {
@@ -550,11 +555,10 @@ impl CraneliftBackend {
             // 1. ZRTL plugin registration (symbol_signatures), or
             // 2. Call-site inferred types (inferred_extern_sigs)
             if function.signature.params.is_empty() {
-                let func_name_str = function
-                    .name
-                    .resolve_global()
-                    .unwrap_or_default();
-                let real_sig = self.symbol_signatures.get(&link_name)
+                let func_name_str = function.name.resolve_global().unwrap_or_default();
+                let real_sig = self
+                    .symbol_signatures
+                    .get(&link_name)
                     .or_else(|| self.symbol_signatures.get(&func_name_str));
                 if let Some(zrtl_sig) = real_sig {
                     // Use ZRTL plugin signature
@@ -566,10 +570,16 @@ impl CraneliftBackend {
                         sig.params.push(AbiParam::new(ty));
                     }
                     let ret_ty = type_tag_to_cranelift_type(&zrtl_sig.return_type);
-                    if ret_ty != types::I8 || !zrtl_sig.return_type.is_category(crate::zrtl::TypeCategory::Void) {
+                    if ret_ty != types::I8
+                        || !zrtl_sig
+                            .return_type
+                            .is_category(crate::zrtl::TypeCategory::Void)
+                    {
                         sig.returns.push(AbiParam::new(ret_ty));
                     }
-                } else if let Some((param_hir_types, ret_hir_type)) = self.inferred_extern_sigs.get(&id).cloned() {
+                } else if let Some((param_hir_types, ret_hir_type)) =
+                    self.inferred_extern_sigs.get(&id).cloned()
+                {
                     // Use call-site inferred types
                     let base_call_conv = sig.call_conv;
                     sig = self.module.make_signature();
@@ -613,7 +623,9 @@ impl CraneliftBackend {
                     // HirFunction already declared this symbol (e.g., both
                     // `tensor_sqrt` and `$Tensor$sqrt` map to the same ZRTL symbol).
                     // Reuse the existing FuncId.
-                    if let Some((&existing_hir_id, _)) = self.external_link_names.iter()
+                    if let Some((&existing_hir_id, _)) = self
+                        .external_link_names
+                        .iter()
                         .find(|(_, name)| **name == link_name)
                     {
                         *self.function_map.get(&existing_hir_id).unwrap()
@@ -703,9 +715,8 @@ impl CraneliftBackend {
                                 .collect();
 
                             // Infer return type from call result
-                            let ret_type = result.and_then(|r| {
-                                caller_func.values.get(&r).map(|v| v.ty.clone())
-                            });
+                            let ret_type = result
+                                .and_then(|r| caller_func.values.get(&r).map(|v| v.ty.clone()));
 
                             self.inferred_extern_sigs
                                 .insert(*func_id, (param_types, ret_type));
@@ -2602,14 +2613,19 @@ impl CraneliftBackend {
                                     HirType::I8 | HirType::U8 | HirType::Bool => 1,
                                     _ => 4, // i32/u32/f32 and default
                                 };
-                                let max_var: u32 = u.variants.iter().map(|v| match &v.ty {
-                                    HirType::Void => 0,
-                                    HirType::Bool | HirType::I8 | HirType::U8 => 1,
-                                    HirType::I16 | HirType::U16 => 2,
-                                    HirType::I32 | HirType::U32 | HirType::F32 => 4,
-                                    HirType::I128 | HirType::U128 => 16,
-                                    _ => 8, // i64/u64/f64/ptr/complex → 8 bytes
-                                }).max().unwrap_or(0);
+                                let max_var: u32 = u
+                                    .variants
+                                    .iter()
+                                    .map(|v| match &v.ty {
+                                        HirType::Void => 0,
+                                        HirType::Bool | HirType::I8 | HirType::U8 => 1,
+                                        HirType::I16 | HirType::U16 => 2,
+                                        HirType::I32 | HirType::U32 | HirType::F32 => 4,
+                                        HirType::I128 | HirType::U128 => 16,
+                                        _ => 8, // i64/u64/f64/ptr/complex → 8 bytes
+                                    })
+                                    .max()
+                                    .unwrap_or(0);
                                 let data_offset = (discrim_sz + 7) & !7;
                                 ((data_offset + max_var) + 7) & !7
                             } else {
@@ -3619,7 +3635,9 @@ impl CraneliftBackend {
                                         (HirType::I64, 2) | (HirType::U64, 2) => Some(types::I64X2),
                                         _ => None,
                                     }
-                                } else { None };
+                                } else {
+                                    None
+                                };
                                 if let Some(vec_clif_ty) = clif_ty_opt {
                                     let value = builder.ins().splat(vec_clif_ty, scalar_val);
                                     self.value_map.insert(*result, value);
@@ -3628,22 +3646,37 @@ impl CraneliftBackend {
                                 }
                             }
                         }
-                        HirInstruction::VectorExtractLane { result, vector, lane, .. } => {
+                        HirInstruction::VectorExtractLane {
+                            result,
+                            vector,
+                            lane,
+                            ..
+                        } => {
                             if let Some(&vec_val) = self.value_map.get(vector) {
                                 let value = builder.ins().extractlane(vec_val, *lane);
                                 self.value_map.insert(*result, value);
                             }
                         }
-                        HirInstruction::VectorInsertLane { result, vector, scalar, lane, .. } => {
-                            if let (Some(&vec_val), Some(&scalar_val)) = (
-                                self.value_map.get(vector),
-                                self.value_map.get(scalar),
-                            ) {
+                        HirInstruction::VectorInsertLane {
+                            result,
+                            vector,
+                            scalar,
+                            lane,
+                            ..
+                        } => {
+                            if let (Some(&vec_val), Some(&scalar_val)) =
+                                (self.value_map.get(vector), self.value_map.get(scalar))
+                            {
                                 let value = builder.ins().insertlane(vec_val, scalar_val, *lane);
                                 self.value_map.insert(*result, value);
                             }
                         }
-                        HirInstruction::VectorHorizontalReduce { result, ty: _, vector, op } => {
+                        HirInstruction::VectorHorizontalReduce {
+                            result,
+                            ty: _,
+                            vector,
+                            op,
+                        } => {
                             if let Some(&vec_val) = self.value_map.get(vector) {
                                 // Derive lane count from the input vector's Cranelift type
                                 // (avoids borrowing self via translate_type while builder is live).
@@ -3667,7 +3700,10 @@ impl CraneliftBackend {
                                             BinaryOp::FSub => builder.ins().fsub(acc, lane_val),
                                             BinaryOp::Mul => builder.ins().imul(acc, lane_val),
                                             BinaryOp::FMul => builder.ins().fmul(acc, lane_val),
-                                            _ => { warn!("[Cranelift] VectorHorizontalReduce: unsupported op {:?}", op); acc }
+                                            _ => {
+                                                warn!("[Cranelift] VectorHorizontalReduce: unsupported op {:?}", op);
+                                                acc
+                                            }
                                         };
                                     }
                                     self.value_map.insert(*result, acc);
@@ -3677,7 +3713,12 @@ impl CraneliftBackend {
 
                         // SIMD memory operations: load/store an entire vector register
                         // from/to a contiguous block of elements in memory.
-                        HirInstruction::VectorLoad { result, ty, ptr, align: _ } => {
+                        HirInstruction::VectorLoad {
+                            result,
+                            ty,
+                            ptr,
+                            align: _,
+                        } => {
                             if let Some(&ptr_val) = self.value_map.get(ptr) {
                                 let clif_ty_opt = if let HirType::Vector(elem_ty, count) = ty {
                                     match (&**elem_ty, *count) {
@@ -3687,7 +3728,9 @@ impl CraneliftBackend {
                                         (HirType::I64, 2) | (HirType::U64, 2) => Some(types::I64X2),
                                         _ => None,
                                     }
-                                } else { None };
+                                } else {
+                                    None
+                                };
                                 if let Some(vec_clif_ty) = clif_ty_opt {
                                     let flags = MemFlags::new().with_notrap();
                                     let value = builder.ins().load(vec_clif_ty, flags, ptr_val, 0);
@@ -3697,11 +3740,14 @@ impl CraneliftBackend {
                                 }
                             }
                         }
-                        HirInstruction::VectorStore { value, ptr, align: _ } => {
-                            if let (Some(&vec_val), Some(&ptr_val)) = (
-                                self.value_map.get(value),
-                                self.value_map.get(ptr),
-                            ) {
+                        HirInstruction::VectorStore {
+                            value,
+                            ptr,
+                            align: _,
+                        } => {
+                            if let (Some(&vec_val), Some(&ptr_val)) =
+                                (self.value_map.get(value), self.value_map.get(ptr))
+                            {
                                 let flags = MemFlags::new().with_notrap();
                                 builder.ins().store(flags, vec_val, ptr_val, 0);
                             }
@@ -3719,24 +3765,21 @@ impl CraneliftBackend {
                 match &hir_block.terminator {
                     HirTerminator::Return { values } => {
                         log::debug!("[Cranelift] Return terminator with values: {:?}", values);
-                        let expected_returns =
-                            builder.func.signature.returns.clone();
+                        let expected_returns = builder.func.signature.returns.clone();
                         let mut cranelift_vals = Vec::new();
                         for (i, v) in values.iter().enumerate() {
                             if let Some(&val) = self.value_map.get(v) {
-                                let coerced =
-                                    if let Some(expected_abi) = expected_returns.get(i) {
-                                        let actual_ty =
-                                            builder.func.dfg.value_type(val);
-                                        Self::coerce_value(
-                                            &mut builder,
-                                            val,
-                                            actual_ty,
-                                            expected_abi.value_type,
-                                        )
-                                    } else {
-                                        val
-                                    };
+                                let coerced = if let Some(expected_abi) = expected_returns.get(i) {
+                                    let actual_ty = builder.func.dfg.value_type(val);
+                                    Self::coerce_value(
+                                        &mut builder,
+                                        val,
+                                        actual_ty,
+                                        expected_abi.value_type,
+                                    )
+                                } else {
+                                    val
+                                };
                                 cranelift_vals.push(coerced);
                             } else {
                                 eprintln!(
@@ -3751,10 +3794,7 @@ impl CraneliftBackend {
                             let zero = Self::emit_zero_value(&mut builder, ty);
                             cranelift_vals.push(zero);
                         }
-                        log::debug!(
-                            "[Cranelift] Returning {} values",
-                            cranelift_vals.len()
-                        );
+                        log::debug!("[Cranelift] Returning {} values", cranelift_vals.len());
                         builder.ins().return_(&cranelift_vals);
                     }
 
@@ -3874,11 +3914,11 @@ impl CraneliftBackend {
                             let target_block = self.block_map[target];
                             // Extract the integer discriminant value
                             let disc: Option<u128> = match constant {
-                                HirConstant::I8(v)  => Some(*v as u8 as u128),
+                                HirConstant::I8(v) => Some(*v as u8 as u128),
                                 HirConstant::I16(v) => Some(*v as u16 as u128),
                                 HirConstant::I32(v) => Some(*v as u32 as u128),
                                 HirConstant::I64(v) => Some(*v as u64 as u128),
-                                HirConstant::U8(v)  => Some(*v as u128),
+                                HirConstant::U8(v) => Some(*v as u128),
                                 HirConstant::U16(v) => Some(*v as u128),
                                 HirConstant::U32(v) => Some(*v as u128),
                                 HirConstant::U64(v) => Some(*v as u128),
@@ -6243,7 +6283,6 @@ impl CraneliftBackend {
             // ----------------------------------------------------------------
             // SIMD / Vector instructions
             // ----------------------------------------------------------------
-
             HirInstruction::VectorSplat { result, ty, scalar } => {
                 let scalar_val = self.value_map[scalar];
                 let vec_clif_ty = self.translate_type(ty)?;
@@ -6251,34 +6290,53 @@ impl CraneliftBackend {
                 self.value_map.insert(*result, value);
             }
 
-            HirInstruction::VectorExtractLane { result, ty: _, vector, lane } => {
+            HirInstruction::VectorExtractLane {
+                result,
+                ty: _,
+                vector,
+                lane,
+            } => {
                 let vec_val = self.value_map[vector];
                 let value = builder.ins().extractlane(vec_val, *lane);
                 self.value_map.insert(*result, value);
             }
 
-            HirInstruction::VectorInsertLane { result, ty: _, vector, scalar, lane } => {
+            HirInstruction::VectorInsertLane {
+                result,
+                ty: _,
+                vector,
+                scalar,
+                lane,
+            } => {
                 let vec_val = self.value_map[vector];
                 let scalar_val = self.value_map[scalar];
                 let value = builder.ins().insertlane(vec_val, scalar_val, *lane);
                 self.value_map.insert(*result, value);
             }
 
-            HirInstruction::VectorHorizontalReduce { result, ty, vector, op } => {
+            HirInstruction::VectorHorizontalReduce {
+                result,
+                ty,
+                vector,
+                op,
+            } => {
                 // Cranelift has no native horizontal-reduce CLIF op.
                 // Extract all lanes and fold with the requested scalar operation.
                 let vec_val = self.value_map[vector];
                 let clif_ty = self.translate_type(ty)?;
-                let lane_count = match clif_ty {
-                    cranelift_codegen::ir::types::F32X4 | cranelift_codegen::ir::types::I32X4 => 4u8,
-                    cranelift_codegen::ir::types::F64X2 | cranelift_codegen::ir::types::I64X2 => 2u8,
-                    _ => {
-                        return Err(CompilerError::Backend(format!(
-                            "VectorHorizontalReduce: unsupported vector type {:?}",
-                            clif_ty
-                        )))
-                    }
-                };
+                let lane_count =
+                    match clif_ty {
+                        cranelift_codegen::ir::types::F32X4
+                        | cranelift_codegen::ir::types::I32X4 => 4u8,
+                        cranelift_codegen::ir::types::F64X2
+                        | cranelift_codegen::ir::types::I64X2 => 2u8,
+                        _ => {
+                            return Err(CompilerError::Backend(format!(
+                                "VectorHorizontalReduce: unsupported vector type {:?}",
+                                clif_ty
+                            )))
+                        }
+                    };
 
                 // Extract lane 0 as the accumulator seed
                 let mut acc = builder.ins().extractlane(vec_val, 0u8);
@@ -6566,18 +6624,12 @@ impl CraneliftBackend {
                 let mut cranelift_vals = Vec::new();
                 for (i, v) in values.iter().enumerate() {
                     if let Some(&val) = self.value_map.get(v) {
-                        let coerced =
-                            if let Some(expected_abi) = expected_returns.get(i) {
-                                let actual_ty = builder.func.dfg.value_type(val);
-                                Self::coerce_value(
-                                    builder,
-                                    val,
-                                    actual_ty,
-                                    expected_abi.value_type,
-                                )
-                            } else {
-                                val
-                            };
+                        let coerced = if let Some(expected_abi) = expected_returns.get(i) {
+                            let actual_ty = builder.func.dfg.value_type(val);
+                            Self::coerce_value(builder, val, actual_ty, expected_abi.value_type)
+                        } else {
+                            val
+                        };
                         cranelift_vals.push(coerced);
                     }
                 }

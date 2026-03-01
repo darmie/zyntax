@@ -1853,15 +1853,16 @@ impl ZyntaxRuntime {
                 // Check if type is already registered
                 // If it exists but has 0 fields and the new one has fields, update it
                 // (generic types like List<T> may be pre-registered as placeholders without fields)
-                let existing_id = if let Some(existing) = type_registry.get_type_by_name(class_decl.name) {
-                    if existing.fields.is_empty() && !class_decl.fields.is_empty() {
-                        Some(existing.id)
+                let existing_id =
+                    if let Some(existing) = type_registry.get_type_by_name(class_decl.name) {
+                        if existing.fields.is_empty() && !class_decl.fields.is_empty() {
+                            Some(existing.id)
+                        } else {
+                            continue;
+                        }
                     } else {
-                        continue;
-                    }
-                } else {
-                    None
-                };
+                        None
+                    };
 
                 // Convert TypedTypeParam to TypeParam
                 let type_params: Vec<TypeParam> = class_decl
