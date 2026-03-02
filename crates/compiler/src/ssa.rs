@@ -2706,6 +2706,33 @@ impl SsaBuilder {
                     )));
                 }
 
+                // String concatenation: "a" + "b" → $IO$string_concat(a, b)
+                if matches!(op, FrontendOp::Add)
+                    && matches!(
+                        left_with_type.ty,
+                        Type::Primitive(zyntax_typed_ast::PrimitiveType::String)
+                    )
+                {
+                    let left_val = self.translate_expression(block_id, left)?;
+                    let right_val = self.translate_expression(block_id, right)?;
+                    let result = self.create_value(
+                        HirType::Ptr(Box::new(HirType::I8)),
+                        HirValueKind::Instruction,
+                    );
+                    let call_inst = HirInstruction::Call {
+                        result: Some(result),
+                        callee: crate::hir::HirCallable::Symbol(
+                            "$IO$string_concat".to_string(),
+                        ),
+                        args: vec![left_val, right_val],
+                        type_args: vec![],
+                        const_args: vec![],
+                        is_tail: false,
+                    };
+                    self.add_instruction(block_id, call_inst);
+                    return Ok(result);
+                }
+
                 // Regular binary operations for primitive types
                 let left_val = self.translate_expression(block_id, left)?;
                 let right_val = self.translate_expression(block_id, right)?;
