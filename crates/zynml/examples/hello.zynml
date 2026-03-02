@@ -20,24 +20,18 @@ def main() {
     let a = Tensor::arange(1.0, 5.0, 1.0)  // [1.0, 2.0, 3.0, 4.0]
     let b = Tensor::arange(5.0, 9.0, 1.0)  // [5.0, 6.0, 7.0, 8.0]
 
-    println("Tensor a:")
-    println_any(a)
-
-    println("Tensor b:")
-    println_any(b)
+    println(f"Tensor a: {a}")
+    println(f"Tensor b: {b}")
 
     // Arithmetic operations using operator overloading
     let sum = a + b
-    println("a + b:")
-    println_any(sum)
+    println(f"a + b: {sum}")
 
     let diff = b - a
-    println("b - a:")
-    println_any(diff)
+    println(f"b - a: {diff}")
 
     let prod = a * b
-    println("a * b (element-wise):")
-    println_any(prod)
+    println(f"a * b (element-wise): {prod}")
 
     // Reduction operations
     let total = a.sum()

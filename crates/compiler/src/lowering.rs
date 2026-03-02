@@ -220,8 +220,8 @@ pub struct LoweringContext {
     pub arena: Arc<Mutex<AstArena>>,
     /// Symbol table for name resolution
     pub symbols: SymbolTable,
-    /// Diagnostics collector
-    pub diagnostics: Vec<LoweringDiagnostic>,
+    /// Diagnostics collector (RefCell for interior mutability — convert_type is &self)
+    pub diagnostics: std::cell::RefCell<zyntax_typed_ast::diagnostics::DiagnosticCollector>,
     /// Configuration options
     pub config: LoweringConfig,
     /// Vtable registry for trait dispatch
@@ -263,6 +263,9 @@ pub struct SymbolTable {
     /// Maps function name -> Vec<TypedParameter> (for filling in defaults at call sites)
     pub function_default_params:
         indexmap::IndexMap<InternedString, Vec<zyntax_typed_ast::typed_ast::TypedParameter>>,
+    /// Return types for declared functions
+    /// Maps function name -> return Type (for resolving call expression types in SSA)
+    pub function_return_types: indexmap::IndexMap<InternedString, zyntax_typed_ast::Type>,
 }
 
 /// Import metadata for debugging and error messages
@@ -351,20 +354,10 @@ impl Default for LoweringConfig {
     }
 }
 
-/// Diagnostic during lowering
-#[derive(Debug)]
-pub struct LoweringDiagnostic {
-    pub level: DiagnosticLevel,
-    pub message: String,
-    pub span: Option<zyntax_typed_ast::Span>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum DiagnosticLevel {
-    Error,
-    Warning,
-    Info,
-}
+/// Re-export the proper diagnostic types from typed_ast
+pub use zyntax_typed_ast::diagnostics::{
+    Diagnostic as LoweringDiagnostic, DiagnosticLevel,
+};
 
 /// Main AST lowering interface
 pub trait AstLowering {
@@ -448,7 +441,7 @@ impl LoweringContext {
             type_registry,
             arena,
             symbols,
-            diagnostics: Vec::new(),
+            diagnostics: std::cell::RefCell::new(zyntax_typed_ast::diagnostics::DiagnosticCollector::new()),
             config,
             vtable_registry: crate::vtable_registry::VtableRegistry::new(),
             associated_type_resolver: crate::associated_type_resolver::AssociatedTypeResolver::new(
@@ -538,17 +531,26 @@ impl LoweringContext {
     }
 
     /// Add a diagnostic
-    pub fn diagnostic(
-        &mut self,
-        level: DiagnosticLevel,
-        message: String,
-        span: Option<zyntax_typed_ast::Span>,
-    ) {
-        self.diagnostics.push(LoweringDiagnostic {
-            level,
-            message,
-            span,
-        });
+    pub fn emit_diagnostic(&self, diagnostic: LoweringDiagnostic) {
+        let _ = self.diagnostics.borrow_mut().add(diagnostic);
+    }
+
+    /// Display all collected lowering diagnostics using the proper formatter.
+    /// Call this after `lower_program` completes.
+    pub fn display_diagnostics(&self, program: &zyntax_typed_ast::TypedProgram) {
+        let diag = self.diagnostics.borrow();
+        if diag.warning_count() > 0 || diag.has_errors() {
+            use zyntax_typed_ast::diagnostics::ConsoleDiagnosticDisplay;
+            use zyntax_typed_ast::source::SourceMap;
+
+            let mut source_map = SourceMap::new();
+            for source_file in &program.source_files {
+                source_map.add_file(source_file.name.clone(), source_file.content.clone());
+            }
+            let display = ConsoleDiagnosticDisplay::default();
+            let output = diag.display_all(&display, &source_map);
+            eprint!("{}", output);
+        }
     }
 }
 
@@ -1610,6 +1612,34 @@ impl LoweringContext {
                 TypedDeclaration::Function(func) => {
                     let func_id = crate::hir::HirId::new();
                     self.symbols.functions.insert(func.name, func_id);
+                    // Record return type for call-site type resolution.
+                    // If return_type is Unit (no annotation) but body has `return <expr>`,
+                    // infer Dynamic — the return type will be evaluated at runtime.
+                    let effective_return_type = if matches!(
+                        func.return_type,
+                        zyntax_typed_ast::Type::Primitive(
+                            zyntax_typed_ast::PrimitiveType::Unit
+                        )
+                    ) {
+                        let has_return_with_value = func.body.as_ref().map_or(false, |body| {
+                            body.statements.iter().any(|stmt| {
+                                matches!(
+                                    &stmt.node,
+                                    zyntax_typed_ast::typed_ast::TypedStatement::Return(Some(_))
+                                )
+                            })
+                        });
+                        if has_return_with_value {
+                            zyntax_typed_ast::Type::Dynamic
+                        } else {
+                            func.return_type.clone()
+                        }
+                    } else {
+                        func.return_type.clone()
+                    };
+                    self.symbols
+                        .function_return_types
+                        .insert(func.name, effective_return_type);
                     // Record default parameter info for functions with optional params
                     if func.params.iter().any(|p| p.default_value.is_some()) {
                         self.symbols
@@ -1904,7 +1934,8 @@ impl LoweringContext {
         )
         .with_return_type(func.return_type.clone())
         .with_extern_link_names(self.symbols.extern_link_names.clone())
-        .with_function_default_params(self.symbols.function_default_params.clone());
+        .with_function_default_params(self.symbols.function_default_params.clone())
+        .with_function_return_types(self.symbols.function_return_types.clone());
         let ssa = ssa_builder.build_from_typed_cfg(&typed_cfg)?;
 
         // Debug: check SSA result
@@ -2035,8 +2066,43 @@ impl LoweringContext {
     ) -> CompilerResult<HirFunctionSignature> {
         let mut params = Vec::new();
 
+        let func_name = func.name.resolve_global().unwrap_or_default();
         for param in &func.params {
-            // Keep abstract types as nominal for method dispatch
+            // Warn about untyped parameters — they will be treated as Dynamic.
+            // Skip warnings for: main(), internal runtime functions ($-prefixed),
+            // and stdlib IO functions that intentionally accept DynamicBox.
+            if matches!(
+                param.ty,
+                Type::Any | Type::Unknown | Type::Dynamic
+            ) {
+                let param_name = param.name.resolve_global().unwrap_or_default();
+                let is_internal = func_name == "main"
+                    || func_name.starts_with('$')
+                    || func_name.starts_with("__")
+                    || matches!(
+                        func_name.as_str(),
+                        "println" | "print" | "eprintln" | "eprint"
+                            | "println_dynamic" | "print_dynamic"
+                            | "eprintln_dynamic" | "eprint_dynamic"
+                            | "format_dynamic" | "to_string"
+                    );
+                if !is_internal {
+                    self.emit_diagnostic(
+                        LoweringDiagnostic::warning(format!(
+                            "parameter `{}` in function `{}` has no type annotation",
+                            param_name, func_name
+                        ))
+                        .with_code(zyntax_typed_ast::diagnostics::codes::W0001)
+                        .with_help(format!(
+                            "consider adding a type annotation to `{}`", param_name
+                        ))
+                        .with_note(
+                            "untyped parameters are treated as dynamically typed and their type is resolved at runtime"
+                        ),
+                    );
+                }
+            }
+
             let hir_type = self.convert_type(&param.ty);
             let attributes = self.compute_param_attributes(&param.ty, param.mutability);
 
@@ -2048,11 +2114,38 @@ impl LoweringContext {
             });
         }
 
-        // Keep abstract types as nominal for method dispatch
-        // For void/unit functions, use empty returns vec (not vec![Void])
+        // For void/unit functions, use empty returns vec (not vec![Void]).
+        // Exception: if body has `return <expr>` without a type annotation,
+        // the function has a Dynamic return type — evaluated at runtime as i64.
         let hir_return_type = self.convert_type(&func.return_type);
         let returns = if matches!(hir_return_type, HirType::Void) {
-            vec![] // Empty for void functions
+            let has_return_with_value = func.body.as_ref().map_or(false, |body| {
+                body.statements.iter().any(|stmt| {
+                    matches!(
+                        &stmt.node,
+                        zyntax_typed_ast::typed_ast::TypedStatement::Return(Some(_))
+                    )
+                })
+            });
+            if has_return_with_value {
+                self.emit_diagnostic(
+                    LoweringDiagnostic::warning(format!(
+                        "function `{}` returns a value but has no return type annotation",
+                        func_name
+                    ))
+                    .with_code(zyntax_typed_ast::diagnostics::codes::W0002)
+                    .with_help(format!(
+                        "consider adding a return type annotation to `{}`", func_name
+                    ))
+                    .with_note(
+                        "the return type will be inferred dynamically at runtime"
+                    ),
+                );
+                // Dynamic maps to I64 at the machine level
+                vec![HirType::I64]
+            } else {
+                vec![] // Genuinely void
+            }
         } else {
             vec![hir_return_type]
         };
@@ -2334,16 +2427,28 @@ impl LoweringContext {
                 } else if let Some(simd_ty) = Self::try_parse_builtin_simd_type(*name) {
                     simd_ty
                 } else if Self::looks_like_simd_alias(*name) {
-                    log::warn!(
-                        "Unsupported SIMD alias '{}' (supported: f32x4, f64x2, i32x4, i64x2); preserving as opaque",
-                        name.resolve_global().unwrap_or_default()
+                    self.emit_diagnostic(
+                        LoweringDiagnostic::warning(format!(
+                            "unsupported SIMD type `{}`",
+                            name.resolve_global().unwrap_or_default()
+                        ))
+                        .with_help("supported SIMD types: f32x4, f64x2, i32x4, i64x2"),
                     );
                     HirType::Opaque(*name)
                 } else {
-                    log::warn!(
-                        "Could not resolve type '{}', defaulting to I64",
-                        name.resolve_global().unwrap_or_default()
-                    );
+                    let type_name = name.resolve_global().unwrap_or_default();
+                    // Suppress warnings for generic type params (T, U, E, etc.)
+                    // These are known false positives from stdlib generic types
+                    let is_generic_param = type_name.len() <= 2
+                        && type_name.chars().all(|c| c.is_ascii_uppercase());
+                    if !is_generic_param {
+                        self.emit_diagnostic(
+                            LoweringDiagnostic::warning(format!(
+                                "could not resolve type `{}`", type_name
+                            ))
+                            .with_note("this type will be treated as a dynamically typed value"),
+                        );
+                    }
                     HirType::I64 // Fallback
                 }
             }
@@ -2472,13 +2577,11 @@ impl LoweringContext {
             match self.eval_const_expression(&init_expr.node, &hir_type) {
                 Ok(constant) => Some(constant),
                 Err(e) => {
-                    self.diagnostic(
-                        DiagnosticLevel::Error,
-                        format!(
+                    self.emit_diagnostic(
+                        LoweringDiagnostic::error(format!(
                             "Global variable '{}' has non-constant initializer: {}",
                             var.name, e
-                        ),
-                        Some(init_expr.span),
+                        )).with_primary(init_expr.span, "non-constant expression"),
                     );
                     None
                 }
@@ -2537,10 +2640,10 @@ impl LoweringContext {
                     Ok(crate::hir::HirConstant::I32(v)) => v as u64,
                     Ok(crate::hir::HirConstant::I64(v)) => v as u64,
                     _ => {
-                        self.diagnostic(
-                            DiagnosticLevel::Error,
-                            format!("Invalid discriminant for enum variant '{}'", variant.name),
-                            Some(variant.span),
+                        self.emit_diagnostic(
+                            LoweringDiagnostic::error(format!(
+                                "Invalid discriminant for enum variant '{}'", variant.name
+                            )).with_primary(variant.span, "invalid discriminant value"),
                         );
                         variant_idx as u64
                     }
@@ -2611,10 +2714,10 @@ impl LoweringContext {
                 .insert(type_id, HirType::Union(Box::new(union_type)));
         } else {
             // Type not found in registry - this shouldn't happen for well-typed programs
-            self.diagnostic(
-                DiagnosticLevel::Warning,
-                format!("Enum type '{}' not found in type registry", enum_decl.name),
-                Some(enum_decl.span),
+            self.emit_diagnostic(
+                LoweringDiagnostic::warning(format!(
+                    "Enum type '{}' not found in type registry", enum_decl.name
+                )).with_primary(enum_decl.span, "unknown enum type"),
             );
         }
 
@@ -3740,10 +3843,10 @@ impl LoweringContext {
                 }
                 Err(e) => {
                     // Log the error but don't fail - imports might be resolved externally
-                    self.diagnostic(
-                        DiagnosticLevel::Warning,
-                        format!("Import resolution warning: {}", e),
-                        Some(import.span),
+                    self.emit_diagnostic(
+                        LoweringDiagnostic::warning(format!(
+                            "Import resolution warning: {}", e
+                        )).with_primary(import.span, "failed to resolve import"),
                     );
                     Vec::new()
                 }
@@ -4886,13 +4989,12 @@ impl LoweringContext {
         }
 
         if !missing_symbols.is_empty() {
-            // Report warnings for missing symbols (non-fatal, since type checker validated)
-            for msg in &missing_symbols {
-                self.diagnostic(
-                    DiagnosticLevel::Warning,
-                    format!("Symbol table inconsistency: {}", msg),
-                    None,
-                );
+            // Only report symbol table inconsistencies in debug/strict mode
+            // These are internal compiler diagnostics, not useful for end users
+            if self.config.debug_info || self.config.strict_mode {
+                for msg in &missing_symbols {
+                    log::trace!("Symbol table inconsistency: {}", msg);
+                }
             }
 
             if self.config.strict_mode {
@@ -4927,10 +5029,10 @@ impl LoweringPipeline {
             let pass_name = pass.name();
 
             if context.config.debug_info {
-                context.diagnostic(
-                    DiagnosticLevel::Info,
-                    format!("Running lowering pass: {}", pass_name),
-                    None,
+                context.emit_diagnostic(
+                    LoweringDiagnostic::new(DiagnosticLevel::Note, format!(
+                        "Running lowering pass: {}", pass_name
+                    )),
                 );
             }
 
@@ -5104,13 +5206,11 @@ pub mod passes {
             // Validate parameter types
             for param in &func.signature.params {
                 if !Self::is_valid_hir_type(&param.ty) {
-                    context.diagnostic(
-                        DiagnosticLevel::Error,
-                        format!(
+                    context.emit_diagnostic(
+                        LoweringDiagnostic::error(format!(
                             "Invalid parameter type in function {}: {:?}",
                             func.name, param.ty
-                        ),
-                        None,
+                        )),
                     );
                 }
             }
@@ -5118,13 +5218,11 @@ pub mod passes {
             // Validate return types
             for ret_ty in &func.signature.returns {
                 if !Self::is_valid_hir_type(ret_ty) {
-                    context.diagnostic(
-                        DiagnosticLevel::Error,
-                        format!(
+                    context.emit_diagnostic(
+                        LoweringDiagnostic::error(format!(
                             "Invalid return type in function {}: {:?}",
                             func.name, ret_ty
-                        ),
-                        None,
+                        )),
                     );
                 }
             }

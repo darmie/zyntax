@@ -84,6 +84,10 @@ pub mod codes {
 
     // Lifetime errors
     pub const E0309: DiagnosticCode = DiagnosticCode("E0309"); // Lifetime cycle
+
+    // Lowering warnings
+    pub const W0001: DiagnosticCode = DiagnosticCode("W0001"); // Missing parameter type annotation
+    pub const W0002: DiagnosticCode = DiagnosticCode("W0002"); // Missing return type annotation
 }
 
 /// Style for rendering diagnostic annotations

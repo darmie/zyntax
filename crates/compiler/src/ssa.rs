@@ -100,6 +100,9 @@ pub struct SsaBuilder {
     /// Maps function name -> Vec<TypedParameter> (for filling in defaults at call sites).
     function_default_params:
         IndexMap<InternedString, Vec<zyntax_typed_ast::typed_ast::TypedParameter>>,
+    /// Return types for user-defined functions.
+    /// Maps function name -> Type (for resolving call expression types when parser sets Unit).
+    function_return_types: IndexMap<InternedString, Type>,
 }
 
 /// Context for pattern matching
@@ -348,6 +351,7 @@ impl SsaBuilder {
             compute_yield_stack: Vec::new(),
             simd_continue_block: None,
             function_default_params: IndexMap::new(),
+            function_return_types: IndexMap::new(),
         }
     }
 
@@ -385,6 +389,7 @@ impl SsaBuilder {
             compute_yield_stack: Vec::new(),
             simd_continue_block: None,
             function_default_params: IndexMap::new(),
+            function_return_types: IndexMap::new(),
             function,
         };
         // Pre-register all existing blocks in the definitions map
@@ -439,6 +444,15 @@ impl SsaBuilder {
         params: IndexMap<InternedString, Vec<zyntax_typed_ast::typed_ast::TypedParameter>>,
     ) -> Self {
         self.function_default_params = params;
+        self
+    }
+
+    /// Set return types for user-defined functions (for call-site type resolution)
+    pub fn with_function_return_types(
+        mut self,
+        return_types: IndexMap<InternedString, Type>,
+    ) -> Self {
+        self.function_return_types = return_types;
         self
     }
 
@@ -843,15 +857,14 @@ impl SsaBuilder {
                         }
                     }
 
-                    // Check if the function returns void - if so, ignore the expression value
-                    let is_void_return = matches!(
-                        &self.original_return_type,
-                        Some(Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit)) | None
-                    );
+                    // Check whether the function actually returns a value.
+                    // The HirFunction signature is the source of truth — it was set by
+                    // convert_function_signature which already detects `return <expr>`
+                    // in functions with no type annotation.
+                    let is_void_return = self.function.signature.returns.is_empty();
 
                     // Check if the expression set a continuation block (for control flow expressions)
                     if let Some(continuation) = self.continuation_block.take() {
-                        // Control flow expression - set Return on continuation block, not entry block
                         let cont_block =
                             self.function.blocks.get_mut(&continuation).ok_or_else(|| {
                                 crate::CompilerError::Analysis(
@@ -865,18 +878,12 @@ impl SsaBuilder {
                                 values: vec![value_id],
                             }
                         };
-
-                        // Entry block already has correct terminator (Branch/CondBranch), so return None
-                        // to signal that we shouldn't overwrite it
                         return Ok(());
+                    } else if is_void_return {
+                        HirTerminator::Return { values: vec![] }
                     } else {
-                        // Regular expression - return normally from entry block
-                        if is_void_return {
-                            HirTerminator::Return { values: vec![] }
-                        } else {
-                            HirTerminator::Return {
-                                values: vec![value_id],
-                            }
+                        HirTerminator::Return {
+                            values: vec![value_id],
                         }
                     }
                 } else {
@@ -3001,8 +3008,43 @@ impl SsaBuilder {
                     .map(|ty| self.convert_type(ty))
                     .collect();
 
-                // Create call instruction
-                let result_type = self.convert_type(&expr.ty);
+                // Create call instruction — resolve return type from function table
+                // when the parser hasn't propagated it (expr.ty is Unit/Unknown/Any)
+                let result_type = {
+                    let raw = self.convert_type(&expr.ty);
+                    if matches!(raw, HirType::Void) || matches!(&expr.ty, Type::Unknown | Type::Any) {
+                        // Try to resolve from function_return_types
+                        let from_table = callee_func_key.and_then(|fk| {
+                            self.function_return_types.get(&fk).map(|rt| self.convert_type(rt))
+                        });
+                        if let Some(resolved) = from_table {
+                            if resolved != HirType::Void {
+                                resolved
+                            } else {
+                                // Parser defaulted to Unit — for user-defined functions
+                                // that aren't known to be void (println, eprintln, etc.),
+                                // default to I64 since all Cranelift calls return i64
+                                let is_builtin_void = callee_func_key.map_or(false, |fk| {
+                                    let name = fk.resolve_global().unwrap_or_default();
+                                    matches!(
+                                        name.as_str(),
+                                        "println" | "print" | "eprintln" | "eprint"
+                                    )
+                                });
+                                if is_builtin_void {
+                                    raw
+                                } else {
+                                    // User function with no return type annotation — assume I64
+                                    HirType::I64
+                                }
+                            }
+                        } else {
+                            raw
+                        }
+                    } else {
+                        raw
+                    }
+                };
                 let result = if result_type != HirType::Void {
                     Some(self.create_value(result_type.clone(), HirValueKind::Instruction))
                 } else {

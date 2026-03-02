@@ -1173,6 +1173,9 @@ impl ZyntaxRuntime {
             .lower_program(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Lowering error: {:?}", e)))?;
 
+        // Display lowering diagnostics (type inference warnings, etc.)
+        lowering_ctx.display_diagnostics(&program);
+
         // Monomorphization
         zyntax_compiler::monomorphize_module(&mut hir_module)
             .map_err(|e| RuntimeError::Execution(format!("Monomorphization error: {:?}", e)))?;
@@ -3605,6 +3608,9 @@ impl TieredRuntime {
         let mut hir_module = lowering_ctx
             .lower_program(&mut program)
             .map_err(|e| RuntimeError::Execution(format!("Lowering error: {:?}", e)))?;
+
+        // Display lowering diagnostics (type inference warnings, etc.)
+        lowering_ctx.display_diagnostics(&program);
 
         zyntax_compiler::monomorphize_module(&mut hir_module)
             .map_err(|e| RuntimeError::Execution(format!("Monomorphization error: {:?}", e)))?;

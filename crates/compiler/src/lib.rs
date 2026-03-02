@@ -1436,6 +1436,9 @@ pub fn compile_to_hir(
     );
     let mut hir_module = lowering_ctx.lower_program(program)?;
 
+    // Display any lowering diagnostics (warnings/errors) using the proper formatter
+    lowering_ctx.display_diagnostics(program);
+
     // Step 2: Async transformation (if async runtime is configured)
     if let Some(runtime_type) = config.async_runtime {
         // Transform async functions into state machines

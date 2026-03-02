@@ -744,46 +744,214 @@ impl TypedCfgBuilder {
                 }
 
                 TypedStatement::For(for_stmt) => {
-                    // For-each loop (separate statement type)
-                    // Same structure as TypedLoop::ForEach
-                    let header_id = self.new_block_id();
-                    let body_id = self.new_block_id();
-                    let after_id = self.new_block_id();
+                    // Try to desugar `for i in range(start, end)` into a C-style for loop.
+                    // Extract loop variable name from pattern.
+                    let loop_var = match &for_stmt.pattern.node {
+                        TypedPattern::Identifier { name, .. } => Some(*name),
+                        _ => None,
+                    };
 
-                    all_blocks.push(TypedBasicBlock {
-                        id: current_block_id,
-                        label: None,
-                        statements: current_statements.clone(),
-                        terminator: TypedTerminator::Jump(header_id),
-                        pattern_check: None,
-                    });
-
-                    // Header (iterator protocol handled by SSA)
-                    all_blocks.push(TypedBasicBlock {
-                        id: header_id,
-                        label: None,
-                        statements: vec![],
-                        terminator: TypedTerminator::Jump(body_id),
-                        pattern_check: None,
-                    });
-
-                    self.loop_stack.push((header_id, after_id));
-                    let (body_blocks, _, body_exit) =
-                        self.split_at_control_flow(&for_stmt.body, body_id, false)?;
-                    all_blocks.extend(body_blocks);
-                    self.loop_stack.pop();
-
-                    if let Some(last_block) =
-                        all_blocks.iter_mut().rev().find(|b| b.id == body_exit)
-                    {
-                        if matches!(last_block.terminator, TypedTerminator::Unreachable) {
-                            last_block.terminator = TypedTerminator::Jump(header_id);
+                    // Detect `range(start, end)` or `range(start, end, step)` call patterns.
+                    let range_args = match &for_stmt.iterator.node {
+                        TypedExpression::Call(call) => {
+                            let is_range = match &call.callee.node {
+                                TypedExpression::Variable(name) => {
+                                    let mut arena =
+                                        zyntax_typed_ast::arena::AstArena::new();
+                                    let range_sym = arena.intern_string("range");
+                                    *name == range_sym
+                                }
+                                _ => false,
+                            };
+                            if is_range && (call.positional_args.len() == 2 || call.positional_args.len() == 3) {
+                                Some(call.positional_args.clone())
+                            } else {
+                                None
+                            }
                         }
-                    }
+                        _ => None,
+                    };
 
-                    current_statements = Vec::new();
-                    current_block_id = after_id;
-                    exit_id = after_id;
+                    if let (Some(var_name), Some(args)) = (loop_var, range_args) {
+                        // Desugar: for i in range(start, end) => C-style for loop
+                        let span = for_stmt.iterator.span;
+                        let start_expr = args[0].clone();
+                        let end_expr = args[1].clone();
+                        let step_expr = if args.len() == 3 {
+                            Some(args[2].clone())
+                        } else {
+                            None
+                        };
+
+                        // Init: let mut i = start
+                        let init_stmt = typed_node(
+                            TypedStatement::Let(zyntax_typed_ast::typed_ast::TypedLet {
+                                name: var_name,
+                                ty: start_expr.ty.clone(),
+                                mutability: zyntax_typed_ast::Mutability::Mutable,
+                                initializer: Some(Box::new(start_expr.clone())),
+                                span,
+                            }),
+                            Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
+                            span,
+                        );
+                        current_statements.push(init_stmt);
+
+                        // Condition: i < end
+                        let cond_expr = typed_node(
+                            TypedExpression::Binary(zyntax_typed_ast::typed_ast::TypedBinary {
+                                op: zyntax_typed_ast::typed_ast::BinaryOp::Lt,
+                                left: Box::new(typed_node(
+                                    TypedExpression::Variable(var_name),
+                                    start_expr.ty.clone(),
+                                    span,
+                                )),
+                                right: Box::new(end_expr),
+                            }),
+                            Type::Primitive(zyntax_typed_ast::PrimitiveType::Bool),
+                            span,
+                        );
+
+                        // Update: i = i + step (default step = 1)
+                        let step = step_expr.unwrap_or_else(|| {
+                            typed_node(
+                                TypedExpression::Literal(
+                                    zyntax_typed_ast::typed_ast::TypedLiteral::Integer(1),
+                                ),
+                                start_expr.ty.clone(),
+                                span,
+                            )
+                        });
+                        let update_expr = typed_node(
+                            TypedExpression::Binary(zyntax_typed_ast::typed_ast::TypedBinary {
+                                op: zyntax_typed_ast::typed_ast::BinaryOp::Assign,
+                                left: Box::new(typed_node(
+                                    TypedExpression::Variable(var_name),
+                                    start_expr.ty.clone(),
+                                    span,
+                                )),
+                                right: Box::new(typed_node(
+                                    TypedExpression::Binary(
+                                        zyntax_typed_ast::typed_ast::TypedBinary {
+                                            op: zyntax_typed_ast::typed_ast::BinaryOp::Add,
+                                            left: Box::new(typed_node(
+                                                TypedExpression::Variable(var_name),
+                                                start_expr.ty.clone(),
+                                                span,
+                                            )),
+                                            right: Box::new(step),
+                                        },
+                                    ),
+                                    start_expr.ty.clone(),
+                                    span,
+                                )),
+                            }),
+                            start_expr.ty.clone(),
+                            span,
+                        );
+
+                        // Build the C-style for loop block structure
+                        let header_id = self.new_block_id();
+                        let body_id = self.new_block_id();
+                        let update_id = self.new_block_id();
+                        let after_id = self.new_block_id();
+
+                        // Entry block → header
+                        all_blocks.push(TypedBasicBlock {
+                            id: current_block_id,
+                            label: None,
+                            statements: current_statements.clone(),
+                            terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
+                        });
+
+                        // Header: conditional branch (i < end)
+                        all_blocks.push(TypedBasicBlock {
+                            id: header_id,
+                            label: None,
+                            statements: vec![],
+                            terminator: TypedTerminator::CondBranch {
+                                condition: Box::new(cond_expr),
+                                true_target: body_id,
+                                false_target: after_id,
+                            },
+                            pattern_check: None,
+                        });
+
+                        // Body
+                        self.loop_stack.push((update_id, after_id));
+                        let (body_blocks, _, body_exit) =
+                            self.split_at_control_flow(&for_stmt.body, body_id, false)?;
+                        all_blocks.extend(body_blocks);
+                        self.loop_stack.pop();
+
+                        // Body exit → update
+                        if let Some(last_block) =
+                            all_blocks.iter_mut().rev().find(|b| b.id == body_exit)
+                        {
+                            if matches!(last_block.terminator, TypedTerminator::Unreachable) {
+                                last_block.terminator = TypedTerminator::Jump(update_id);
+                            }
+                        }
+
+                        // Update block: i = i + 1; jump header
+                        all_blocks.push(TypedBasicBlock {
+                            id: update_id,
+                            label: None,
+                            statements: vec![typed_node(
+                                TypedStatement::Expression(Box::new(update_expr)),
+                                Type::Primitive(zyntax_typed_ast::PrimitiveType::Unit),
+                                span,
+                            )],
+                            terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
+                        });
+
+                        current_statements = Vec::new();
+                        current_block_id = after_id;
+                        exit_id = after_id;
+                    } else {
+                        // General for-each loop (iterator protocol)
+                        // TODO: Implement general iterator desugaring
+                        // For now, emit unconditional loop (matches previous behavior)
+                        let header_id = self.new_block_id();
+                        let body_id = self.new_block_id();
+                        let after_id = self.new_block_id();
+
+                        all_blocks.push(TypedBasicBlock {
+                            id: current_block_id,
+                            label: None,
+                            statements: current_statements.clone(),
+                            terminator: TypedTerminator::Jump(header_id),
+                            pattern_check: None,
+                        });
+
+                        all_blocks.push(TypedBasicBlock {
+                            id: header_id,
+                            label: None,
+                            statements: vec![],
+                            terminator: TypedTerminator::Jump(body_id),
+                            pattern_check: None,
+                        });
+
+                        self.loop_stack.push((header_id, after_id));
+                        let (body_blocks, _, body_exit) =
+                            self.split_at_control_flow(&for_stmt.body, body_id, false)?;
+                        all_blocks.extend(body_blocks);
+                        self.loop_stack.pop();
+
+                        if let Some(last_block) =
+                            all_blocks.iter_mut().rev().find(|b| b.id == body_exit)
+                        {
+                            if matches!(last_block.terminator, TypedTerminator::Unreachable) {
+                                last_block.terminator = TypedTerminator::Jump(header_id);
+                            }
+                        }
+
+                        current_statements = Vec::new();
+                        current_block_id = after_id;
+                        exit_id = after_id;
+                    }
                 }
 
                 TypedStatement::ForCStyle(for_c_stmt) => {
