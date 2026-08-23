@@ -25,10 +25,20 @@
 //!
 //! [`zyntax_free`] must only ever be handed a pointer from
 //! [`zyntax_alloc`], which is the contract `free` already has with
-//! `malloc`. A header in front of every block records which pool it
-//! came from and carries a magic word, so a pointer from somewhere
-//! else is passed to libc's `free` rather than corrupting a list. That
-//! is a guard against a mistake, not a licence to mix them.
+//! `malloc`. A block carries no header of its own: a slab serves one
+//! size class and says so at its own base, and a block's slab is the
+//! address it masks down to. A pointer from somewhere else fails the
+//! magic word there, and then again in front of itself where a large
+//! block keeps one, and is passed to libc's `free` rather than
+//! corrupting a list. That is a guard against a mistake, not a licence
+//! to mix them.
+//!
+//! Segregating by slab is what makes a small object cheap. A header
+//! per block cost sixteen bytes on top of a class that was already
+//! rounded up, so a twenty-four byte node moved forty-eight bytes for
+//! twenty-four bytes of program data. It now moves thirty-two, and the
+//! two words that said which pool it belonged to are not written at
+//! all.
 //!
 //! ## Threads
 //!
@@ -44,7 +54,7 @@
 use std::alloc::{alloc as sys_alloc, dealloc as sys_dealloc, Layout};
 use std::cell::Cell;
 #[cfg(debug_assertions)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
 /// Largest request served from a pool. Above this, libc.
 const MAX_POOLED: usize = 1024;
@@ -56,9 +66,16 @@ const STEP: usize = 16;
 /// Number of pools, covering `STEP..=MAX_POOLED`.
 const CLASSES: usize = MAX_POOLED / STEP;
 
-/// Bytes in front of every block. Sixteen rather than eight so the
-/// payload keeps the sixteen-byte alignment libc hands out and vector
-/// loads still land where they expect to.
+/// Bytes at the front of a *slab*, not of a block.
+///
+/// A block used to carry its own sixteen bytes saying which pool it
+/// belonged to, which cost more than it sounds: a twenty-four byte node
+/// took a thirty-two byte class plus sixteen, so forty-eight bytes moved
+/// for twenty-four bytes of program data. A slab now serves one class
+/// and says so once at its own base, and a block is found back to it by
+/// masking its address. Sixteen keeps every payload sixteen-aligned,
+/// since a slab is aligned to its own size and every class is a
+/// multiple of sixteen.
 const HEADER: usize = 16;
 
 /// Marks a block as this allocator's. Chosen to be implausible as a
@@ -72,8 +89,9 @@ const MAGIC: u64 = 0x5A79_6E50_6F6F_6C01;
 #[cfg(debug_assertions)]
 const POISON: u8 = 0x55;
 
-/// Bytes carved per slab. Large enough that carving is rare and small
-/// enough that a program allocating once does not take a megabyte.
+/// Bytes carved per slab, and its alignment: a block's slab is found by
+/// masking the block's address down to this, so it has to be a power of
+/// two and slabs have to be aligned to it.
 const SLAB: usize = 64 * 1024;
 
 /// Set in a header's `class` to mark a block libc owns, with the rest
@@ -86,13 +104,19 @@ const SLAB: usize = 64 * 1024;
 /// room to keep both in one word.
 const LARGE_MARK: usize = 1 << (usize::BITS - 1);
 
-/// Written immediately before every payload.
+/// Written at the base of every slab, once, and read back by masking a
+/// block's address. Also written in front of a large block, where
+/// `class` carries `LARGE_MARK | total_bytes` instead.
 #[repr(C)]
 struct Header {
     magic: u64,
-    /// Pool this block returns to, or `LARGE_MARK | total_bytes` when
-    /// it came from libc.
     class: usize,
+}
+
+/// The slab a block belongs to. Only meaningful for a pooled block.
+#[inline]
+fn slab_of(ptr: *mut u8) -> *mut Header {
+    ((ptr as usize) & !(SLAB - 1)) as *mut Header
 }
 
 thread_local! {
@@ -105,9 +129,12 @@ thread_local! {
     /// what the pool exists to save.
     static FREE: [Cell<*mut u8>; CLASSES] =
         const { [const { Cell::new(std::ptr::null_mut()) }; CLASSES] };
-    /// The slab being carved, and how much of it is spoken for.
-    static SLAB_PTR: Cell<*mut u8> = const { Cell::new(std::ptr::null_mut()) };
-    static SLAB_USED: Cell<usize> = const { Cell::new(SLAB) };
+    /// The slab being carved for each class, and how much of it is
+    /// spoken for. One per class now: a slab serves a single class, so
+    /// that masking a block's address back to it says which.
+    static SLAB_PTR: [Cell<*mut u8>; CLASSES] =
+        const { [const { Cell::new(std::ptr::null_mut()) }; CLASSES] };
+    static SLAB_USED: [Cell<usize>; CLASSES] = const { [const { Cell::new(SLAB) }; CLASSES] };
 }
 
 /// Requests the pools have served, across every thread.
@@ -126,6 +153,22 @@ pub fn pooled_allocation_count() -> usize {
     SERVED.load(Ordering::Relaxed)
 }
 
+/// Blocks past the cap that libc has handed out and not taken back.
+///
+/// A leaked large block used to be visible only as resident size, which
+/// is a property of the whole process: every other test allocating
+/// beside this one lands inside the measurement, so the reading said as
+/// much about what else was running as about the pool. This counts the
+/// thing itself.
+#[cfg(debug_assertions)]
+static LARGE_LIVE: AtomicIsize = AtomicIsize::new(0);
+
+/// Large blocks taken and not yet released. Debug builds only.
+#[cfg(debug_assertions)]
+pub fn large_blocks_live() -> isize {
+    LARGE_LIVE.load(Ordering::Relaxed)
+}
+
 /// Size class for a payload, or `None` when libc should take it.
 #[inline]
 fn class_of(size: usize) -> Option<usize> {
@@ -135,10 +178,11 @@ fn class_of(size: usize) -> Option<usize> {
     Some((size - 1) / STEP)
 }
 
-/// Total bytes a block in `class` occupies, header included.
+/// Bytes a block in `class` occupies. No header: the class is a
+/// property of the slab it came from.
 #[inline]
 fn slot_bytes(class: usize) -> usize {
-    HEADER + (class + 1) * STEP
+    (class + 1) * STEP
 }
 
 /// Allocate `size` bytes. Never returns null for a request libc could
@@ -166,24 +210,30 @@ pub unsafe extern "C" fn zyntax_alloc(size: usize) -> *mut u8 {
         head
     });
     if !reused.is_null() {
-        return payload_of(reused, class);
+        return reused;
     }
 
-    // Otherwise carve one, taking a fresh slab if this one cannot fit.
+    // Otherwise carve one, taking a fresh slab for this class if the
+    // current one cannot fit. A slab is aligned to its own size so that
+    // masking any block in it lands on its header.
     let want = slot_bytes(class);
     let block = SLAB_PTR.with(|sp| {
         SLAB_USED.with(|su| {
-            let mut used = su.get();
+            let mut used = su[class].get();
             if used + want > SLAB {
-                let slab = sys_alloc(Layout::from_size_align_unchecked(SLAB, HEADER));
+                let slab = sys_alloc(Layout::from_size_align_unchecked(SLAB, SLAB));
                 if slab.is_null() {
                     return std::ptr::null_mut();
                 }
-                sp.set(slab);
-                used = 0;
+                // Said once per slab rather than once per block.
+                let head = slab as *mut Header;
+                (*head).magic = MAGIC;
+                (*head).class = class;
+                sp[class].set(slab);
+                used = HEADER;
             }
-            let block = sp.get().add(used);
-            su.set(used + want);
+            let block = sp[class].get().add(used);
+            su[class].set(used + want);
             block
         })
     });
@@ -191,16 +241,7 @@ pub unsafe extern "C" fn zyntax_alloc(size: usize) -> *mut u8 {
         // Out of memory for a slab; the request itself may still fit.
         return large_alloc(size);
     }
-    payload_of(block, class)
-}
-
-/// Stamp a block's header and hand back the payload.
-#[inline]
-unsafe fn payload_of(block: *mut u8, class: usize) -> *mut u8 {
-    let head = block as *mut Header;
-    (*head).magic = MAGIC;
-    (*head).class = class;
-    block.add(HEADER)
+    block
 }
 
 /// Anything a pool will not take.
@@ -214,6 +255,8 @@ unsafe fn large_alloc(size: usize) -> *mut u8 {
     let head = block as *mut Header;
     (*head).magic = MAGIC;
     (*head).class = LARGE_MARK | total;
+    #[cfg(debug_assertions)]
+    LARGE_LIVE.fetch_add(1, Ordering::Relaxed);
     block.add(HEADER)
 }
 
@@ -227,33 +270,44 @@ pub unsafe extern "C" fn zyntax_free(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
-    let block = ptr.sub(HEADER);
-    let head = block as *const Header;
-    if (*head).magic != MAGIC {
-        // Not ours. Hand it to the allocator that most likely owns it
+    // A pooled block belongs to the slab its address masks down to, and
+    // that slab says which class it serves.
+    let slab = slab_of(ptr);
+    let class = if (*slab).magic == MAGIC && (*slab).class & LARGE_MARK == 0 {
+        (*slab).class
+    } else {
+        // Not in a slab. A block past the cap carries its own header, in
+        // front of the payload the way one used to for every block.
+        let head = ptr.sub(HEADER) as *const Header;
+        if (*head).magic == MAGIC && (*head).class & LARGE_MARK != 0 {
+            let total = (*head).class & !LARGE_MARK;
+            sys_dealloc(
+                ptr.sub(HEADER),
+                Layout::from_size_align_unchecked(total, HEADER),
+            );
+            #[cfg(debug_assertions)]
+            LARGE_LIVE.fetch_sub(1, Ordering::Relaxed);
+            return;
+        }
+        // Neither. Hand it to the allocator that most likely owns it
         // rather than threading a foreign block onto a free list.
         libc_free(ptr);
         return;
-    }
-    let class = (*head).class;
-    if class & LARGE_MARK != 0 {
-        let total = class & !LARGE_MARK;
-        sys_dealloc(block, Layout::from_size_align_unchecked(total, HEADER));
-        return;
-    }
+    };
+    let block = ptr;
     // A freed block keeps its bytes, so a read through a stale pointer
     // returns the old contents: plausible, wrong, and silent. Overwrite
     // the payload with a byte that is none of a small integer, a valid
     // pointer, or ASCII, so such a read is recognisable instead. Debug
     // only — the whole point of the pool is that freeing is a push.
     #[cfg(debug_assertions)]
-    std::ptr::write_bytes(block.add(HEADER), POISON, (class + 1) * STEP);
+    std::ptr::write_bytes(block, POISON, slot_bytes(class));
 
     FREE.with(|lists| {
-        // Threaded through the header, not the payload: the first word
-        // of the block is the magic, which a freed block no longer
-        // needs, and leaving the payload alone is what lets it carry
-        // the poison above.
+        // Threaded through the block's own first word. A freed block
+        // holds nothing a live one needed, and the poison above is
+        // overwritten here for that word alone, which is why the test
+        // for it reads past the first pointer.
         *(block as *mut *mut u8) = lists[class].get();
         lists[class].set(block);
     });
@@ -372,9 +426,9 @@ mod tests {
     /// slab is never returned, so the page is still mapped; that is
     /// exactly why the bug it guards is invisible without help.
     ///
-    /// Reads past the header deliberately: the first word of a freed
-    /// block is the free-list link, which follows the address and so
-    /// differs every run.
+    /// Skips the first word deliberately: a freed block is threaded
+    /// onto its list through its own first word, which holds an address
+    /// and so differs every run. Everything after it is the poison.
     ///
     /// Every size here is checked to be one a pool actually serves,
     /// including the last one it takes. An instrument that tests a
@@ -394,9 +448,10 @@ mod tests {
                 assert_eq!(*p, 0x11, "size {size} was not writable before free");
                 zyntax_free(p);
 
-                // Every byte, not just the first: a partial overwrite
-                // would still leave stale data to read.
-                for i in 0..size {
+                // Every byte after the list link, not just one: a
+                // partial overwrite would still leave stale data to
+                // read.
+                for i in std::mem::size_of::<*mut u8>()..size {
                     assert_eq!(
                         *p.add(i),
                         POISON,
@@ -404,6 +459,49 @@ mod tests {
                          what it held before"
                     );
                 }
+            }
+        }
+    }
+
+    /// A block past the cap is not mistaken for one inside it.
+    ///
+    /// Without a header per block, a pooled block is recognised by
+    /// masking its address down to its slab and reading the magic
+    /// there. A large block is not in a slab, and the address it masks
+    /// down to is whatever libc put there, including, when the block
+    /// happens to start on a slab boundary, its own header. That is why
+    /// the slab test also refuses a header marked large: reaching the
+    /// wrong arm would thread a libc block onto a free list and hand it
+    /// back as a small one.
+    ///
+    /// Interleaved so the two kinds are adjacent in the order they are
+    /// taken and released, which is when a confusion between them
+    /// shows.
+    #[test]
+    fn a_large_block_is_not_taken_for_a_pooled_one() {
+        unsafe {
+            let mut blocks = Vec::new();
+            for i in 0..64usize {
+                // Alternating, and each written with a byte derived
+                // from its index so a block handed out twice is a
+                // mismatch rather than a crash.
+                let size = if i % 2 == 0 { 48 } else { MAX_POOLED + 64 };
+                let p = zyntax_alloc(size);
+                assert!(!p.is_null(), "allocation {i} of {size} bytes failed");
+                std::ptr::write_bytes(p, i as u8, size);
+                blocks.push((p, size, i as u8));
+            }
+            for (p, size, tag) in &blocks {
+                for j in 0..*size {
+                    assert_eq!(
+                        *p.add(j),
+                        *tag,
+                        "byte {j} of the block tagged {tag} was written by another"
+                    );
+                }
+            }
+            for (p, _, _) in blocks {
+                zyntax_free(p);
             }
         }
     }
@@ -434,29 +532,29 @@ mod tests {
     /// reported it; the memory was simply gone. The length lives in
     /// the block's own header now, which is why this passes.
     ///
-    /// Measured by resident size because a leak has no other symptom.
+    /// Counted rather than weighed. This read resident size before,
+    /// which is a property of the process and not of the pool: the
+    /// three hundred tests running beside it allocate into the same
+    /// number, so the reading moved with whatever else was scheduled
+    /// and the test failed for reasons that had nothing to do with it.
+    /// A block taken and not given back is exactly what
+    /// [`large_blocks_live`] counts.
+    #[cfg(debug_assertions)]
     #[test]
     fn a_large_block_freed_on_another_thread_is_released() {
-        fn rss_kb() -> i64 {
-            let out = std::process::Command::new("ps")
-                .args(["-o", "rss=", "-p", &std::process::id().to_string()])
-                .output()
-                .expect("ps");
-            String::from_utf8_lossy(&out.stdout)
-                .trim()
-                .parse()
-                .unwrap_or(0)
-        }
-
         const BLOCK: usize = 64 * 1024;
         const PER_ROUND: usize = 512;
+        assert!(
+            class_of(BLOCK).is_none(),
+            "the block has to be one libc owns, or this tests the pools instead"
+        );
 
-        // One round first, so the baseline includes whatever the
-        // allocator keeps for itself rather than counting it as growth.
-        let round = || {
+        let before = large_blocks_live();
+        for _ in 0..4 {
             let taken: Vec<usize> = (0..PER_ROUND)
                 .map(|_| unsafe { zyntax_alloc(BLOCK) } as usize)
                 .collect();
+            // Freed somewhere else, which is the whole question.
             std::thread::spawn(move || {
                 for p in taken {
                     unsafe { zyntax_free(p as *mut u8) };
@@ -464,21 +562,19 @@ mod tests {
             })
             .join()
             .expect("freeing thread");
-        };
-        round();
-        let base = rss_kb();
-        for _ in 0..4 {
-            round();
         }
-        let grew = rss_kb() - base;
+        let after = large_blocks_live();
 
-        // Four rounds leak 128 MB if nothing is released. Half a round
-        // of slack absorbs allocator bookkeeping and the test harness.
-        let budget = (PER_ROUND * BLOCK / 2 / 1024) as i64;
+        // Every block this test took is accounted for. Another test
+        // holding its own large block while this reads the counter
+        // shifts both readings alike, so the difference is still this
+        // test's, and a leak of even one round is 512.
         assert!(
-            grew < budget,
-            "resident size grew {grew} KiB over four rounds, budget {budget} KiB — \
-             large blocks freed off-thread are not coming back"
+            after - before < PER_ROUND as isize,
+            "{} large blocks were taken and not given back, over four \
+             rounds of {PER_ROUND}: freeing one off-thread is not \
+             releasing it",
+            after - before
         );
     }
 
