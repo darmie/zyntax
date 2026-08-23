@@ -33,6 +33,16 @@
 //! corrupting a list. That is a guard against a mistake, not a licence
 //! to mix them.
 //!
+//! What the guard does not cover: reading that magic word means reading
+//! through an address derived from the pointer, at its slab base and at
+//! sixteen bytes in front of it. For a pointer far enough from anything
+//! mapped, the read itself faults before any word can be compared.
+//! [`could_be_ours`] rules out the one case that is certain rather than
+//! unlucky, which is an address below a single slab: those all mask to
+//! zero. Ruling out the rest needs slabs carved from one reserved range
+//! so that membership is a comparison, and that is a different design
+//! rather than another check.
+//!
 //! Segregating by slab is what makes a small object cheap. A header
 //! per block cost sixteen bytes on top of a class that was already
 //! rounded up, so a twenty-four byte node moved forty-eight bytes for
@@ -260,6 +270,23 @@ unsafe fn large_alloc(size: usize) -> *mut u8 {
     block.add(HEADER)
 }
 
+/// Whether an address could have come from here at all.
+///
+/// A slab is taken from the system allocator aligned to its own size,
+/// so it starts at or above [`SLAB`], and every block sits inside one.
+/// Nothing this pool hands out is below that, and the bound therefore
+/// turns no real block away.
+///
+/// It matters because of how a block is found back to its slab. Masking
+/// an address down to the slab size sends everything in the first slab's
+/// worth of address space to zero, so reading the header there is a
+/// fault rather than a wrong guess. That is exactly where a small
+/// integer mistaken for a pointer lands.
+#[inline]
+fn could_be_ours(ptr: *mut u8) -> bool {
+    (ptr as usize) >= SLAB
+}
+
 /// Release a pointer from [`zyntax_alloc`].
 ///
 /// # Safety
@@ -270,27 +297,53 @@ pub unsafe extern "C" fn zyntax_free(ptr: *mut u8) {
     if ptr.is_null() {
         return;
     }
-    // A pooled block belongs to the slab its address masks down to, and
-    // that slab says which class it serves.
+    // An address no allocator returns is not passed on to one either:
+    // libc would fault on it for its own reasons and the report would
+    // name libc rather than whatever produced it. Loud where a
+    // developer can see it, and nothing in a release build, because a
+    // release that aborts on a bad pointer turns a leak into a crash.
+    if !could_be_ours(ptr) {
+        debug_assert!(
+            false,
+            "release of {ptr:p}, which is too low to have come from any \
+             allocator: whatever produced it is holding a value that is \
+             not a pointer"
+        );
+        return;
+    }
+    // The sixteen bytes in front of the payload are read first, and the
+    // order is the point rather than a preference. They are always the
+    // program's own memory for anything this pool handed out: a large
+    // block's payload starts sixteen bytes into its allocation, and a
+    // pooled block's slab begins at or before the same place, because a
+    // slab spends its own first sixteen bytes on a header. Masking to
+    // the slab is what cannot be done first. A large block is taken
+    // from the system allocator wherever it likes, so its address masks
+    // down to as much as a slab's width in front of it, and that is
+    // memory this process may never have asked for.
+    let head = ptr.sub(HEADER) as *const Header;
+    if (*head).magic == MAGIC && (*head).class & LARGE_MARK != 0 {
+        let total = (*head).class & !LARGE_MARK;
+        sys_dealloc(
+            ptr.sub(HEADER),
+            Layout::from_size_align_unchecked(total, HEADER),
+        );
+        #[cfg(debug_assertions)]
+        LARGE_LIVE.fetch_sub(1, Ordering::Relaxed);
+        return;
+    }
+
+    // Not a large block, so it is pooled or foreign, and either way the
+    // mask now lands on a slab this pool wrote or on nothing. Reading
+    // in front of a pooled block can only have found another block's
+    // payload or the slab's own header, neither of which carries the
+    // large mark, so arriving here says nothing was mistaken above.
     let slab = slab_of(ptr);
     let class = if (*slab).magic == MAGIC && (*slab).class & LARGE_MARK == 0 {
         (*slab).class
     } else {
-        // Not in a slab. A block past the cap carries its own header, in
-        // front of the payload the way one used to for every block.
-        let head = ptr.sub(HEADER) as *const Header;
-        if (*head).magic == MAGIC && (*head).class & LARGE_MARK != 0 {
-            let total = (*head).class & !LARGE_MARK;
-            sys_dealloc(
-                ptr.sub(HEADER),
-                Layout::from_size_align_unchecked(total, HEADER),
-            );
-            #[cfg(debug_assertions)]
-            LARGE_LIVE.fetch_sub(1, Ordering::Relaxed);
-            return;
-        }
-        // Neither. Hand it to the allocator that most likely owns it
-        // rather than threading a foreign block onto a free list.
+        // Hand it to the allocator that most likely owns it rather than
+        // threading a foreign block onto a free list.
         libc_free(ptr);
         return;
     };
@@ -521,6 +574,101 @@ mod tests {
             "one byte past the cap must go to libc, or the poison tests \
              above are exercising a path the pool does not own"
         );
+    }
+
+    /// An address too small to be one of these is refused before it is
+    /// read through.
+    ///
+    /// A block is found back to its slab by masking its address down to
+    /// the slab size, so every address below one slab masks to zero and
+    /// reading a header there faults. That is where a small integer
+    /// mistaken for a pointer lands, which is how this was found: a
+    /// parameter with no type reached `free` holding something that was
+    /// never an address, and the report named a null dereference inside
+    /// the allocator rather than the value that was wrong.
+    ///
+    /// The bound turns no real block away. A slab is taken aligned to
+    /// its own size, so it starts at or above `SLAB` and every block
+    /// sits inside one.
+    #[test]
+    fn an_address_below_the_first_slab_is_refused() {
+        for addr in [1usize, 8, 4096, SLAB - 1] {
+            assert_eq!(
+                slab_of(addr as *mut u8) as usize,
+                0,
+                "address {addr} masks to zero, which is why it must not be read"
+            );
+            assert!(
+                !could_be_ours(addr as *mut u8),
+                "address {addr} must be refused before anything reads through it"
+            );
+        }
+        assert_eq!(
+            slab_of(SLAB as *mut u8) as usize,
+            SLAB,
+            "an address at the boundary masks to itself"
+        );
+        assert!(could_be_ours(SLAB as *mut u8));
+    }
+
+    /// And every block a pool actually hands out clears the bound, so
+    /// the guard above cannot be refusing real work.
+    #[test]
+    fn every_block_the_pool_hands_out_clears_the_bound() {
+        unsafe {
+            let mut taken = Vec::new();
+            for size in [1usize, 16, 24, 512, MAX_POOLED, MAX_POOLED + 1, 1 << 20] {
+                let p = zyntax_alloc(size);
+                assert!(!p.is_null(), "allocation of {size} failed");
+                assert!(
+                    could_be_ours(p),
+                    "a {size}-byte block came back at {p:p}, below the bound \
+                     that decides whether to read its header"
+                );
+                taken.push(p);
+            }
+            for p in taken {
+                zyntax_free(p);
+            }
+        }
+    }
+
+    /// A large block is recognised without reading in front of its
+    /// slab-aligned address.
+    ///
+    /// A block past the cap is taken from the system allocator wherever
+    /// it likes, so masking its address down to the slab size points at
+    /// as much as a whole slab in front of it, which this process may
+    /// never have asked for. Reading there to decide what the block is
+    /// would be a fault on a legitimate pointer rather than on a bad
+    /// one. The header in front of the payload is always the program's
+    /// own memory, so it is what decides first.
+    ///
+    /// Many at once and each written before release, because the fault
+    /// this guards needs a block whose masked address falls outside the
+    /// region it was taken from, and which allocation that is depends
+    /// on where the allocator happens to be working.
+    #[test]
+    fn a_large_block_is_released_without_reading_below_it() {
+        unsafe {
+            let mut taken = Vec::new();
+            for i in 0..256usize {
+                // Sizes that straddle the cap so both paths are taken,
+                // and none of them a multiple of the slab, so the
+                // addresses do not line up with slab boundaries.
+                let size = MAX_POOLED + 1 + (i * 97) % 4096;
+                let p = zyntax_alloc(size);
+                assert!(!p.is_null(), "allocation {i} of {size} failed");
+                std::ptr::write_bytes(p, i as u8, size);
+                taken.push((p, size, i as u8));
+            }
+            for (p, size, tag) in &taken {
+                assert_eq!(*p.add(size - 1), *tag, "block {tag} was overwritten");
+            }
+            for (p, _, _) in taken {
+                zyntax_free(p);
+            }
+        }
     }
 
     /// A large block released on a different thread than took it is
