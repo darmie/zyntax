@@ -1222,6 +1222,58 @@ impl HirInstruction {
         }
     }
 
+    /// The value this instruction defines, if it defines one.
+    ///
+    /// The counterpart to [`HirInstruction::operands`], and kept beside
+    /// it: a pass walking from operands to results needs both, and a
+    /// variant added to one without the other is the kind of hole that
+    /// reads as a missing use rather than as a missing arm.
+    pub fn result_id(&self) -> Option<HirId> {
+        match self {
+            HirInstruction::Binary { result, .. } => Some(*result),
+            HirInstruction::Unary { result, .. } => Some(*result),
+            HirInstruction::Alloca { result, .. } => Some(*result),
+            HirInstruction::Load { result, .. } => Some(*result),
+            HirInstruction::GetElementPtr { result, .. } => Some(*result),
+            HirInstruction::Cast { result, .. } => Some(*result),
+            HirInstruction::Select { result, .. } => Some(*result),
+            HirInstruction::ExtractValue { result, .. } => Some(*result),
+            HirInstruction::InsertValue { result, .. } => Some(*result),
+            HirInstruction::Atomic { result, .. } => Some(*result),
+            HirInstruction::CreateUnion { result, .. } => Some(*result),
+            HirInstruction::GetUnionDiscriminant { result, .. } => Some(*result),
+            HirInstruction::ExtractUnionValue { result, .. } => Some(*result),
+            HirInstruction::CreateTraitObject { result, .. } => Some(*result),
+            HirInstruction::UpcastTraitObject { result, .. } => Some(*result),
+            HirInstruction::CreateClosure { result, .. } => Some(*result),
+            HirInstruction::CreateRef { result, .. } => Some(*result),
+            HirInstruction::Deref { result, .. } => Some(*result),
+            HirInstruction::Move { result, .. } => Some(*result),
+            HirInstruction::Copy { result, .. } => Some(*result),
+            HirInstruction::CaptureContinuation { result, .. } => Some(*result),
+            HirInstruction::VectorSplat { result, .. } => Some(*result),
+            HirInstruction::VectorExtractLane { result, .. } => Some(*result),
+            HirInstruction::VectorInsertLane { result, .. } => Some(*result),
+            HirInstruction::VectorHorizontalReduce { result, .. } => Some(*result),
+            HirInstruction::VectorLoad { result, .. } => Some(*result),
+            HirInstruction::VectorUnaryOp { result, .. } => Some(*result),
+            HirInstruction::VectorMinMax { result, .. } => Some(*result),
+            HirInstruction::VectorDot { result, .. } => Some(*result),
+            HirInstruction::AsyncLoadSlot { result, .. } => Some(*result),
+            HirInstruction::FiberNew { result, .. } => Some(*result),
+            HirInstruction::FiberResume { result, .. } => Some(*result),
+            HirInstruction::FiberResumeWith { result, .. } => Some(*result),
+            HirInstruction::FiberTransfer { result, .. } => Some(*result),
+            HirInstruction::Call { result, .. } => *result,
+            HirInstruction::IndirectCall { result, .. } => *result,
+            HirInstruction::TraitMethodCall { result, .. } => *result,
+            HirInstruction::CallClosure { result, .. } => *result,
+            HirInstruction::PerformEffect { result, .. } => *result,
+            HirInstruction::HandleEffect { result, .. } => *result,
+            _ => None,
+        }
+    }
+
     /// Get all operand HirIds used by this instruction
     pub fn operands(&self) -> Vec<HirId> {
         let mut ops = Vec::new();

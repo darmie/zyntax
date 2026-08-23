@@ -36,6 +36,7 @@ pub mod const_eval;
 pub mod const_fold;
 pub mod cse;
 pub mod dce; // Reachability-based dead-code elimination at the function level
+pub mod drop_glue; // Recursive release derived from a type's own fields
 pub mod drop_insert; // Speculative drop-site analysis: insert free() for non-escaping mallocs
 pub mod effect_analysis; // Effect inference and checking for algebraic effects
 pub mod effect_codegen; // Code generation support for algebraic effects
@@ -1771,6 +1772,8 @@ pub struct InterpOptStats {
     pub auto_vectorize: auto_vectorize::AutoVectorizeStats,
     pub cfg_simplify: cfg_simplify::CfgSimplifyStats,
     pub drop_insert: drop_insert::DropStats,
+    /// Release functions synthesised for types that own another.
+    pub drop_glue_emitted: usize,
     pub tco: tco::TcoStats,
     pub recursive_inline: inline::RecursiveInlineStats,
     pub pure_call_pre: pure_call_pre::PureCallPreStats,
@@ -2135,6 +2138,13 @@ pub fn run_interp_safe_opts(module: &mut HirModule) -> InterpOptStats {
     //     "use" sites that would otherwise extend the live-range
     //     past the real last use. Running it once at the end means
     //     each malloc gets its tightest legal drop position.
+    // Before the drop sites, because what a release means for a type
+    // that owns another has to exist before a site can be told to use
+    // it. Emits nothing for a program whose types own nothing.
+    if drop_glue::enabled() {
+        stats.drop_glue_emitted += drop_glue::synthesise(module).glue_emitted;
+    }
+
     let di = drop_insert::run_module(module);
     stats.drop_insert.mallocs_scanned += di.mallocs_scanned;
     stats.drop_insert.frees_inserted += di.frees_inserted;

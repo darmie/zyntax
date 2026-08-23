@@ -64,7 +64,7 @@
 use std::collections::HashSet;
 
 use crate::hir::{
-    HirCallable, HirFunction, HirId, HirInstruction, HirModule, HirTerminator, Intrinsic,
+    HirCallable, HirFunction, HirId, HirInstruction, HirModule, HirTerminator, HirType, Intrinsic,
 };
 
 /// Per-run statistics. Mainly for telemetry + test assertions.
@@ -118,6 +118,10 @@ struct ModuleFacts {
     /// module's own key for the function, which is what a call names and
     /// is not always the function's `id` field.
     borrowed_params: std::collections::HashMap<HirId, Vec<bool>>,
+    /// The release function for a named type that owns another, by the
+    /// type's name. An allocation of such a type is released through
+    /// this rather than by a bare free.
+    glue: std::collections::HashMap<zyntax_typed_ast::InternedString, HirId>,
 }
 
 impl ModuleFacts {
@@ -141,9 +145,16 @@ impl ModuleFacts {
         }
         // Borrow facts first: deciding whether an allocation leaves a
         // function needs to know what its calls do with a pointer.
+        let mut glue = std::collections::HashMap::new();
+        for (key, func) in module.functions.iter() {
+            if let Some(ty) = crate::drop_glue::glue_target(func) {
+                glue.insert(ty, *key);
+            }
+        }
         let mut facts = Self {
             returns_owned: std::collections::HashSet::new(),
             borrowed_params,
+            glue,
         };
         facts.returns_owned = functions_returning_owned_storage(module, &facts);
         facts
@@ -342,12 +353,43 @@ fn functions_returning_owned_storage(
             continue;
         }
         let sites = collect_malloc_sites(func);
-        if sites.len() != 1 || sites[0].release != Release::Intrinsic {
+        if sites.is_empty() {
             continue;
         }
-        let site = sites[0];
-        let derived = derived_values(func, site.result);
-        if !escapes_only_by_return(func, &derived, &site, facts) {
+        // More than one allocation transfers only where releasing from
+        // a type's fields is on. Off, a constructor with a branch
+        // stays untransferred, which is what it was before any of this
+        // and what a program releasing by hand depends on.
+        if sites.len() > 1 && !crate::drop_glue::enabled() {
+            continue;
+        }
+        // A box is released by a named symbol the caller would have to
+        // know, and what the caller picks is decided by the returned
+        // type. Only storage the caller can release from the type alone
+        // transfers.
+        if sites
+            .iter()
+            .any(|s| !matches!(s.release, Release::Intrinsic | Release::Glue(_)))
+        {
+            continue;
+        }
+        // Every allocation the function makes, not one. A constructor
+        // with a branch allocates in each arm and returns whichever it
+        // took: `sites.len() != 1` refused all of them, so a type built
+        // by anything more than a single unconditional allocation never
+        // transferred and its callers never released it. The rule is
+        // the same for each: it may leave only by being returned.
+        let mut derived = std::collections::HashSet::new();
+        let mut all_transfer = true;
+        for site in &sites {
+            let d = derived_values(func, site.result);
+            if !escapes_only_by_return(func, &d, site, facts) {
+                all_transfer = false;
+                break;
+            }
+            derived.extend(d);
+        }
+        if !all_transfer {
             continue;
         }
         let mut returns = 0usize;
@@ -417,6 +459,16 @@ fn run_function(func: &mut HirFunction, facts: &ModuleFacts) -> DropStats {
                 insert_free_after(func, block, after_idx, site.result, site.release);
                 stats.frees_inserted += 1;
             }
+            SiteOutcome::MultiBlockDrop { points } => {
+                // Back to front, so an earlier point's index is still
+                // valid after a later one has been spliced in.
+                let mut points = points;
+                points.sort_by(|a, b| b.1.cmp(&a.1));
+                for (block, after_idx) in points {
+                    insert_free_after(func, block, after_idx, site.result, site.release);
+                    stats.frees_inserted += 1;
+                }
+            }
             SiteOutcome::Escaped => stats.escapes_skipped += 1,
             SiteOutcome::MultiBlock => stats.multi_block_skipped += 1,
             SiteOutcome::NoUse => stats.no_use_skipped += 1,
@@ -467,6 +519,10 @@ enum Release {
     Intrinsic,
     /// A named runtime call taking the pointer.
     Symbol(&'static str),
+    /// The type's own release, which frees what its fields own before
+    /// freeing the object. Synthesised by [`crate::drop_glue`]; freeing
+    /// such an object with a bare `Free` would leak everything it holds.
+    Glue(HirId),
 }
 
 /// One allocation we're considering for drop insertion.
@@ -483,7 +539,16 @@ struct MallocSite {
 }
 
 enum SiteOutcome {
-    SingleBlockDrop { block: HirId, after_idx: usize },
+    SingleBlockDrop {
+        block: HirId,
+        after_idx: usize,
+    },
+    /// Released in each block where it is live and no successor keeps
+    /// it so. More than one point because a value can die on two paths
+    /// out of a branch, and each has to release it exactly once.
+    MultiBlockDrop {
+        points: Vec<(HirId, usize)>,
+    },
     Escaped,
     MultiBlock,
     NoUse,
@@ -492,8 +557,36 @@ enum SiteOutcome {
 /// Allocation sites, counting a call whose callee hands back owned
 /// storage: the caller owns that result and is the only one able to
 /// release it.
+/// How storage of the type `result` holds is released.
+///
+/// A type owning nothing is freed outright. One owning another is
+/// released through its own function, which frees what its fields hold
+/// first: freeing such an object with a bare `Free` would drop the only
+/// reference to everything under it.
+fn release_for(func: &HirFunction, result: HirId, facts: &ModuleFacts) -> Release {
+    let Some(ty) = func.values.get(&result).map(|v| &v.ty) else {
+        return Release::Intrinsic;
+    };
+    if let HirType::Ptr(inner) = ty {
+        if let HirType::Struct(s) = &**inner {
+            if let Some(id) = s.name.and_then(|n| facts.glue.get(&n)) {
+                return Release::Glue(*id);
+            }
+        }
+    }
+    Release::Intrinsic
+}
+
 fn collect_owned_sites(func: &HirFunction, facts: &ModuleFacts) -> Vec<MallocSite> {
     let mut sites = collect_malloc_sites(func);
+    // A malloc whose type owns another is released through that type's
+    // own function. Applied after collection so both kinds of site,
+    // the intrinsic and the owned-returning call, pick it up.
+    for site in sites.iter_mut() {
+        if site.release == Release::Intrinsic {
+            site.release = release_for(func, site.result, facts);
+        }
+    }
     for (block_id, block) in &func.blocks {
         for (idx, inst) in block.instructions.iter().enumerate() {
             if let HirInstruction::Call {
@@ -507,7 +600,7 @@ fn collect_owned_sites(func: &HirFunction, facts: &ModuleFacts) -> Vec<MallocSit
                         result: *result,
                         block: *block_id,
                         inst_idx: idx,
-                        release: Release::Intrinsic,
+                        release: release_for(func, *result, facts),
                     });
                 }
             }
@@ -545,6 +638,158 @@ fn collect_malloc_sites(func: &HirFunction) -> Vec<MallocSite> {
         }
     }
     sites
+}
+
+/// Where an allocation dies, when it outlives the block it was made in.
+///
+/// A value is live at a point when some use is still ahead of it. Read
+/// backwards: a block's exit is live if any successor's entry is, and a
+/// block's entry is live if it uses the value or its own exit is. The
+/// definition kills it, so nothing above the allocation is ever called
+/// live and a loop's back edge cannot carry a claim into the iteration
+/// that made it.
+///
+/// The release goes wherever the value is live and no successor keeps
+/// it so. That is one point for a value dying at the end of a loop
+/// body, and one per arm for a value dying inside a branch.
+///
+/// Returns `None` where no such point exists, which is a value that is
+/// live on every exit and so is not this function's to release.
+fn drop_points(
+    func: &HirFunction,
+    site: &MallocSite,
+    derived: &std::collections::HashSet<HirId>,
+    facts: &ModuleFacts,
+) -> Option<Vec<(HirId, usize)>> {
+    // Only blocks the entry can get to. An unreachable one has no
+    // bearing on where the value dies and its successors would drag
+    // liveness around the graph for nothing.
+    let mut reachable = std::collections::HashSet::new();
+    let mut stack = vec![func.entry_block];
+    while let Some(b) = stack.pop() {
+        if !reachable.insert(b) {
+            continue;
+        }
+        if let Some(block) = func.blocks.get(&b) {
+            stack.extend(successors_of(block));
+        }
+    }
+
+    // What each block does with the value: the last instruction that
+    // uses it, and whether the terminator does.
+    let mut last_use: std::collections::HashMap<HirId, usize> = std::collections::HashMap::new();
+    let mut uses_block: std::collections::HashSet<HirId> = std::collections::HashSet::new();
+    for (block_id, block) in &func.blocks {
+        if !reachable.contains(block_id) {
+            continue;
+        }
+        for (idx, inst) in block.instructions.iter().enumerate() {
+            if *block_id == site.block && idx == site.inst_idx {
+                continue;
+            }
+            match classify_derived_use(inst, derived, facts) {
+                UseKind::Use => {
+                    uses_block.insert(*block_id);
+                    let e = last_use.entry(*block_id).or_insert(idx);
+                    *e = (*e).max(idx);
+                }
+                UseKind::Escape => return None,
+                UseKind::None => {}
+            }
+        }
+        match derived
+            .iter()
+            .map(|d| classify_terminator_use(&block.terminator, *d))
+            .fold(UseKind::None, strongest)
+        {
+            UseKind::Use => {
+                uses_block.insert(*block_id);
+            }
+            UseKind::Escape => return None,
+            UseKind::None => {}
+        }
+    }
+    if uses_block.is_empty() {
+        return None;
+    }
+
+    // live_in[B] = B uses it, or its exit is live. The block holding
+    // the allocation kills it: nothing before the call can be holding
+    // what the call has not produced.
+    let mut live_in: std::collections::HashSet<HirId> = std::collections::HashSet::new();
+    let mut live_out: std::collections::HashSet<HirId> = std::collections::HashSet::new();
+    loop {
+        let mut changed = false;
+        for (block_id, block) in &func.blocks {
+            if !reachable.contains(block_id) {
+                continue;
+            }
+            let out = successors_of(block).iter().any(|sc| live_in.contains(sc));
+            if out && live_out.insert(*block_id) {
+                changed = true;
+            }
+            let inn = *block_id != site.block && (uses_block.contains(block_id) || out);
+            if inn && live_in.insert(*block_id) {
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Where it is live and nothing after it is.
+    let mut points = Vec::new();
+    for (block_id, block) in &func.blocks {
+        if !reachable.contains(block_id) {
+            continue;
+        }
+        let holds = *block_id == site.block || live_in.contains(block_id);
+        if !holds || live_out.contains(block_id) {
+            continue;
+        }
+        if !uses_block.contains(block_id) && *block_id != site.block {
+            continue;
+        }
+        // After the last use, or ahead of a terminator that is the only
+        // thing using it. A terminator reads the address rather than
+        // what is at it, so releasing first is still the right order.
+        let at = match last_use.get(block_id) {
+            Some(idx) => idx + 1,
+            None if *block_id == site.block && !uses_block.contains(block_id) => return None,
+            None => block.instructions.len(),
+        };
+        points.push((*block_id, at.saturating_sub(1)));
+    }
+    (!points.is_empty()).then_some(points)
+}
+
+/// A block's successors, read off its terminator rather than off the
+/// cached list, which a pass that rewrote control flow may not have
+/// kept up to date.
+fn successors_of(block: &crate::hir::HirBlock) -> Vec<HirId> {
+    match &block.terminator {
+        HirTerminator::Branch { target } => vec![*target],
+        HirTerminator::CondBranch {
+            true_target,
+            false_target,
+            ..
+        } => vec![*true_target, *false_target],
+        HirTerminator::Switch { default, cases, .. } => {
+            let mut v = vec![*default];
+            v.extend(cases.iter().map(|(_, b)| *b));
+            v
+        }
+        HirTerminator::Invoke { normal, unwind, .. } => vec![*normal, *unwind],
+        HirTerminator::PatternMatch {
+            patterns, default, ..
+        } => {
+            let mut v: Vec<HirId> = patterns.iter().map(|p| p.target).collect();
+            v.extend(default.iter().copied());
+            v
+        }
+        HirTerminator::Return { .. } | HirTerminator::Unreachable => Vec::new(),
+    }
 }
 
 fn analyze_site(func: &HirFunction, site: &MallocSite, facts: &ModuleFacts) -> SiteOutcome {
@@ -592,7 +837,13 @@ fn analyze_site(func: &HirFunction, site: &MallocSite, facts: &ModuleFacts) -> S
                 UseKind::Use => {
                     had_any_use = true;
                     if *block_id != site.block {
-                        return SiteOutcome::MultiBlock;
+                        return match crate::drop_glue::enabled()
+                            .then(|| drop_points(func, site, &derived, facts))
+                            .flatten()
+                        {
+                            Some(points) => SiteOutcome::MultiBlockDrop { points },
+                            None => SiteOutcome::MultiBlock,
+                        };
                     }
                     last_idx_in_block = Some(match last_idx_in_block {
                         Some(prev) => prev.max(idx),
@@ -653,33 +904,52 @@ fn derived_values(func: &HirFunction, root: HirId) -> std::collections::HashSet<
     loop {
         let before = set.len();
         for block in func.blocks.values() {
+            for phi in &block.phis {
+                if phi.incoming.iter().any(|(v, _)| set.contains(v)) {
+                    set.insert(phi.result);
+                }
+            }
             for inst in &block.instructions {
-                match inst {
-                    HirInstruction::InsertValue {
-                        result,
-                        aggregate,
-                        value,
-                        ..
-                    } => {
-                        if set.contains(value) || set.contains(aggregate) {
-                            set.insert(*result);
-                        }
+                // Two shapes produce a value that is not another name
+                // for this storage, and following them would put the
+                // whole program in the set.
+                //
+                // A dereference reads a pointer the allocation holds.
+                // Releasing this one leaves what it held untouched, so
+                // what comes out is a different object with its own
+                // life.
+                //
+                // A call hands back whatever the callee made. Nothing
+                // is given up by not following it: handing the pointer
+                // to a callee that does not merely borrow it is already
+                // an escape, and one that borrows has promised not to
+                // keep it. Following it instead made `t.check()`, an
+                // integer, an alias of the tree, and printing that
+                // integer read as the tree escaping.
+                if matches!(
+                    inst,
+                    HirInstruction::Load { .. }
+                        | HirInstruction::Call { .. }
+                        | HirInstruction::IndirectCall { .. }
+                        | HirInstruction::TraitMethodCall { .. }
+                        | HirInstruction::CallClosure { .. }
+                ) {
+                    continue;
+                }
+                // Anything else computing a value from one of these is
+                // another name for the same storage. Asked through
+                // `operands`, which every instruction answers, rather
+                // than through a list of the kinds thought of at the
+                // time: a kind left out of a list reads as a value the
+                // allocation never reaches, and a use through it as no
+                // use at all, which puts the release in front of it.
+                // The GEP a struct literal takes to reach a field was
+                // exactly that, and the store through it landed after
+                // the free.
+                if inst.operands().iter().any(|o| set.contains(o)) {
+                    if let Some(result) = inst.result_id() {
+                        set.insert(result);
                     }
-                    HirInstruction::ExtractValue {
-                        result, aggregate, ..
-                    } => {
-                        if set.contains(aggregate) {
-                            set.insert(*result);
-                        }
-                    }
-                    HirInstruction::Cast {
-                        result, operand, ..
-                    } => {
-                        if set.contains(operand) {
-                            set.insert(*result);
-                        }
-                    }
-                    _ => {}
                 }
             }
         }
@@ -941,6 +1211,7 @@ fn insert_free_after(
         callee: match release {
             Release::Intrinsic => HirCallable::Intrinsic(Intrinsic::Free),
             Release::Symbol(name) => HirCallable::Symbol(name.to_string()),
+            Release::Glue(id) => HirCallable::Function(id),
         },
         args: vec![target],
         type_args: Vec::new(),
@@ -1070,6 +1341,92 @@ mod tests {
                 assert_eq!(args, &vec![ptr]);
             }
             other => panic!("expected Free call, got {other:?}"),
+        }
+    }
+
+    /// A pointer reached through a field pointer keeps the object alive.
+    ///
+    /// This is the shape the struct-literal lowering emits: allocate,
+    /// then for each field a byte-offset GEP, a bitcast, and a store
+    /// through the result. The allocation is used at the GEP and again,
+    /// through what the GEP produced, at the store.
+    ///
+    /// `derived_values` follows a pointer through `InsertValue`,
+    /// `ExtractValue` and `Cast` and stopped there, so the GEP's result
+    /// was not one of the allocation's own values and a store through it
+    /// was not one of its uses. The last use read as the GEP, and the
+    /// release went in ahead of the store that followed it.
+    ///
+    /// The asymmetry is what makes this worth pinning: an unclassified
+    /// *use* is called an escape and costs a missed release, while an
+    /// untracked *alias* costs a release that is too early. One leaks
+    /// and the other writes through freed memory.
+    #[test]
+    fn a_pointer_reached_through_a_field_pointer_is_still_a_use() {
+        let mut f = HirFunction::new(
+            InternedString::new_global("through_a_field"),
+            empty_sig(HirType::Void),
+        );
+        let entry = *f.blocks.keys().next().unwrap();
+        let size = add_const(&mut f, HirType::I64, HirConstant::I64(24));
+        let zero = add_const(&mut f, HirType::I64, HirConstant::I64(0));
+        let seven = add_const(&mut f, HirType::I64, HirConstant::I64(7));
+        let ptr = add_inst_val(&mut f, HirType::Ptr(Box::new(HirType::I64)));
+        let gep = add_inst_val(&mut f, HirType::Ptr(Box::new(HirType::U8)));
+        let slot = add_inst_val(&mut f, HirType::Ptr(Box::new(HirType::I64)));
+
+        let block = f.blocks.get_mut(&entry).unwrap();
+        block.instructions.push(HirInstruction::Call {
+            result: Some(ptr),
+            callee: HirCallable::Intrinsic(Intrinsic::Malloc),
+            args: vec![size],
+            type_args: Vec::new(),
+            const_args: Vec::new(),
+            is_tail: false,
+        });
+        block.instructions.push(HirInstruction::GetElementPtr {
+            result: gep,
+            ty: HirType::U8,
+            ptr,
+            indices: vec![zero],
+        });
+        block.instructions.push(HirInstruction::Cast {
+            op: crate::hir::CastOp::Bitcast,
+            result: slot,
+            ty: HirType::Ptr(Box::new(HirType::I64)),
+            operand: gep,
+        });
+        block.instructions.push(HirInstruction::Store {
+            value: seven,
+            ptr: slot,
+            align: 8,
+            volatile: false,
+        });
+        block.terminator = HirTerminator::Return { values: vec![] };
+
+        run_function(&mut f, &ModuleFacts::default());
+
+        let block = f.blocks.values().next().unwrap();
+        let free_at = block.instructions.iter().position(|i| {
+            matches!(
+                i,
+                HirInstruction::Call {
+                    callee: HirCallable::Intrinsic(Intrinsic::Free),
+                    ..
+                }
+            )
+        });
+        let store_at = block
+            .instructions
+            .iter()
+            .position(|i| matches!(i, HirInstruction::Store { .. }))
+            .expect("the store should still be there");
+        if let Some(free_at) = free_at {
+            assert!(
+                free_at > store_at,
+                "the release went in at {free_at}, ahead of the store at \
+                 {store_at} that writes through the same allocation"
+            );
         }
     }
 
