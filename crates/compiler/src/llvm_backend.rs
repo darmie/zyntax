@@ -3334,6 +3334,23 @@ impl<'ctx> LLVMBackend<'ctx> {
         ))
     }
 
+    /// An operand of a comparison, with a pointer reduced to its
+    /// address.
+    ///
+    /// `is_int_value()` answers no for a pointer, so a comparison
+    /// against one took the float branch and asked LLVM for `fcmp` on
+    /// an address. Comparing addresses is what `p == null` and
+    /// `p != q` mean, and an address is an integer once it is one.
+    fn comparison_operand(&self, v: BasicValueEnum<'ctx>) -> CompilerResult<BasicValueEnum<'ctx>> {
+        if !v.is_pointer_value() {
+            return Ok(v);
+        }
+        Ok(self
+            .builder
+            .build_ptr_to_int(v.into_pointer_value(), self.context.i64_type(), "ptr_addr")?
+            .into())
+    }
+
     fn compile_binary_op(
         &mut self,
         op: BinaryOp,
@@ -3345,6 +3362,20 @@ impl<'ctx> LLVMBackend<'ctx> {
         // Float op with a mixed or narrower operand: coerce both to one float
         // type so `into_float_value()` never sees an int and the IR is valid.
         let (left, right) = self.reconcile_float_binary_operands(left, right)?;
+
+        // A comparison involving a pointer compares addresses. Done for
+        // both operands so a pointer against an integer zero, which is
+        // how a null literal arrives, meets it as one.
+        let (left, right) = if matches!(op, Eq | Ne | Lt | Le | Gt | Ge)
+            && (left.is_pointer_value() || right.is_pointer_value())
+        {
+            (
+                self.comparison_operand(left)?,
+                self.comparison_operand(right)?,
+            )
+        } else {
+            (left, right)
+        };
 
         let result = match op {
             // Integer arithmetic
@@ -4043,20 +4074,25 @@ impl<'ctx> LLVMBackend<'ctx> {
 
                 // Return value (or void).
                 //
-                // A bound result on a void callee is not a disagreement
-                // worth refusing. A function written without a return
-                // type lowers its definition to `-> void`, while its
-                // call sites take the `HirType::I64` that `ssa.rs`
-                // assumes for an unannotated callee, so the two differ
-                // by construction rather than by mistake. Nothing can
-                // read the value either, because the callee returns
-                // none. Cranelift has always answered this with a
-                // stand-in; refusing it here disabled the whole LLVM
-                // tier for any program with a void function, silently,
-                // and published Cranelift's numbers under LLVM's name.
+                // A bound result on a void callee is a real
+                // disagreement and is refused. The call-site table and
+                // the callee's signature both come from
+                // `return_infer::effective_return_type`, so a function
+                // with no annotation is `Unit` on both sides and this
+                // cannot arise from that.
+                //
+                // It did once, when the call site answered `I64` for a
+                // `Void` entry. Tolerating it here would have hidden
+                // the mismatch rather than removed it.
                 match call_site.try_as_basic_value() {
                     ValueKind::Basic(val) => Ok(val),
-                    ValueKind::Instruction(_) => Ok(self.context.i32_type().get_undef().into()),
+                    ValueKind::Instruction(_) if !expects_value => {
+                        Ok(self.context.i32_type().get_undef().into())
+                    }
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(format!(
+                        "call to {} returns void but its result is bound",
+                        function.get_name().to_string_lossy()
+                    ))),
                 }
             }
             HirCallable::Indirect(func_ptr_id) => {
@@ -4164,7 +4200,12 @@ impl<'ctx> LLVMBackend<'ctx> {
                 match call_site.try_as_basic_value() {
                     ValueKind::Basic(val) => Ok(val),
                     // Same reasoning as the direct call above.
-                    ValueKind::Instruction(_) => Ok(self.context.i32_type().get_undef().into()),
+                    ValueKind::Instruction(_) if !expects_value => {
+                        Ok(self.context.i32_type().get_undef().into())
+                    }
+                    ValueKind::Instruction(_) => Err(CompilerError::CodeGen(
+                        "indirect call returns void but its result is bound".to_string(),
+                    )),
                 }
             }
             HirCallable::Intrinsic(intrinsic) => self.compile_intrinsic(*intrinsic, args),

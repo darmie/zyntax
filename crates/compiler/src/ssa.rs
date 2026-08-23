@@ -113,7 +113,11 @@ fn default_const_for(ty: &HirType) -> crate::hir::HirConstant {
 // and Bodies 2..4 read uninitialised stack → NaN → `as i64` (fcvt_to_sint)
 // traps as UDF 0xc11f at runtime. Mirrors `size_of_hir_ty` in
 // `aggregate_split.rs`; kept local to avoid widening that module's API.
-fn hir_ty_size(ty: &HirType) -> usize {
+//
+// Shared with `drop_glue`, which reads a field back out of the layout
+// this computes. The two have to agree on where a field sits or a
+// release reads one from the wrong offset.
+pub(crate) fn hir_ty_size(ty: &HirType) -> usize {
     match ty {
         HirType::Bool | HirType::I8 | HirType::U8 => 1,
         HirType::I16 | HirType::U16 => 2,
@@ -346,6 +350,13 @@ pub struct SsaBuilder {
     /// program defines is that definition, not a built-in that happens
     /// to share the spelling.
     body_fn_names: HashSet<InternedString>,
+    /// Types whose fields `convert_type` is part-way through expanding.
+    ///
+    /// A type that reaches itself through one of its own fields would
+    /// otherwise expand forever. Consulted by [`SsaBuilder::convert_type`],
+    /// which hands back an unexpanded pointer to the name instead of
+    /// descending a second time.
+    converting: std::cell::RefCell<HashSet<InternedString>>,
 }
 
 /// Context for pattern matching
@@ -667,6 +678,7 @@ impl SsaBuilder {
             builtin_registry,
             fiber_fn_names: HashSet::new(),
             body_fn_names: HashSet::new(),
+            converting: Default::default(),
         }
     }
 
@@ -715,6 +727,7 @@ impl SsaBuilder {
             builtin_registry: Arc::new(crate::builtin_class::BuiltinRegistry::with_defaults()),
             fiber_fn_names: HashSet::new(),
             body_fn_names: HashSet::new(),
+            converting: Default::default(),
             function,
         };
         // Pre-register all existing blocks in the definitions map
@@ -4764,7 +4777,20 @@ impl SsaBuilder {
                         let value = match &declared_params {
                             Some(params) => {
                                 let target = params[i].clone();
-                                self.coerce_for_transfer(block_id, value, arg, &target)
+                                let value = self.coerce_for_transfer(block_id, value, arg, &target);
+                                // And at the width the parameter declares.
+                                // An integer literal types itself `i32`, so
+                                // `f(0)` handed four bytes to a function
+                                // compiled to take eight. Cranelift widens
+                                // it on the way in; LLVM reads the same IR
+                                // as a call that does not match its own
+                                // callee and refuses the module.
+                                if matches!(target, Type::Primitive(_)) {
+                                    let want = self.convert_type(&target);
+                                    self.coerce_scalar_to(block_id, value, &want)
+                                } else {
+                                    value
+                                }
                             }
                             None => value,
                         };
@@ -4815,30 +4841,24 @@ impl SsaBuilder {
                                 .get(&fk)
                                 .map(|rt| self.convert_type(rt))
                         });
-                        if let Some(resolved) = from_table {
-                            if resolved != HirType::Void {
-                                resolved
-                            } else {
-                                // Parser defaulted to Unit — for user-defined functions
-                                // that aren't known to be void (println, eprintln, etc.),
-                                // default to I64 since all Cranelift calls return i64
-                                let is_builtin_void = callee_func_key.map_or(false, |fk| {
-                                    let name = fk.resolve_global().unwrap_or_default();
-                                    matches!(
-                                        name.as_str(),
-                                        "println" | "print" | "eprintln" | "eprint"
-                                    )
-                                });
-                                if is_builtin_void {
-                                    raw
-                                } else {
-                                    // User function with no return type annotation — assume I64
-                                    HirType::I64
-                                }
-                            }
-                        } else {
-                            raw
-                        }
+                        // Taken as stated, including when it is `Void`.
+                        // The table and the signature the callee is
+                        // compiled with both come from
+                        // `return_infer::effective_return_type`, which
+                        // exists so the two cannot disagree: a function
+                        // with no annotation and no path returning a
+                        // value is `Unit` on both sides.
+                        //
+                        // This used to answer `I64` for a `Void` entry
+                        // unless the callee was one of four builtins
+                        // named here, on the reasoning that every
+                        // Cranelift call returns i64. It made the call
+                        // site contradict the definition for every
+                        // function written without a return type, which
+                        // Cranelift absorbed and LLVM refused, taking
+                        // the whole LLVM tier down for any program
+                        // containing one.
+                        from_table.unwrap_or(raw)
                     } else {
                         raw
                     }
@@ -5079,6 +5099,7 @@ impl SsaBuilder {
                 let object_hir_ty = self.function.values.get(&object_val).map(|v| v.ty.clone());
                 if let Some(HirType::Ptr(ref pointee)) = object_hir_ty {
                     if let HirType::Struct(ref hir_struct) = **pointee {
+                        let hir_struct = &self.struct_body(hir_struct);
                         if let Some(field_ty) = hir_struct.fields.get(field_index as usize).cloned()
                         {
                             // Per-field natural-alignment offset, mirroring
@@ -5732,15 +5753,15 @@ impl SsaBuilder {
                         // expect.
                         let field_typed_types = self.get_field_typed_types(&expr.ty);
                         for (i, field) in struct_lit.fields.iter().enumerate() {
+                            let field_ty = hir_struct.fields[i].clone();
                             let mut field_val =
-                                self.translate_expression(block_id, &field.value)?;
+                                self.translate_expecting(block_id, &field.value, &field_ty)?;
                             if let Some(types) = field_typed_types.as_ref() {
                                 if matches!(types.get(i), Some(Type::Any)) {
                                     field_val = self.maybe_box_for_any_field(block_id, field_val);
                                 }
                             }
                             let offset = offsets[i] as i64;
-                            let field_ty = hir_struct.fields[i].clone();
 
                             // Coerce the initializer to the field's declared
                             // width before storing. An integer literal types as
@@ -6429,83 +6450,99 @@ impl SsaBuilder {
                 let result_type = if matches!(expr.ty, Type::Any | Type::Unknown) {
                     let mangled_str = mangled_name.resolve_global().unwrap_or_default();
 
-                    // Check common return type suffixes for Tensor methods
-                    // Methods like sum_f32, mean_f32 return f32
-                    // Methods like zeros, ones, arange return Tensor (opaque ptr)
-                    let hir_type = if mangled_str.ends_with("_f32")
-                        || mangled_str.contains("$sum")
-                        || mangled_str.contains("$mean")
-                        || mangled_str.contains("$max")
-                        || mangled_str.contains("$min")
-                        || mangled_str.contains("$std")
-                        || mangled_str.contains("$var")
-                    {
-                        // Reduction methods that return f32
-                        log::debug!(
-                            "[METHOD_CALL] Inferred F32 return type for '{}'",
-                            mangled_str
-                        );
-                        HirType::F32
-                    } else if mangled_str.contains("$ndim") || mangled_str.contains("$numel") {
-                        // Methods that return i64
-                        log::debug!(
-                            "[METHOD_CALL] Inferred I64 return type for '{}'",
-                            mangled_str
-                        );
-                        HirType::I64
-                    } else if let Type::Named { id, .. } = &receiver_type {
-                        // Fall back to looking up in trait implementations for named types
-                        let receiver_type_id = *id;
-                        // Also get the type name for matching extern impls
-                        let receiver_type_name = self
-                            .type_registry
-                            .get_type_by_id(receiver_type_id)
-                            .map(|td| td.name);
-                        let mut method_return_type = None;
-                        for (_trait_id, impls) in self.type_registry.iter_implementations() {
-                            for impl_def in impls {
-                                let impl_matches = match &impl_def.for_type {
-                                    Type::Named {
-                                        id: impl_type_id, ..
-                                    } => *impl_type_id == receiver_type_id,
-                                    Type::Extern { name, .. } => {
-                                        // Extern type impls match by name
-                                        receiver_type_name.map_or(false, |n| n == *name)
-                                    }
-                                    Type::Unresolved(name) => {
-                                        receiver_type_name.map_or(false, |n| n == *name)
-                                    }
-                                    _ => false,
-                                };
-                                if impl_matches {
-                                    for method in &impl_def.methods {
-                                        if method.signature.name == method_call.method {
-                                            method_return_type =
-                                                Some(method.signature.return_type.clone());
-                                            break;
+                    // What the callee is being compiled with, when it is
+                    // one this program declares. Taken as stated,
+                    // including when it is `Void`: the table and the
+                    // callee's own signature both come from
+                    // `return_infer::effective_return_type`, so the two
+                    // cannot disagree. The guesses below run only for a
+                    // method with no entry, an extern one, and they end
+                    // in an `I64` assumption that would otherwise bind a
+                    // result to a call that returns nothing, which
+                    // Cranelift absorbs and LLVM refuses, taking the
+                    // whole tier down for any program with a method
+                    // written without a return type.
+                    if let Some(declared) = self.function_return_types.get(&mangled_name).cloned() {
+                        self.convert_type(&declared)
+                    } else {
+                        // Check common return type suffixes for Tensor methods
+                        // Methods like sum_f32, mean_f32 return f32
+                        // Methods like zeros, ones, arange return Tensor (opaque ptr)
+                        let hir_type = if mangled_str.ends_with("_f32")
+                            || mangled_str.contains("$sum")
+                            || mangled_str.contains("$mean")
+                            || mangled_str.contains("$max")
+                            || mangled_str.contains("$min")
+                            || mangled_str.contains("$std")
+                            || mangled_str.contains("$var")
+                        {
+                            // Reduction methods that return f32
+                            log::debug!(
+                                "[METHOD_CALL] Inferred F32 return type for '{}'",
+                                mangled_str
+                            );
+                            HirType::F32
+                        } else if mangled_str.contains("$ndim") || mangled_str.contains("$numel") {
+                            // Methods that return i64
+                            log::debug!(
+                                "[METHOD_CALL] Inferred I64 return type for '{}'",
+                                mangled_str
+                            );
+                            HirType::I64
+                        } else if let Type::Named { id, .. } = &receiver_type {
+                            // Fall back to looking up in trait implementations for named types
+                            let receiver_type_id = *id;
+                            // Also get the type name for matching extern impls
+                            let receiver_type_name = self
+                                .type_registry
+                                .get_type_by_id(receiver_type_id)
+                                .map(|td| td.name);
+                            let mut method_return_type = None;
+                            for (_trait_id, impls) in self.type_registry.iter_implementations() {
+                                for impl_def in impls {
+                                    let impl_matches = match &impl_def.for_type {
+                                        Type::Named {
+                                            id: impl_type_id, ..
+                                        } => *impl_type_id == receiver_type_id,
+                                        Type::Extern { name, .. } => {
+                                            // Extern type impls match by name
+                                            receiver_type_name.map_or(false, |n| n == *name)
                                         }
+                                        Type::Unresolved(name) => {
+                                            receiver_type_name.map_or(false, |n| n == *name)
+                                        }
+                                        _ => false,
+                                    };
+                                    if impl_matches {
+                                        for method in &impl_def.methods {
+                                            if method.signature.name == method_call.method {
+                                                method_return_type =
+                                                    Some(method.signature.return_type.clone());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if method_return_type.is_some() {
+                                        break;
                                     }
                                 }
                                 if method_return_type.is_some() {
                                     break;
                                 }
                             }
-                            if method_return_type.is_some() {
-                                break;
-                            }
-                        }
-                        let typed_return_type = method_return_type
-                            .unwrap_or(Type::Primitive(zyntax_typed_ast::PrimitiveType::I64));
-                        self.convert_type(&typed_return_type)
-                    } else {
-                        // For extern types, assume opaque return (returns same type as receiver)
-                        log::debug!(
-                            "[METHOD_CALL] Assuming opaque return type for extern method '{}'",
-                            mangled_str
-                        );
-                        self.convert_type(&receiver_type)
-                    };
-                    hir_type
+                            let typed_return_type = method_return_type
+                                .unwrap_or(Type::Primitive(zyntax_typed_ast::PrimitiveType::I64));
+                            self.convert_type(&typed_return_type)
+                        } else {
+                            // For extern types, assume opaque return (returns same type as receiver)
+                            log::debug!(
+                                "[METHOD_CALL] Assuming opaque return type for extern method '{}'",
+                                mangled_str
+                            );
+                            self.convert_type(&receiver_type)
+                        };
+                        hir_type
+                    }
                 } else {
                     // Use the annotated type from the expression
                     self.convert_type(&expr.ty)
@@ -8809,6 +8846,74 @@ impl SsaBuilder {
     /// comparison changes meaning. In particular `Some(1) == Some(2)`
     /// still takes the ordinary path rather than becoming a variant
     /// test that would call them equal.
+    /// A struct body to read a layout out of, expanding it if the one
+    /// on hand was left unexpanded by [`SsaBuilder::convert_fields_of`].
+    ///
+    /// Stopping a self-referential expansion leaves the inner mention of
+    /// the type with no fields. That is the correct width for the
+    /// pointer holding it and the wrong thing to compute an offset
+    /// from, so a read through such a pointer expands the name once
+    /// more here. The expansion terminates for the same reason the
+    /// first one did: it stops when it reaches the type it started at.
+    fn struct_body(&self, s: &crate::hir::HirStructType) -> crate::hir::HirStructType {
+        if !s.fields.is_empty() {
+            return s.clone();
+        }
+        let Some(name) = s.name else {
+            return s.clone();
+        };
+        let Some(type_def) = self.type_registry.get_type_by_name(name) else {
+            return s.clone();
+        };
+        crate::hir::HirStructType {
+            name: Some(name),
+            fields: self.convert_fields_of(type_def),
+            packed: s.packed,
+        }
+    }
+
+    /// Whether an expression is the word `null`.
+    ///
+    /// `null_literal` is an atomic grammar rule with no action of its
+    /// own, so the word arrives as a name rather than a literal; the
+    /// resolver may also have rewritten it to the variant it names.
+    /// Both spellings mean the same thing and it is reserved, so
+    /// nothing else can be called it.
+    fn is_null_expr(
+        e: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+    ) -> bool {
+        use zyntax_typed_ast::typed_ast::{TypedExpression, TypedLiteral};
+        match &e.node {
+            TypedExpression::Literal(TypedLiteral::Null) => true,
+            TypedExpression::Variable(name) => name
+                .resolve_global()
+                .is_some_and(|n| n == "null" || n == "None"),
+            _ => false,
+        }
+    }
+
+    /// Translate an expression knowing the type it is going into.
+    ///
+    /// Only `null` reads differently for knowing: on its own it is an
+    /// optional's absent variant, and stored into a pointer it is that
+    /// pointer's zero. Writing the union into a pointer-shaped slot
+    /// instead put a tag where an address belonged, which is what a
+    /// self-referential node type does on every leaf it builds.
+    fn translate_expecting(
+        &mut self,
+        block_id: HirId,
+        expr: &zyntax_typed_ast::TypedNode<zyntax_typed_ast::typed_ast::TypedExpression>,
+        expected: &HirType,
+    ) -> CompilerResult<HirId> {
+        if matches!(expected, HirType::Ptr(_)) && Self::is_null_expr(expr) {
+            return Ok(self.create_value(
+                expected.clone(),
+                HirValueKind::Constant(crate::hir::HirConstant::I64(0)),
+            ));
+        }
+        self.translate_expression(block_id, expr)
+    }
+
     fn translate_null_comparison(
         &mut self,
         block_id: HirId,
@@ -8818,18 +8923,7 @@ impl SsaBuilder {
     ) -> CompilerResult<Option<HirId>> {
         use zyntax_typed_ast::typed_ast::{BinaryOp as FrontendOp, TypedExpression, TypedLiteral};
 
-        // `null_literal` is an atomic rule with no action of its own, so
-        // the word arrives here as a name rather than a literal. It is
-        // reserved by the grammar, so nothing else can be called it.
-        let is_null = |e: &zyntax_typed_ast::TypedNode<TypedExpression>| match &e.node {
-            TypedExpression::Literal(TypedLiteral::Null) => true,
-            // The resolver rewrites the word to the variant it names
-            // before this point, so that is what actually arrives.
-            TypedExpression::Variable(name) => name
-                .resolve_global()
-                .is_some_and(|n| n == "null" || n == "None"),
-            _ => false,
-        };
+        let is_null = Self::is_null_expr;
         let operand = if is_null(right) {
             left
         } else if is_null(left) {
@@ -10416,6 +10510,33 @@ impl SsaBuilder {
     ///
     /// This is the builder's standard frontend-to-IR type conversion used by
     /// Zyntax lowering and by compiler extensions using the public builder.
+    /// Expand a type definition's fields, refusing to descend into a
+    /// type already being expanded.
+    ///
+    /// A node type holds two of its own kind. Expanding those fields
+    /// expands the type again, and the second expansion reaches the
+    /// same two fields, so a definition that mentions itself used to
+    /// run the compiler out of stack rather than compile. Nothing is
+    /// lost by stopping: a `@reference` type is a pointer wherever it
+    /// appears, and a pointer's width does not depend on what it points
+    /// at. Every use site converts the field's declared type on its
+    /// own, outside this expansion, and so still sees a full layout.
+    fn convert_fields_of(
+        &self,
+        type_def: &zyntax_typed_ast::type_registry::TypeDefinition,
+    ) -> Vec<HirType> {
+        if !self.converting.borrow_mut().insert(type_def.name) {
+            return Vec::new();
+        }
+        let fields = type_def
+            .fields
+            .iter()
+            .map(|field| self.convert_type(&field.ty))
+            .collect();
+        self.converting.borrow_mut().remove(&type_def.name);
+        fields
+    }
+
     pub fn convert_type(&self, ty: &Type) -> HirType {
         use zyntax_typed_ast::PrimitiveType;
 
@@ -10671,11 +10792,7 @@ impl SsaBuilder {
                             type_def.fields.len()
                         );
 
-                        let hir_fields: Vec<HirType> = type_def
-                            .fields
-                            .iter()
-                            .map(|field| self.convert_type(&field.ty))
-                            .collect();
+                        let hir_fields: Vec<HirType> = self.convert_fields_of(type_def);
 
                         return HirType::Struct(HirStructType {
                             name: Some(type_def.name),
@@ -10686,11 +10803,7 @@ impl SsaBuilder {
 
                     // Regular Named types (structs, classes, enums) convert to struct types
                     // Convert the fields to HIR types
-                    let hir_fields: Vec<HirType> = type_def
-                        .fields
-                        .iter()
-                        .map(|field| self.convert_type(&field.ty))
-                        .collect();
+                    let hir_fields: Vec<HirType> = self.convert_fields_of(type_def);
 
                     // Strict V1 reference-class lowering: classes annotated
                     // with `@reference` use heap layout — instances are
@@ -10743,11 +10856,7 @@ impl SsaBuilder {
 
                     // Abstract types are zero-cost wrappers with struct layout
                     if let TypeKind::Abstract { .. } = &type_def.kind {
-                        let hir_fields: Vec<HirType> = type_def
-                            .fields
-                            .iter()
-                            .map(|field| self.convert_type(&field.ty))
-                            .collect();
+                        let hir_fields: Vec<HirType> = self.convert_fields_of(type_def);
 
                         return HirType::Struct(HirStructType {
                             name: Some(type_def.name),
@@ -10757,11 +10866,7 @@ impl SsaBuilder {
                     }
 
                     // Regular types (structs, classes, enums) convert to struct types
-                    let hir_fields: Vec<HirType> = type_def
-                        .fields
-                        .iter()
-                        .map(|field| self.convert_type(&field.ty))
-                        .collect();
+                    let hir_fields: Vec<HirType> = self.convert_fields_of(type_def);
 
                     // Same `@reference` heap-layout check the `Type::Named`
                     // arm above performs — Unresolved arrived here because
@@ -11852,6 +11957,7 @@ impl SsaBuilder {
                 let object_hir_ty = self.function.values.get(&object_val).map(|v| v.ty.clone());
                 if let Some(HirType::Ptr(ref pointee)) = object_hir_ty {
                     if let HirType::Struct(ref hir_struct) = **pointee {
+                        let hir_struct = &self.struct_body(hir_struct);
                         if let Some(field_ty) = hir_struct.fields.get(field_index as usize).cloned()
                         {
                             // Compute byte offset (natural alignment, same

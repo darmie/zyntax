@@ -232,7 +232,7 @@ fn the_compiled_tensor_agrees_with_the_interpreted_one() {
     // `c` was built from it is what a shared destination would break.
     const EXPECTED: f64 = 48.0;
 
-    let mut rt = build(kernel);
+    let rt = build(kernel);
     let mut cfg = TieredConfig::default();
     cfg.profile_config.warm_threshold = 1;
     rt.install_interp_jit_with(cfg).expect("install interp JIT");

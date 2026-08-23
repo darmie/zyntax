@@ -1804,6 +1804,7 @@ impl AstHostFunctions for TypedAstBuilder {
                                     attributes: vec![],
                                     kind: ParameterKind::Regular,
                                     span: p.span,
+                                    ownership: p.ownership,
                                 }
                             })
                             .collect();
@@ -1895,6 +1896,7 @@ impl AstHostFunctions for TypedAstBuilder {
                                     attributes: vec![],
                                     kind: ParameterKind::Regular,
                                     span: p.span,
+                                    ownership: p.ownership,
                                 }
                             })
                             .collect();
@@ -3289,6 +3291,7 @@ impl AstHostFunctions for TypedAstBuilder {
                             default_value: None,
                             attributes: Vec::new(),
                             span: p.span,
+                            ownership: Default::default(),
                         })
                         .collect();
                     let method = TypedMethod {
@@ -3368,6 +3371,7 @@ impl AstHostFunctions for TypedAstBuilder {
                     default_value: None,
                     attributes: Vec::new(),
                     span,
+                    ownership: Default::default(),
                 })
             })
             .collect();

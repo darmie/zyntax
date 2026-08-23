@@ -1489,6 +1489,7 @@ impl<'g> GrammarInterpreter<'g> {
                                         default_value: p.default_value,
                                         attributes: p.attributes,
                                         span: p.span,
+                                        ownership: p.ownership,
                                     }
                                 })
                                 .collect();

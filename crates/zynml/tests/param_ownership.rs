@@ -101,3 +101,54 @@ def add(a: i64, b: f64): i64 { return a }
     );
     assert_eq!(m, vec![ParamOwnership::Copied, ParamOwnership::Copied]);
 }
+
+/// `own` on a method's receiver reaches the IR the way it does on a
+/// free function's parameter.
+///
+/// A method is lowered through a `TypedFunction` built from it, and
+/// what that construction carries decides whether an annotation on the
+/// receiver survives. `own self: Node` parses, so a program can write
+/// it; this is whether writing it means anything.
+#[test]
+fn own_on_a_receiver_reaches_the_ir() {
+    let m = modes(
+        r#"
+import prelude
+
+@reference
+struct Node { left: Node, right: Node, item: i64 }
+
+impl Node {
+    def dispose(own self: Node) { free(self as Ptr<i8>) }
+    def peek(self): i64 { return self.item }
+}
+"#,
+        "Node$dispose",
+    );
+    assert_eq!(
+        m,
+        vec![ParamOwnership::Owned],
+        "a receiver written `own` should consume, or the only way to \
+         say a method releases its receiver is accepted and ignored"
+    );
+}
+
+/// And a receiver with nothing stated is still a borrow, so the check
+/// above is about `own` rather than about receivers in general.
+#[test]
+fn a_plain_receiver_is_borrowed() {
+    let m = modes(
+        r#"
+import prelude
+
+@reference
+struct Node { left: Node, right: Node, item: i64 }
+
+impl Node {
+    def peek(self): i64 { return self.item }
+}
+"#,
+        "Node$peek",
+    );
+    assert_eq!(m, vec![ParamOwnership::Borrowed]);
+}

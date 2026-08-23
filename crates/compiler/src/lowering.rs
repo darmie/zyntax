@@ -251,6 +251,13 @@ pub struct LoweringContext {
     pub symbols: SymbolTable,
     /// Diagnostics collector (RefCell for interior mutability — convert_type is &self)
     pub diagnostics: std::cell::RefCell<zyntax_typed_ast::diagnostics::DiagnosticCollector>,
+    /// Types whose fields `convert_type` is part-way through expanding.
+    ///
+    /// A type reached through one of its own fields would otherwise
+    /// expand forever. It is a pointer wherever it appears, and a
+    /// pointer's width does not depend on what it points at, so the
+    /// second expansion is refused and the name alone is carried.
+    converting: std::cell::RefCell<std::collections::HashSet<InternedString>>,
     /// Configuration options
     pub config: LoweringConfig,
     /// Vtable registry for trait dispatch
@@ -522,6 +529,7 @@ impl LoweringContext {
             type_registry,
             arena,
             symbols,
+            converting: Default::default(),
             diagnostics: std::cell::RefCell::new(
                 zyntax_typed_ast::diagnostics::DiagnosticCollector::new(),
             ),
@@ -4083,6 +4091,23 @@ impl LoweringContext {
 
                     match &type_def.kind {
                         zyntax_typed_ast::TypeKind::Struct { fields, .. } => {
+                            // A node type holds two of its own kind. Expanding
+                            // those reaches the same two fields again, so a
+                            // definition that mentions itself is carried as the
+                            // name alone the second time round and the layout
+                            // is expanded again at the use site that needs one.
+                            if !self.converting.borrow_mut().insert(type_def.name) {
+                                let opaque = HirType::Struct(crate::hir::HirStructType {
+                                    name: Some(type_def.name),
+                                    fields: Vec::new(),
+                                    packed: false,
+                                });
+                                return if type_def.metadata.is_reference {
+                                    HirType::Ptr(Box::new(opaque))
+                                } else {
+                                    opaque
+                                };
+                            }
                             // Convert struct fields, specializing field types by
                             // the use-site type/const arguments so a generic
                             // `Buffer<T, const N>` used as `Buffer<f32, 4>` lowers
@@ -4127,6 +4152,7 @@ impl LoweringContext {
                                         })
                                         .collect()
                                 };
+                            self.converting.borrow_mut().remove(&type_def.name);
 
                             // Strict V1 reference-class lowering: classes
                             // annotated with `@reference` use heap layout —
@@ -4218,11 +4244,19 @@ impl LoweringContext {
                             // Abstract types are zero-cost wrappers with struct layout
                             // Convert them as structs so field access works
                             // Fields are stored in type_def.fields, not in the TypeKind::Abstract itself
+                            if !self.converting.borrow_mut().insert(type_def.name) {
+                                return HirType::Struct(crate::hir::HirStructType {
+                                    name: Some(type_def.name),
+                                    fields: Vec::new(),
+                                    packed: false,
+                                });
+                            }
                             let field_types: Vec<_> = type_def
                                 .fields
                                 .iter()
                                 .map(|field| self.convert_type(&field.ty))
                                 .collect();
+                            self.converting.borrow_mut().remove(&type_def.name);
 
                             log::trace!(
                                 "[CONVERT TYPE] Abstract type '{}' → struct with {} fields",
@@ -5124,7 +5158,13 @@ impl LoweringContext {
                         default_value: p.default_value.clone(),
                         attributes: p.attributes.clone(),
                         span: p.span,
-                        ownership: Default::default(),
+                        // What the method stated, not the default. This
+                        // rebuild dropped it, so `own self: T` parsed,
+                        // lowered as a borrow, and a method saying it
+                        // releases its receiver was accepted and
+                        // ignored. Nothing else states consumption, so
+                        // there was no way to say it at all.
+                        ownership: p.ownership,
                     }
                 })
                 .collect();
@@ -5304,6 +5344,20 @@ impl LoweringContext {
                 // program wrote.
                 module: impl_block.module,
             };
+
+            // What comes back, for the call sites to read. Taken from
+            // the same `TypedFunction` the signature is built from, so
+            // the two cannot disagree, which is the invariant free
+            // functions have always had. Without an entry a call site fell
+            // through to guessing, and the guess ended in `I64`: a
+            // method written without a return type had its result
+            // bound at every call to a function that returns nothing.
+            // Cranelift absorbs that and LLVM refuses it, so one such
+            // method took the whole LLVM tier down.
+            self.symbols.function_return_types.insert(
+                mangled_name,
+                crate::return_infer::effective_return_type(&func),
+            );
 
             // Lower the method as a regular function
             // Catch errors for individual methods - complex generic methods may fail

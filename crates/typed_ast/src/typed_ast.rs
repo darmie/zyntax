@@ -871,6 +871,7 @@ impl TypedMethodParam {
             kind: ParameterKind::Regular,
             default_value: None,
             attributes: vec![],
+            ownership: ParamOwnership::Copied,
             span,
         }
     }
@@ -890,6 +891,7 @@ impl TypedMethodParam {
             kind: ParameterKind::Regular,
             default_value: None,
             attributes: vec![],
+            ownership: ParamOwnership::Copied,
             span,
         }
     }
@@ -1786,6 +1788,16 @@ pub struct TypedMethodParam {
     pub default_value: Option<Box<TypedNode<TypedExpression>>>,
     pub attributes: Vec<ParameterAttribute>,
     pub span: Span,
+    /// What passing an argument here does to the caller's claim, the
+    /// way [`TypedParameter`] carries it.
+    ///
+    /// A method had no field for it, so `own self: T` parsed through
+    /// the shared parameter rule and was dropped on the way to here. A
+    /// method saying it releases its receiver was accepted and ignored,
+    /// and since nothing else states consumption there was no way to
+    /// say it at all.
+    #[serde(default)]
+    pub ownership: ParamOwnership,
 }
 
 /// Constructor
