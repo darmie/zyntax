@@ -487,7 +487,7 @@ fn run_function(func: &mut HirFunction, facts: &ModuleFacts) -> DropStats {
 /// that boxes in a loop allocates once per iteration and releases
 /// nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SymbolRole {
+pub(crate) enum SymbolRole {
     /// Returns storage the caller owns, released by the named symbol.
     Allocates(&'static str),
     /// Reads through a pointer argument without keeping it, so passing
@@ -497,7 +497,7 @@ enum SymbolRole {
 
 /// The role of a runtime symbol, or `None` where the pass knows nothing
 /// about it and must assume the worst.
-fn symbol_role(name: &str) -> Option<SymbolRole> {
+pub(crate) fn symbol_role(name: &str) -> Option<SymbolRole> {
     match name {
         "zyntax_box_bool" | "zyntax_box_f32" | "zyntax_box_f64" | "zyntax_box_i32"
         | "zyntax_box_i64" | "zyntax_box_opaque" => Some(SymbolRole::Allocates("zyntax_box_free")),
@@ -895,7 +895,7 @@ fn analyze_site(func: &HirFunction, site: &MallocSite, facts: &ModuleFacts) -> S
 /// Only the shapes that carry the same pointer are followed: putting it
 /// into an aggregate, taking it back out, and casting it. Following more
 /// would widen the live range without making anything reclaimable.
-fn derived_values(func: &HirFunction, root: HirId) -> std::collections::HashSet<HirId> {
+pub(crate) fn derived_values(func: &HirFunction, root: HirId) -> std::collections::HashSet<HirId> {
     let mut set = std::collections::HashSet::new();
     set.insert(root);
     // Blocks are unordered here, so a single sweep can miss a chain

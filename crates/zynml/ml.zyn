@@ -2139,7 +2139,7 @@ fn_param_comma = { "," ~ param:fn_param }
 // Stating neither leaves the type to decide: a pointer is borrowed, and
 // anything held by value is copied.
 fn_param = {
-    param_owned | param_mut |
+    param_owned | param_owned_bare | param_mut | param_mut_bare |
     param_typed_default | param_default | param_typed | param_simple
 }
 
@@ -2154,6 +2154,24 @@ param_mut = { "mut" ~ name:identifier ~ ":" ~ ty:type_expr }
   -> TypedParameter {
       name: intern(name),
       ty: ty,
+      ownership: ParamOwnership::BorrowedMut,
+  }
+
+// The same two, for a parameter whose type is not written. A method's
+// receiver is the one that matters: `self` is spelled on its own and
+// takes its type from the impl, so requiring an annotation to say `own`
+// meant `own self` did not parse and the only spelling was
+// `own self: TheType`. Both come after the annotated forms, since an
+// ordered choice would otherwise take the name and leave the `:` behind.
+param_owned_bare = { "own" ~ name:identifier }
+  -> TypedParameter {
+      name: intern(name),
+      ownership: ParamOwnership::Owned,
+  }
+
+param_mut_bare = { "mut" ~ name:identifier }
+  -> TypedParameter {
+      name: intern(name),
       ownership: ParamOwnership::BorrowedMut,
   }
 

@@ -19,6 +19,7 @@ use crate::CompilerError;
 use crate::CompilerResult;
 use std::collections::{HashMap, HashSet};
 use zyntax_typed_ast::source::Span;
+use zyntax_typed_ast::InternedString;
 
 /// Result of borrow checking
 #[derive(Debug)]
@@ -70,6 +71,63 @@ pub enum BorrowError {
         borrow: HirId,
         location: Option<Span>,
     },
+    /// A parameter the function only borrows is released by it.
+    ///
+    /// Releasing storage ends the claim on it, and a borrowed parameter
+    /// leaves that claim with the caller. So a function that releases
+    /// one has released something it does not own: the caller still
+    /// believes it holds the storage and may read it, and whatever else
+    /// is responsible for releasing it will do so a second time.
+    ReleaseThroughBorrow {
+        function: InternedString,
+        parameter: InternedString,
+        location: Option<Span>,
+    },
+}
+
+/// What a borrow error says to the person who wrote the program.
+///
+/// Rendered rather than dumped: these reached the developer as the
+/// struct's `Debug`, which names fields and value ids and says nothing
+/// about what is wrong or what would be right.
+impl std::fmt::Display for BorrowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BorrowError::UseAfterMove { .. } => {
+                write!(f, "a value is used after it was handed to something else")
+            }
+            BorrowError::MutableBorrowConflict { .. } => write!(
+                f,
+                "a value is borrowed for writing while it is already borrowed"
+            ),
+            BorrowError::ImmutableBorrowConflict { .. } => write!(
+                f,
+                "a value is borrowed for reading while it is borrowed for writing"
+            ),
+            BorrowError::ReferenceOutlivesReferent { .. } => {
+                write!(f, "a reference outlives what it refers to")
+            }
+            BorrowError::MutationThroughImmutableRef { .. } => {
+                write!(f, "a value is written through a reference that only reads")
+            }
+            BorrowError::MovedWhileBorrowed { .. } => {
+                write!(f, "a value is handed away while something still borrows it")
+            }
+            BorrowError::ReleaseThroughBorrow {
+                function,
+                parameter,
+                ..
+            } => write!(
+                f,
+                "`{}` releases `{}`, which it only borrows. The caller still \
+                 holds that storage and may read it, and whatever else is \
+                 responsible for it will release it a second time. A \
+                 parameter that a function releases has to be declared owned.",
+                function.resolve_global().unwrap_or_default(),
+                parameter.resolve_global().unwrap_or_default()
+            ),
+        }
+    }
 }
 
 /// Borrow checking warning
@@ -183,8 +241,93 @@ impl<'a> HirBorrowChecker<'a> {
             }
         }
 
+        self.check_releases_of_borrowed_params(func);
+
         self.function_contexts.insert(func_id, context);
         Ok(())
+    }
+
+    /// A parameter the function only borrows must not be released by it.
+    ///
+    /// The caller of a borrowing function keeps its claim, so it may
+    /// read the storage afterwards and something else is still going to
+    /// release it. A function that releases a borrowed parameter breaks
+    /// both of those, and the symptom is a read of freed memory or a
+    /// second release, neither of which says where it came from.
+    ///
+    /// A parameter declared owned is exactly how a function says it
+    /// takes that responsibility, so this reports only the ones that
+    /// have not.
+    fn check_releases_of_borrowed_params(&mut self, func: &HirFunction) {
+        use crate::drop_insert::{derived_values, symbol_role, SymbolRole};
+        use crate::hir::{HirCallable, Intrinsic, ParamOwnership};
+
+        for (index, param) in func.signature.params.iter().enumerate() {
+            if !matches!(
+                param.ownership,
+                ParamOwnership::Borrowed | ParamOwnership::BorrowedMut
+            ) {
+                continue;
+            }
+            // The value the body refers to, which is not `param.id`:
+            // building the SSA form mints a fresh value for each
+            // parameter and the signature keeps its own. Rooting the
+            // walk at the signature's id finds nothing, and a check that
+            // finds nothing reads exactly like a check that passed.
+            let Some(root) = func.values.values().find_map(|v| {
+                matches!(v.kind, HirValueKind::Parameter(i) if i as usize == index).then_some(v.id)
+            }) else {
+                continue;
+            };
+            // Every name the parameter reaches, so releasing a cast or a
+            // field pointer of it counts the same as releasing it.
+            let reached = derived_values(func, root);
+            for block in func.blocks.values() {
+                for inst in &block.instructions {
+                    let HirInstruction::Call { callee, args, .. } = inst else {
+                        continue;
+                    };
+                    if !args.iter().any(|a| reached.contains(a)) {
+                        continue;
+                    }
+                    let releases = match callee {
+                        HirCallable::Intrinsic(Intrinsic::Free) => true,
+                        HirCallable::Symbol(name) => {
+                            matches!(symbol_role(name), Some(SymbolRole::Allocates(_)))
+                        }
+                        // A callee that takes the argument owned is
+                        // being handed the claim, which a borrower has
+                        // not got to give.
+                        HirCallable::Function(id) => self
+                            .module
+                            .functions
+                            .get(id)
+                            .map(|callee| {
+                                callee
+                                    .signature
+                                    .params
+                                    .iter()
+                                    .zip(args.iter())
+                                    .any(|(p, a)| {
+                                        reached.contains(a) && p.ownership == ParamOwnership::Owned
+                                    })
+                            })
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if releases {
+                        self.errors.push(BorrowError::ReleaseThroughBorrow {
+                            function: func.name,
+                            parameter: param.name,
+                            location: None,
+                        });
+                        // One report per parameter. A release inside a
+                        // loop is the same mistake said many times.
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     /// Get blocks in execution order (basic topological sort)
@@ -574,7 +717,7 @@ pub fn validate_borrow_check(result: &BorrowCheckResult) -> CompilerResult<()> {
     if result.errors.is_empty() {
         Ok(())
     } else {
-        let error_msgs: Vec<String> = result.errors.iter().map(|e| format!("{:?}", e)).collect();
+        let error_msgs: Vec<String> = result.errors.iter().map(|e| e.to_string()).collect();
         Err(CompilerError::Analysis(format!(
             "Borrow check failed with {} errors:\n{}",
             result.errors.len(),
